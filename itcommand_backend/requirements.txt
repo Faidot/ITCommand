@@ -1,0 +1,10 @@
+Django>=5.0.0
+djangorestframework>=3.14.0
+djangorestframework-simplejwt>=5.3.1
+django-cors-headers>=4.3.1
+cryptography>=42.0.5
+openpyxl>=3.1.2
+python-decouple
+python-dotenv
+Pillow
+django-simple-history>=3.5.0

@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <div class="app">
+    <header class="top">
+      <div class="brand">
+        <span class="logo">IT</span>
+        <div>
+          <div class="title">IT Command</div>
+          <div class="sub" id="subStatus">Password autofill</div>
+        </div>
+      </div>
+      <button id="settingsBtn" class="icon-btn" title="Settings">⚙</button>
+    </header>
+
+    <!-- Settings -->
+    <section id="settingsView" class="view hidden">
+      <label class="field">
+        <span>Server URL</span>
+        <input id="serverUrl" type="text" placeholder="http://localhost:8000/api" />
+      </label>
+      <label class="check">
+        <input id="autofillToggle" type="checkbox" />
+        <span>Auto-fill on page load (single match)</span>
+      </label>
+      <div class="row">
+        <button id="saveSettings" class="btn primary">Save</button>
+        <button id="closeSettings" class="btn ghost">Back</button>
+      </div>
+      <p class="hint">If you change the server host, allow it when prompted.</p>
+    </section>
+
+    <!-- Login -->
+    <section id="loginView" class="view hidden">
+      <div class="msg" id="loginError"></div>
+      <label class="field">
+        <span>Email</span>
+        <input id="email" type="email" autocomplete="username" placeholder="you@company.com" />
+      </label>
+      <label class="field">
+        <span>Password</span>
+        <input id="password" type="password" autocomplete="current-password" placeholder="••••••••" />
+      </label>
+      <button id="loginBtn" class="btn primary full">Sign in</button>
+    </section>
+
+    <!-- Unlock vault -->
+    <section id="unlockView" class="view hidden">
+      <div class="msg" id="unlockError"></div>
+      <p class="lead">Enter the vault master password to unlock for this session.</p>
+      <label class="field">
+        <span>Master password</span>
+        <input id="masterPassword" type="password" placeholder="••••••••" />
+      </label>
+      <button id="unlockBtn" class="btn primary full">Unlock vault</button>
+    </section>
+
+    <!-- Matches -->
+    <section id="matchesView" class="view hidden">
+      <div class="domain-row">
+        <span class="domain" id="domainLabel">—</span>
+        <span class="timer" id="vaultTimer"></span>
+      </div>
+      <div id="matchesList" class="list"></div>
+      <div id="emptyMatches" class="empty hidden">
+        No saved credentials for this site.
+      </div>
+    </section>
+
+    <footer id="footer" class="footer hidden">
+      <span id="userLabel" class="user"></span>
+      <div class="footer-actions">
+        <button id="lockBtn" class="link">Lock</button>
+        <button id="logoutBtn" class="link">Sign out</button>
+      </div>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
