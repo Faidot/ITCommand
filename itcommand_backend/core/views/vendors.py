@@ -17,16 +17,12 @@ from core.serializers.vendors import (
 from core.serializers.assets import AssetSerializer
 from core.serializers.licenses import SoftwareLicenseListSerializer
 from core.serializers.finance import RecurringBillSerializer
-from core.permissions import IsAdminOrSuperadmin, ReadOnlyViewerOrHigher
+from core.permissions import IsAdminOrSuperadmin, ReadOnlyViewerOrHigher, HasModulePermission
 
 class VendorViewSet(viewsets.ModelViewSet):
     queryset = Vendor.objects.all().order_by('-created_at')
-    permission_classes = [ReadOnlyViewerOrHigher]
-
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy', 'bulk_delete']:
-            return [IsAdminOrSuperadmin()]
-        return super().get_permissions()
+    permission_classes = [HasModulePermission]
+    rbac_module = 'vendors'
 
     def get_serializer_class(self):
         if self.action == 'retrieve':
@@ -166,6 +162,8 @@ class VendorViewSet(viewsets.ModelViewSet):
 class VendorContractViewSet(viewsets.ModelViewSet):
     serializer_class = VendorContractSerializer
     queryset = VendorContract.objects.all().order_by('-created_at')
+    permission_classes = [HasModulePermission]
+    rbac_module = 'vendors'
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -191,6 +189,8 @@ class VendorContractViewSet(viewsets.ModelViewSet):
 class VendorPaymentViewSet(viewsets.ModelViewSet):
     serializer_class = VendorPaymentSerializer
     queryset = VendorPayment.objects.all().order_by('-payment_date')
+    permission_classes = [HasModulePermission]
+    rbac_module = 'vendors'
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -206,6 +206,8 @@ class VendorPaymentViewSet(viewsets.ModelViewSet):
 class VendorNoteViewSet(viewsets.ModelViewSet):
     serializer_class = VendorNoteSerializer
     queryset = VendorNote.objects.all().order_by('-created_at')
+    permission_classes = [HasModulePermission]
+    rbac_module = 'vendors'
 
     def get_queryset(self):
         queryset = super().get_queryset()

@@ -7,7 +7,7 @@ from django.utils import timezone
 from datetime import timedelta
 
 from core.models.kb import KBCategory, KBArticle, KBTag, KBFeedback
-from core.permissions import ReadOnlyViewerOrHigher
+from core.permissions import ReadOnlyViewerOrHigher, HasModulePermission
 from core.serializers.kb import (
     KBCategorySerializer, KBArticleListSerializer,
     KBArticleDetailSerializer, KBTagSerializer, KBFeedbackSerializer
@@ -33,13 +33,15 @@ def visible_to(user, qs):
 class KBCategoryViewSet(viewsets.ModelViewSet):
     serializer_class = KBCategorySerializer
     queryset = KBCategory.objects.filter(parent__isnull=True).order_by('order', 'name')
-    permission_classes = [ReadOnlyViewerOrHigher]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'kb'
 
 
 class KBTagViewSet(viewsets.ModelViewSet):
     serializer_class = KBTagSerializer
     queryset = KBTag.objects.all()
-    permission_classes = [ReadOnlyViewerOrHigher]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'kb'
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -52,7 +54,8 @@ class KBTagViewSet(viewsets.ModelViewSet):
 class KBArticleViewSet(viewsets.ModelViewSet):
     queryset = KBArticle.objects.all()
     lookup_field = 'slug'
-    permission_classes = [ReadOnlyViewerOrHigher]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'kb'
 
     def get_permissions(self):
         # Feedback is a normal-user action (thumbs up/down), so any authenticated

@@ -17,7 +17,7 @@ from core.serializers.helpdesk import (
     TicketListSerializer, TicketDetailSerializer, TicketCreateSerializer,
     TicketCommentSerializer, TicketAttachmentSerializer
 )
-from core.permissions import IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher
+from core.permissions import IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher, HasModulePermission
 from core.mixins import AuditLogMixin
 
 
@@ -50,29 +50,22 @@ class TicketPagination(PageNumberPagination):
 class TicketCategoryViewSet(AuditLogMixin, viewsets.ModelViewSet):
     queryset = TicketCategory.objects.all()
     serializer_class = TicketCategorySerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAdminOrSuperadmin()]
-        return super().get_permissions()
+    permission_classes = [HasModulePermission]
+    rbac_module = 'settings'
 
 
 # ─── SLA Policy CRUD ────────────────────────────────────────────────
 class SLAPolicyViewSet(AuditLogMixin, viewsets.ModelViewSet):
     queryset = SLAPolicy.objects.all()
     serializer_class = SLAPolicySerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAdminOrSuperadmin()]
-        return super().get_permissions()
+    permission_classes = [HasModulePermission]
+    rbac_module = 'settings'
 
 
 # ─── Ticket ViewSet ─────────────────────────────────────────────────
 class TicketViewSet(AuditLogMixin, viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'helpdesk'
     pagination_class = TicketPagination
 
     def get_serializer_class(self):

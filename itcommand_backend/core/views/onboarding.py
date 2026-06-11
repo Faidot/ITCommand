@@ -9,12 +9,13 @@ from core.serializers.onboarding import (
     OnboardingRecordSerializer, OnboardingRecordDetailSerializer,
     OnboardingTaskSerializer
 )
-from core.permissions import IsAdminOrSuperadmin, IsManagerOrHigher
+from core.permissions import IsAdminOrSuperadmin, IsManagerOrHigher, HasModulePermission
 
 class ChecklistTemplateViewSet(viewsets.ModelViewSet):
     queryset = ChecklistTemplate.objects.all()
     serializer_class = ChecklistTemplateSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'onboarding'
 
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
@@ -28,10 +29,12 @@ class ChecklistTemplateViewSet(viewsets.ModelViewSet):
 class ChecklistTemplateItemViewSet(viewsets.ModelViewSet):
     queryset = ChecklistTemplateItem.objects.all()
     serializer_class = ChecklistTemplateItemSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'onboarding'
 
 class OnboardingRecordViewSet(viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'onboarding'
 
     def get_serializer_class(self):
         if self.action == 'retrieve':
@@ -107,7 +110,8 @@ class OnboardingRecordViewSet(viewsets.ModelViewSet):
 class OnboardingTaskViewSet(viewsets.ModelViewSet):
     queryset = OnboardingTask.objects.all()
     serializer_class = OnboardingTaskSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'onboarding'
 
     def perform_update(self, serializer):
         instance = serializer.save()

@@ -11,10 +11,12 @@ from .views.vault import (
 )
 from .views import (
     ProfileView, ChangePasswordView,
-    LoginView, LogoutView, UserMeView, DepartmentViewSet, UserViewSet,
+    LoginView, LogoutView, UserMeView, DepartmentViewSet, UserViewSet, RoleViewSet,
     AssetCategoryViewSet, AssetViewSet, AssetNoteViewSet, VaultCredentialViewSet, AccountWorkspaceViewSet,
-    FinancialYearViewSet, BudgetCategoryViewSet, BudgetViewSet, ExpenseViewSet, 
+    FinancialYearViewSet, BudgetCategoryViewSet, BudgetViewSet, ExpenseViewSet, IncomeViewSet,
+    IncomeSourceViewSet, CostOverviewView, RecurringIncomeViewSet,
     PettyCashTransactionViewSet, DirectPaymentViewSet, RecurringBillViewSet, BillPaymentViewSet,
+    BillViewSet,
     FinanceDashboardView, SettingsView, AuditLogViewSet, LocationViewSet,
     TicketCategoryViewSet, SLAPolicyViewSet, TicketViewSet, HelpdeskDashboardView,
     SoftwareProductViewSet, SoftwareLicenseViewSet, UserLicensesView, LicenseDashboardView,
@@ -23,15 +25,21 @@ from .views import (
     VendorViewSet, VendorContractViewSet, VendorPaymentViewSet, VendorNoteViewSet,
     PurchaseRequestViewSet, ProcurementDashboardView,
     NetworkLocationViewSet, NetworkDeviceViewSet, IPAddressPoolViewSet, NetworkDashboardView,
+    NetworkTopologyView, NetworkExportView, NetworkDeviceLookupView,
     KBCategoryViewSet, KBTagViewSet, KBArticleViewSet, KBDashboardView, KBSuggestView
 )
 from .reports import (
-    FinancialSummaryView, AssetSummaryView, ExportFinancialView, ExportAssetsView, MainDashboardView
+    FinancialSummaryView, AssetSummaryView, ExportFinancialView, ExportAssetsView, MainDashboardView,
+    HelpdeskSummaryView, LicenseSummaryView, ProcurementSummaryView, VendorSummaryView,
+    SeatingSummaryView, NetworkSummaryView, OnboardingSummaryView, KBSummaryView, UserSummaryView,
+    ExportHelpdeskView, ExportLicensesView, ExportProcurementView, ExportVendorsView,
+    ExportNetworkView, ExportSeatingView, ExportOnboardingView, ExportKBView, ExportUsersView,
 )
 
 router = DefaultRouter()
 router.register(r'departments', DepartmentViewSet, basename='department')
 router.register(r'users', UserViewSet, basename='user')
+router.register(r'roles', RoleViewSet, basename='role')
 router.register(r'asset-categories', AssetCategoryViewSet, basename='asset-category')
 router.register(r'assets', AssetViewSet, basename='asset')
 router.register(r'asset-notes', AssetNoteViewSet, basename='asset-note')
@@ -39,12 +47,16 @@ router.register(r'vault/credentials', VaultCredentialViewSet, basename='vault-cr
 router.register(r'vault/workspaces', AccountWorkspaceViewSet, basename='vault-workspace')
 router.register(r'finance/years', FinancialYearViewSet, basename='finance-year')
 router.register(r'finance/categories', BudgetCategoryViewSet, basename='finance-category')
+router.register(r'finance/sources', IncomeSourceViewSet, basename='finance-source')
 router.register(r'finance/budgets', BudgetViewSet, basename='finance-budget')
 router.register(r'finance/expenses', ExpenseViewSet, basename='finance-expense')
+router.register(r'finance/income', IncomeViewSet, basename='finance-income')
+router.register(r'finance/recurring-income', RecurringIncomeViewSet, basename='finance-recurring-income')
 router.register(r'finance/petty-cash', PettyCashTransactionViewSet, basename='finance-petty-cash')
 router.register(r'finance/direct-payments', DirectPaymentViewSet, basename='finance-direct-payment')
 router.register(r'finance/recurring-bills', RecurringBillViewSet, basename='finance-recurring-bill')
 router.register(r'finance/bill-payments', BillPaymentViewSet, basename='finance-bill-payment')
+router.register(r'finance/bills', BillViewSet, basename='finance-bill')
 router.register(r'audit-logs', AuditLogViewSet, basename='audit-log')
 router.register(r'notifications', NotificationViewSet, basename='notification')
 router.register(r'locations', LocationViewSet, basename='location')
@@ -91,10 +103,29 @@ urlpatterns = [
     path('search/', GlobalSearchView.as_view(), name='global_search'),
     path('auth/token/refresh/', TokenRefreshView.as_view(), name='token_refresh'),
     path('finance/dashboard/', FinanceDashboardView.as_view(), name='finance_dashboard'),
+    path('finance/cost-overview/', CostOverviewView.as_view(), name='finance_cost_overview'),
     path('reports/financial-summary/', FinancialSummaryView.as_view(), name='reports_financial_summary'),
     path('reports/asset-summary/', AssetSummaryView.as_view(), name='reports_asset_summary'),
+    path('reports/helpdesk-summary/', HelpdeskSummaryView.as_view(), name='reports_helpdesk_summary'),
+    path('reports/license-summary/', LicenseSummaryView.as_view(), name='reports_license_summary'),
+    path('reports/procurement-summary/', ProcurementSummaryView.as_view(), name='reports_procurement_summary'),
+    path('reports/vendor-summary/', VendorSummaryView.as_view(), name='reports_vendor_summary'),
+    path('reports/seating-summary/', SeatingSummaryView.as_view(), name='reports_seating_summary'),
+    path('reports/network-summary/', NetworkSummaryView.as_view(), name='reports_network_summary'),
+    path('reports/onboarding-summary/', OnboardingSummaryView.as_view(), name='reports_onboarding_summary'),
+    path('reports/kb-summary/', KBSummaryView.as_view(), name='reports_kb_summary'),
+    path('reports/user-summary/', UserSummaryView.as_view(), name='reports_user_summary'),
     path('reports/export/financial/', ExportFinancialView.as_view(), name='reports_export_financial'),
     path('reports/export/assets/', ExportAssetsView.as_view(), name='reports_export_assets'),
+    path('reports/export/helpdesk/', ExportHelpdeskView.as_view(), name='reports_export_helpdesk'),
+    path('reports/export/licenses/', ExportLicensesView.as_view(), name='reports_export_licenses'),
+    path('reports/export/procurement/', ExportProcurementView.as_view(), name='reports_export_procurement'),
+    path('reports/export/vendors/', ExportVendorsView.as_view(), name='reports_export_vendors'),
+    path('reports/export/network/', ExportNetworkView.as_view(), name='reports_export_network'),
+    path('reports/export/seating/', ExportSeatingView.as_view(), name='reports_export_seating'),
+    path('reports/export/onboarding/', ExportOnboardingView.as_view(), name='reports_export_onboarding'),
+    path('reports/export/kb/', ExportKBView.as_view(), name='reports_export_kb'),
+    path('reports/export/users/', ExportUsersView.as_view(), name='reports_export_users'),
     path('dashboard/', MainDashboardView.as_view(), name='main_dashboard'),
     path('settings/', SettingsView.as_view(), name='app_settings'),
     # Helpdesk
@@ -110,6 +141,9 @@ urlpatterns = [
     path('procurement/dashboard/', ProcurementDashboardView.as_view(), name='procurement_dashboard'),
     # Network
     path('network/dashboard/', NetworkDashboardView.as_view(), name='network_dashboard'),
+    path('network/topology/', NetworkTopologyView.as_view(), name='network_topology'),
+    path('network/lookup/', NetworkDeviceLookupView.as_view(), name='network_lookup'),
+    path('network/export/', NetworkExportView.as_view(), name='network_export'),
     # KB
     path('kb/dashboard/', KBDashboardView.as_view(), name='kb_dashboard'),
     path('kb/suggest/', KBSuggestView.as_view(), name='kb_suggest'),

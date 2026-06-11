@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { HardDrive, Search, Plus } from "lucide-react";
+import { HardDrive, Search, Plus, Download, X } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Label } from "@/components/ui/label";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
+import { Checkbox } from "@/components/ui/checkbox";
 
 const SC: Record<string,string> = { ONLINE:"bg-emerald-100 text-emerald-800", OFFLINE:"bg-red-100 text-red-800", MAINTENANCE:"bg-yellow-100 text-yellow-800", DECOMMISSIONED:"bg-neutral-200 text-neutral-500" };
 
@@ -28,6 +29,9 @@ export default function NetworkDevicesPage() {
   const [vendors, setVendors] = useState<any[]>([]);
   const [addOpen, setAddOpen] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [bulkStatus, setBulkStatus] = useState("");
+  const [bulkLocation, setBulkLocation] = useState("");
   const [form, setForm] = useState<any>({ device_name:"",device_type:"SERVER",brand:"",model:"",serial_number:"",ip_address:"",mac_address:"",hostname:"",subnet_mask:"",gateway:"",vlan_id:"",dns_primary:"",dns_secondary:"",location:"",rack_unit_start:"",rack_unit_size:"1",os_name:"",os_version:"",firmware_version:"",cpu_info:"",ram_gb:"",storage_info:"",purchase_date:"",warranty_expiry:"",vendor:"",status:"OFFLINE",notes:"" });
 
   useEffect(() => {
@@ -48,6 +52,32 @@ export default function NetworkDevicesPage() {
       setDevices(r.data.results||r.data);
     } catch { toast.error("Failed to load devices"); }
     finally { setLoading(false); }
+  };
+
+  const toggle = (id: number) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleAll = () => setSelected(s => s.size === devices.length ? new Set() : new Set(devices.map(d => d.id)));
+
+  const applyBulk = async () => {
+    if (selected.size === 0) return;
+    if (!bulkStatus && !bulkLocation) { toast.error("Pick a status or location to apply"); return; }
+    try {
+      const payload: any = { ids: Array.from(selected) };
+      if (bulkStatus) payload.status = bulkStatus;
+      if (bulkLocation) payload.location = bulkLocation === "NONE" ? null : parseInt(bulkLocation);
+      const r = await api.post("/network/devices/bulk-update/", payload);
+      toast.success(`Updated ${r.data.updated} device(s)`);
+      setSelected(new Set()); setBulkStatus(""); setBulkLocation(""); fetchDevices();
+    } catch { toast.error("Bulk update failed"); }
+  };
+
+  const handleExport = async () => {
+    try {
+      const r = await api.get("/network/export/", { responseType: "blob" });
+      const url = window.URL.createObjectURL(new Blob([r.data]));
+      const link = document.createElement("a");
+      link.href = url; link.setAttribute("download", "network_inventory.xlsx");
+      document.body.appendChild(link); link.click(); link.remove();
+    } catch { toast.error("Export failed"); }
   };
 
   const handleSave = async () => {
@@ -71,7 +101,10 @@ export default function NetworkDevicesPage() {
     <div className="flex flex-col gap-6 w-full max-w-7xl mx-auto p-4">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div><h1 className="text-2xl font-bold flex items-center gap-2"><HardDrive className="h-6 w-6 text-violet-500"/>Network Devices</h1><p className="text-neutral-500">Manage servers, switches, routers, and more.</p></div>
-        <Button onClick={()=>setAddOpen(true)} className="bg-violet-600 hover:bg-violet-700"><Plus className="mr-2 h-4 w-4"/>Add Device</Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={handleExport}><Download className="mr-2 h-4 w-4"/>Export</Button>
+          <Button onClick={()=>setAddOpen(true)} className="bg-violet-600 hover:bg-violet-700"><Plus className="mr-2 h-4 w-4"/>Add Device</Button>
+        </div>
       </div>
 
       <div className="flex flex-wrap gap-4 items-center">
@@ -84,15 +117,31 @@ export default function NetworkDevicesPage() {
         </SelectContent></Select>
       </div>
 
+      {selected.size>0&&(
+        <Card className="p-3 flex flex-wrap items-center gap-3 border-violet-200 bg-violet-50/50 dark:bg-violet-900/10">
+          <span className="text-sm font-medium">{selected.size} selected</span>
+          <Select value={bulkStatus} onValueChange={setBulkStatus}><SelectTrigger className="w-[150px] h-8"><SelectValue placeholder="Set status..."/></SelectTrigger><SelectContent>
+            <SelectItem value="ONLINE">Online</SelectItem><SelectItem value="OFFLINE">Offline</SelectItem><SelectItem value="MAINTENANCE">Maintenance</SelectItem><SelectItem value="DECOMMISSIONED">Decommissioned</SelectItem>
+          </SelectContent></Select>
+          <Select value={bulkLocation} onValueChange={setBulkLocation}><SelectTrigger className="w-[170px] h-8"><SelectValue placeholder="Set location..."/></SelectTrigger><SelectContent>
+            <SelectItem value="NONE">Unassigned</SelectItem>{locations.map(l=><SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}
+          </SelectContent></Select>
+          <Button size="sm" className="bg-violet-600 hover:bg-violet-700" onClick={applyBulk}>Apply</Button>
+          <Button size="sm" variant="ghost" onClick={()=>setSelected(new Set())}><X className="w-4 h-4 mr-1"/>Clear</Button>
+        </Card>
+      )}
+
       <Card className="overflow-hidden">
         <Table><TableHeader className="bg-neutral-50 dark:bg-neutral-900/50"><TableRow>
+          <TableHead className="w-10"><Checkbox checked={devices.length>0&&selected.size===devices.length} onCheckedChange={toggleAll}/></TableHead>
           <TableHead>Code</TableHead><TableHead>Name</TableHead><TableHead>Type</TableHead><TableHead>IP Address</TableHead><TableHead>Hostname</TableHead><TableHead>Location</TableHead><TableHead>VLAN</TableHead><TableHead>Status</TableHead><TableHead>Last Seen</TableHead>
         </TableRow></TableHeader>
         <TableBody>
-          {loading?<TableRow><TableCell colSpan={9} className="text-center py-10 text-neutral-500">Loading...</TableCell></TableRow>:
-          devices.length===0?<TableRow><TableCell colSpan={9} className="text-center py-10 text-neutral-500">No devices found.</TableCell></TableRow>:
+          {loading?<TableRow><TableCell colSpan={10} className="text-center py-10 text-neutral-500">Loading...</TableCell></TableRow>:
+          devices.length===0?<TableRow><TableCell colSpan={10} className="text-center py-10 text-neutral-500">No devices found.</TableCell></TableRow>:
           devices.map(d=>(
             <TableRow key={d.id} className="cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-800/50" onClick={()=>router.push(`/network/devices/${d.id}`)}>
+              <TableCell onClick={e=>e.stopPropagation()}><Checkbox checked={selected.has(d.id)} onCheckedChange={()=>toggle(d.id)}/></TableCell>
               <TableCell className="font-mono text-xs">{d.device_code}</TableCell>
               <TableCell className="font-medium text-violet-600">{d.device_name}</TableCell>
               <TableCell><Badge variant="outline" className="text-xs">{d.device_type.replace('_',' ')}</Badge></TableCell>

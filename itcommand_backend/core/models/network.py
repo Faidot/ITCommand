@@ -165,3 +165,20 @@ class NetworkNote(models.Model):
 
     class Meta:
         ordering = ['-created_at']
+
+
+class NetworkDeviceStatusLog(models.Model):
+    """A single status transition for a device — the backbone of the health
+    timeline and uptime tracking."""
+    device = models.ForeignKey(NetworkDevice, on_delete=models.CASCADE, related_name='status_logs')
+    old_status = models.CharField(max_length=30, blank=True)
+    new_status = models.CharField(max_length=30)
+    note = models.TextField(blank=True)
+    changed_by = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.SET_NULL, null=True, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f"{self.device.device_name}: {self.old_status or '—'} → {self.new_status}"

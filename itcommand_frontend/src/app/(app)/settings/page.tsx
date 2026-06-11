@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { Fragment, useEffect, useState } from "react";
 import * as z from "zod";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -13,6 +13,7 @@ import {
   Layers,
   Lock,
   MapPin,
+  Network,
   Pencil,
   Plus,
   Puzzle,
@@ -22,6 +23,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Trash2,
+  Users as UsersIcon,
   X,
 } from "lucide-react";
 import { useSearchParams } from "next/navigation";
@@ -65,6 +67,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Table,
   TableBody,
@@ -76,6 +79,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { FloorManagerPanel } from "@/components/seating/floor-manager";
+import { NetworkSettingsTab } from "@/components/network/network-settings";
 import { ExtensionInstallGuide } from "@/components/extension/install-guide";
 import { useExtensionInstalled } from "@/hooks/useExtensionInstalled";
 
@@ -166,8 +170,23 @@ export default function SettingsPage() {
           <TabsTrigger value="vendors">
             <Building className="h-4 w-4 mr-2" /> Vendors
           </TabsTrigger>
+          <TabsTrigger value="income-sources">
+            <Layers className="h-4 w-4 mr-2" /> Income Sources
+          </TabsTrigger>
+          <TabsTrigger value="budget-categories">
+            <Layers className="h-4 w-4 mr-2" /> Budget Categories
+          </TabsTrigger>
+          <TabsTrigger value="financial-years">
+            <Layers className="h-4 w-4 mr-2" /> Financial Years
+          </TabsTrigger>
           <TabsTrigger value="offices">
             <Layers className="h-4 w-4 mr-2" /> Offices
+          </TabsTrigger>
+          <TabsTrigger value="network">
+            <Network className="h-4 w-4 mr-2" /> Network
+          </TabsTrigger>
+          <TabsTrigger value="roles">
+            <UsersIcon className="h-4 w-4 mr-2" /> Roles &amp; Permissions
           </TabsTrigger>
           <TabsTrigger value="vault">
             <ShieldCheck className="h-4 w-4 mr-2" /> Vault Security
@@ -181,7 +200,12 @@ export default function SettingsPage() {
         <TabsContent value="categories"><CategoriesTab /></TabsContent>
         <TabsContent value="locations"><LocationsTab /></TabsContent>
         <TabsContent value="vendors"><VendorsTab /></TabsContent>
+        <TabsContent value="income-sources"><IncomeSourcesTab /></TabsContent>
+        <TabsContent value="budget-categories"><BudgetCategoriesTab /></TabsContent>
+        <TabsContent value="financial-years"><FinancialYearsTab /></TabsContent>
         <TabsContent value="offices"><OfficesTab role={user?.role} /></TabsContent>
+        <TabsContent value="network"><NetworkSettingsTab /></TabsContent>
+        <TabsContent value="roles"><RolesTab role={user?.role} /></TabsContent>
         <TabsContent value="vault"><VaultSecurityTab role={user?.role} /></TabsContent>
         <TabsContent value="extension"><BrowserExtensionTab /></TabsContent>
       </Tabs>
@@ -235,6 +259,332 @@ function BrowserExtensionTab() {
         </CardContent>
       </Card>
     </div>
+  );
+}
+
+// ───────────────────────── Roles & Permissions Tab ─────────────────────────
+
+type ActionKey = "view" | "add" | "edit" | "delete";
+type PermMap = Record<string, Record<ActionKey, boolean>>;
+
+interface RbacModule { key: string; label: string; group: string; }
+interface RbacAction { key: ActionKey; label: string; }
+interface Role {
+  id: number;
+  name: string;
+  slug: string;
+  description: string;
+  is_system: boolean;
+  permissions: PermMap;
+  user_count: number;
+}
+
+const ACTION_ORDER: ActionKey[] = ["view", "add", "edit", "delete"];
+
+function countGrants(p: PermMap): number {
+  let n = 0;
+  for (const mod of Object.values(p || {})) for (const v of Object.values(mod)) if (v) n++;
+  return n;
+}
+
+function RolesTab({ role }: { role?: string }) {
+  const [roles, setRoles] = useState<Role[]>([]);
+  const [modules, setModules] = useState<RbacModule[]>([]);
+  const [actions, setActions] = useState<RbacAction[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<Role | null>(null);
+
+  const canEdit = role === "SUPERADMIN" || role === "ADMIN";
+
+  const fetchAll = async () => {
+    setLoading(true);
+    try {
+      const [r, c] = await Promise.all([
+        api.get("/roles/"),
+        api.get("/roles/catalog/"),
+      ]);
+      setRoles(r.data.results || r.data);
+      setModules(c.data.modules || []);
+      setActions(c.data.actions || []);
+    } catch {
+      toast.error("Failed to load roles");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { fetchAll(); }, []);
+
+  const blankPerms = (): PermMap => {
+    const p: PermMap = {};
+    for (const m of modules) p[m.key] = { view: false, add: false, edit: false, delete: false };
+    return p;
+  };
+
+  const openCreate = () => {
+    setEditing({ id: 0, name: "", slug: "", description: "", is_system: false, permissions: blankPerms(), user_count: 0 });
+    setOpen(true);
+  };
+  const openEdit = (r: Role) => { setEditing({ ...r, permissions: { ...r.permissions } }); setOpen(true); };
+
+  const remove = async (r: Role) => {
+    if (!confirm(`Delete role "${r.name}"? This cannot be undone.`)) return;
+    try {
+      await api.delete(`/roles/${r.id}/`);
+      toast.success("Role deleted");
+      fetchAll();
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || "Delete failed");
+    }
+  };
+
+  return (
+    <>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle>Roles &amp; Permissions</CardTitle>
+            <CardDescription>
+              Define what each role can do per module — view, add, edit and delete.
+              Built-in roles can be tuned; create your own (e.g. HR, Accounts) for finer control.
+            </CardDescription>
+          </div>
+          {canEdit && <Button onClick={openCreate}><Plus className="w-4 h-4 mr-2" /> Add Role</Button>}
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Role</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead className="text-right">Users</TableHead>
+                <TableHead className="text-right">Permissions</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">Loading…</TableCell></TableRow>
+              ) : roles.length === 0 ? (
+                <TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No roles yet.</TableCell></TableRow>
+              ) : roles.map((r) => (
+                <TableRow key={r.id}>
+                  <TableCell>
+                    <div className="font-medium">{r.name}</div>
+                    {r.description && <div className="text-xs text-muted-foreground line-clamp-1">{r.description}</div>}
+                  </TableCell>
+                  <TableCell>
+                    {r.is_system
+                      ? <Badge variant="outline">Built-in</Badge>
+                      : <Badge variant="secondary">Custom</Badge>}
+                  </TableCell>
+                  <TableCell className="text-right tabular-nums">{r.user_count}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {r.slug === "SUPERADMIN"
+                      ? <Badge className="bg-emerald-600 border-0">Full access</Badge>
+                      : `${countGrants(r.permissions)} grants`}
+                  </TableCell>
+                  <TableCell className="text-right">
+                    <Button variant="ghost" size="icon" onClick={() => openEdit(r)} title={canEdit ? "Edit" : "View"}>
+                      {canEdit && r.slug !== "SUPERADMIN" ? <Pencil className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                    </Button>
+                    {canEdit && !r.is_system && (
+                      <Button variant="ghost" size="icon" onClick={() => remove(r)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                    )}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <RoleDialog
+        open={open}
+        onOpenChange={setOpen}
+        initial={editing}
+        modules={modules}
+        actions={actions.length ? actions : ACTION_ORDER.map((k) => ({ key: k, label: k[0].toUpperCase() + k.slice(1) }))}
+        readOnly={!canEdit || editing?.slug === "SUPERADMIN"}
+        onSaved={() => { setOpen(false); fetchAll(); }}
+      />
+    </>
+  );
+}
+
+function RoleDialog({
+  open, onOpenChange, initial, modules, actions, readOnly, onSaved,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  initial: Role | null;
+  modules: RbacModule[];
+  actions: RbacAction[];
+  readOnly: boolean;
+  onSaved: () => void;
+}) {
+  const [draft, setDraft] = useState<Role | null>(initial);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { setDraft(initial); }, [initial]);
+
+  if (!draft) return null;
+
+  const groups = Array.from(new Set(modules.map((m) => m.group)));
+
+  const permOf = (mod: string, act: ActionKey) => !!draft.permissions?.[mod]?.[act];
+
+  const setPerm = (mod: string, act: ActionKey, val: boolean) => {
+    const next: PermMap = { ...draft.permissions, [mod]: { ...(draft.permissions[mod] || { view: false, add: false, edit: false, delete: false }), [act]: val } };
+    // Selecting any write action implies view.
+    if (val && act !== "view") next[mod].view = true;
+    // Removing view removes everything for that module.
+    if (!val && act === "view") next[mod] = { view: false, add: false, edit: false, delete: false };
+    setDraft({ ...draft, permissions: next });
+  };
+
+  const setModuleAll = (mod: string, val: boolean) => {
+    const next: PermMap = { ...draft.permissions, [mod]: { view: val, add: val, edit: val, delete: val } };
+    setDraft({ ...draft, permissions: next });
+  };
+
+  const setActionAll = (act: ActionKey, val: boolean) => {
+    const next: PermMap = { ...draft.permissions };
+    for (const m of modules) {
+      const cur = next[m.key] || { view: false, add: false, edit: false, delete: false };
+      next[m.key] = { ...cur, [act]: val };
+      if (val && act !== "view") next[m.key].view = true;
+      if (!val && act === "view") next[m.key] = { view: false, add: false, edit: false, delete: false };
+    }
+    setDraft({ ...draft, permissions: next });
+  };
+
+  const save = async () => {
+    if (!draft.name.trim()) { toast.error("Role name is required"); return; }
+    setSaving(true);
+    try {
+      const payload = { name: draft.name.trim(), description: draft.description || "", permissions: draft.permissions };
+      if (draft.id) await api.patch(`/roles/${draft.id}/`, payload);
+      else await api.post("/roles/", payload);
+      toast.success("Saved");
+      onSaved();
+    } catch (e: any) {
+      const data = e.response?.data;
+      toast.error(typeof data === "string" ? data : data?.detail || data?.name?.[0] || "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-[760px] max-h-[90vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>
+            {readOnly ? `${draft.name || "Role"} permissions` : draft.id ? "Edit Role" : "Add Role"}
+          </DialogTitle>
+          <DialogDescription>
+            Choose what this role can do in each module. Ticking Add, Edit or Delete automatically grants View.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-5 py-2">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Name</label>
+              <Input
+                value={draft.name}
+                onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                placeholder="e.g. HR"
+                disabled={readOnly || draft.is_system}
+              />
+              {draft.is_system && <p className="text-xs text-muted-foreground">Built-in role name can&apos;t be changed.</p>}
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Description</label>
+              <Input
+                value={draft.description}
+                onChange={(e) => setDraft({ ...draft, description: e.target.value })}
+                placeholder="What this role is for"
+                disabled={readOnly}
+              />
+            </div>
+          </div>
+
+          <div className="border rounded-lg overflow-hidden">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="w-[40%]">Module</TableHead>
+                  {actions.map((a) => (
+                    <TableHead key={a.key} className="text-center">
+                      <div>{a.label}</div>
+                      {!readOnly && (
+                        <button
+                          type="button"
+                          className="text-[10px] font-normal text-muted-foreground hover:text-foreground underline"
+                          onClick={() => setActionAll(a.key, !modules.every((m) => permOf(m.key, a.key)))}
+                        >
+                          all
+                        </button>
+                      )}
+                    </TableHead>
+                  ))}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {groups.map((g) => (
+                  <Fragment key={g}>
+                    <TableRow className="bg-muted/50 hover:bg-muted/50">
+                      <TableCell colSpan={actions.length + 1} className="py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                        {g}
+                      </TableCell>
+                    </TableRow>
+                    {modules.filter((m) => m.group === g).map((m) => (
+                      <TableRow key={m.key}>
+                        <TableCell>
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-medium text-sm">{m.label}</span>
+                            {!readOnly && (
+                              <button
+                                type="button"
+                                className="text-[10px] text-muted-foreground hover:text-foreground underline"
+                                onClick={() => setModuleAll(m.key, !ACTION_ORDER.every((a) => permOf(m.key, a)))}
+                              >
+                                toggle
+                              </button>
+                            )}
+                          </div>
+                        </TableCell>
+                        {actions.map((a) => (
+                          <TableCell key={a.key} className="text-center">
+                            <Checkbox
+                              checked={permOf(m.key, a.key)}
+                              disabled={readOnly}
+                              onCheckedChange={(v) => setPerm(m.key, a.key, !!v)}
+                            />
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </Fragment>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>
+            {readOnly ? "Close" : "Cancel"}
+          </Button>
+          {!readOnly && (
+            <Button onClick={save} disabled={saving || !draft.name.trim()}>{saving ? "Saving…" : "Save"}</Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }
 
@@ -1013,6 +1363,300 @@ function LocationsTab() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setOpen(false)} disabled={saving}>Cancel</Button>
             <Button onClick={save} disabled={saving || !editing?.name?.trim()}>{saving ? "Saving…" : "Save"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+// ───────────────────────── Income Sources Tab ─────────────────────────
+
+function IncomeSourcesTab() {
+  const [rows, setRows] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<any>(null);
+  const [saving, setSaving] = useState(false);
+
+  const fetch = async () => {
+    setLoading(true);
+    try {
+      const res = await api.get("/finance/sources/");
+      setRows(res.data.results || res.data);
+    } catch {
+      toast.error("Failed to load income sources");
+    } finally {
+      setLoading(false);
+    }
+  };
+  useEffect(() => { fetch(); }, []);
+
+  const openCreate = () => { setEditing({ id: 0, name: "", description: "", is_active: true }); setOpen(true); };
+  const openEdit = (s: any) => { setEditing({ ...s }); setOpen(true); };
+
+  const remove = async (s: any) => {
+    if (!confirm(`Delete source "${s.name}"? Income/expenses using it will keep their amounts but lose the source label.`)) return;
+    try { await api.delete(`/finance/sources/${s.id}/`); toast.success("Deleted"); fetch(); }
+    catch (e: any) { toast.error(e.response?.data?.detail || "Delete failed"); }
+  };
+
+  const save = async () => {
+    if (!editing) return;
+    setSaving(true);
+    try {
+      const payload = { name: editing.name, description: editing.description || "", is_active: editing.is_active };
+      if (editing.id) await api.put(`/finance/sources/${editing.id}/`, payload);
+      else await api.post("/finance/sources/", payload);
+      toast.success("Saved");
+      setOpen(false);
+      fetch();
+    } catch (e: any) {
+      toast.error(e.response?.data?.name?.[0] || e.response?.data?.detail || "Save failed");
+    } finally { setSaving(false); }
+  };
+
+  return (
+    <>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle>Income Sources</CardTitle>
+            <CardDescription>The dropdown of funding/income sources used on Income and Expense entries.</CardDescription>
+          </div>
+          <Button onClick={openCreate}><Plus className="w-4 h-4 mr-2" /> Add Source</Button>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Name</TableHead>
+                <TableHead>Description</TableHead>
+                <TableHead>Status</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {loading ? (
+                <TableRow><TableCell colSpan={4} className="text-center py-8 text-muted-foreground">Loading…</TableCell></TableRow>
+              ) : rows.length === 0 ? (
+                <TableRow><TableCell colSpan={4} className="text-center py-8 text-muted-foreground">No sources yet.</TableCell></TableRow>
+              ) : rows.map((s) => (
+                <TableRow key={s.id} className={!s.is_active ? "opacity-60" : ""}>
+                  <TableCell><div className="font-medium">{s.name}</div></TableCell>
+                  <TableCell className="text-muted-foreground text-sm">{s.description || "—"}</TableCell>
+                  <TableCell>{s.is_active ? <Badge variant="outline">Active</Badge> : <Badge variant="secondary">Inactive</Badge>}</TableCell>
+                  <TableCell className="text-right">
+                    <Button variant="ghost" size="icon" onClick={() => openEdit(s)}><Pencil className="h-4 w-4" /></Button>
+                    <Button variant="ghost" size="icon" onClick={() => remove(s)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>{editing?.id ? "Edit Source" : "Add Source"}</DialogTitle></DialogHeader>
+          {editing && (
+            <div className="space-y-3 py-2">
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Name</label>
+                <Input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="e.g. Company Account" />
+              </div>
+              <div className="space-y-1.5">
+                <label className="text-sm font-medium">Description (optional)</label>
+                <Textarea value={editing.description || ""} onChange={(e) => setEditing({ ...editing, description: e.target.value })} className="min-h-16" />
+              </div>
+              <ToggleRow label="Active" value={editing.is_active} onChange={(v) => setEditing({ ...editing, is_active: v })} />
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)} disabled={saving}>Cancel</Button>
+            <Button onClick={save} disabled={saving || !editing?.name?.trim()}>{saving ? "Saving…" : "Save"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+// ───────────────────────── Budget Categories Tab ─────────────────────────
+
+function BudgetCategoriesTab() {
+  const [rows, setRows] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<any>(null);
+  const [saving, setSaving] = useState(false);
+
+  const fetch = async () => {
+    setLoading(true);
+    try { const res = await api.get("/finance/categories/"); setRows(res.data.results || res.data); }
+    catch { toast.error("Failed to load categories"); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { fetch(); }, []);
+
+  const openCreate = () => { setEditing({ id: 0, name: "", description: "", enforce_budget: false }); setOpen(true); };
+  const openEdit = (c: any) => { setEditing({ ...c }); setOpen(true); };
+  const remove = async (c: any) => {
+    if (!confirm(`Delete category "${c.name}"?`)) return;
+    try { await api.delete(`/finance/categories/${c.id}/`); toast.success("Deleted"); fetch(); }
+    catch (e: any) { toast.error(e.response?.data?.detail || "Delete failed"); }
+  };
+  const save = async () => {
+    if (!editing) return;
+    setSaving(true);
+    try {
+      const payload = { name: editing.name, description: editing.description || "", enforce_budget: !!editing.enforce_budget };
+      if (editing.id) await api.put(`/finance/categories/${editing.id}/`, payload);
+      else await api.post("/finance/categories/", payload);
+      toast.success("Saved"); setOpen(false); fetch();
+    } catch (e: any) { toast.error(e.response?.data?.name?.[0] || "Save failed"); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle>Budget Categories</CardTitle>
+            <CardDescription>Spending categories used across Budget, Expenses, Income and Bills.</CardDescription>
+          </div>
+          <Button onClick={openCreate}><Plus className="w-4 h-4 mr-2" /> Add Category</Button>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Description</TableHead><TableHead>Hard Limit</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {loading ? (<TableRow><TableCell colSpan={4} className="text-center py-8 text-muted-foreground">Loading…</TableCell></TableRow>)
+              : rows.length === 0 ? (<TableRow><TableCell colSpan={4} className="text-center py-8 text-muted-foreground">No categories yet.</TableCell></TableRow>)
+              : rows.map((c) => (
+                <TableRow key={c.id}>
+                  <TableCell><div className="font-medium">{c.name}</div></TableCell>
+                  <TableCell className="text-muted-foreground text-sm">{c.description || "—"}</TableCell>
+                  <TableCell>{c.enforce_budget ? <Badge variant="destructive">Enforced</Badge> : <Badge variant="outline">Warn only</Badge>}</TableCell>
+                  <TableCell className="text-right">
+                    <Button variant="ghost" size="icon" onClick={() => openEdit(c)}><Pencil className="h-4 w-4" /></Button>
+                    <Button variant="ghost" size="icon" onClick={() => remove(c)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>{editing?.id ? "Edit Category" : "Add Category"}</DialogTitle></DialogHeader>
+          {editing && (
+            <div className="space-y-3 py-2">
+              <div className="space-y-1.5"><label className="text-sm font-medium">Name</label><Input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="e.g. Hardware" /></div>
+              <div className="space-y-1.5"><label className="text-sm font-medium">Description (optional)</label><Textarea value={editing.description || ""} onChange={(e) => setEditing({ ...editing, description: e.target.value })} className="min-h-16" /></div>
+              <ToggleRow label="Hard budget limit (block over-budget approvals)" value={!!editing.enforce_budget} onChange={(v) => setEditing({ ...editing, enforce_budget: v })} />
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)} disabled={saving}>Cancel</Button>
+            <Button onClick={save} disabled={saving || !editing?.name?.trim()}>{saving ? "Saving…" : "Save"}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  );
+}
+
+// ───────────────────────── Financial Years Tab ─────────────────────────
+
+function FinancialYearsTab() {
+  const [rows, setRows] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [open, setOpen] = useState(false);
+  const [editing, setEditing] = useState<any>(null);
+  const [saving, setSaving] = useState(false);
+
+  const fetch = async () => {
+    setLoading(true);
+    try { const res = await api.get("/finance/years/"); setRows(res.data.results || res.data); }
+    catch { toast.error("Failed to load financial years"); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { fetch(); }, []);
+
+  const openCreate = () => { setEditing({ id: 0, name: "", start_date: "", end_date: "", is_active: false }); setOpen(true); };
+  const openEdit = (y: any) => { setEditing({ ...y }); setOpen(true); };
+  const remove = async (y: any) => {
+    if (!confirm(`Delete "${y.name}"? Linked budgets/expenses will lose their year.`)) return;
+    try { await api.delete(`/finance/years/${y.id}/`); toast.success("Deleted"); fetch(); }
+    catch (e: any) { toast.error(e.response?.data?.detail || "Delete failed"); }
+  };
+  const save = async () => {
+    if (!editing) return;
+    if (!editing.name || !editing.start_date || !editing.end_date) { toast.error("Name, start and end dates are required"); return; }
+    setSaving(true);
+    try {
+      const payload = { name: editing.name, start_date: editing.start_date, end_date: editing.end_date, is_active: !!editing.is_active };
+      if (editing.id) await api.put(`/finance/years/${editing.id}/`, payload);
+      else await api.post("/finance/years/", payload);
+      toast.success("Saved"); setOpen(false); fetch();
+    } catch (e: any) { toast.error(JSON.stringify(e.response?.data) || "Save failed"); }
+    finally { setSaving(false); }
+  };
+
+  return (
+    <>
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between space-y-0">
+          <div>
+            <CardTitle>Financial Years</CardTitle>
+            <CardDescription>Fiscal years for budgeting. Only one can be active at a time.</CardDescription>
+          </div>
+          <Button onClick={openCreate}><Plus className="w-4 h-4 mr-2" /> Add Year</Button>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader><TableRow><TableHead>Name</TableHead><TableHead>Start</TableHead><TableHead>End</TableHead><TableHead>Status</TableHead><TableHead className="text-right">Actions</TableHead></TableRow></TableHeader>
+            <TableBody>
+              {loading ? (<TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">Loading…</TableCell></TableRow>)
+              : rows.length === 0 ? (<TableRow><TableCell colSpan={5} className="text-center py-8 text-muted-foreground">No years yet.</TableCell></TableRow>)
+              : rows.map((y) => (
+                <TableRow key={y.id}>
+                  <TableCell><div className="font-medium">{y.name}</div></TableCell>
+                  <TableCell className="text-sm">{y.start_date}</TableCell>
+                  <TableCell className="text-sm">{y.end_date}</TableCell>
+                  <TableCell>{y.is_active ? <Badge className="bg-emerald-600 border-0">Active</Badge> : <Badge variant="outline">Inactive</Badge>}</TableCell>
+                  <TableCell className="text-right">
+                    <Button variant="ghost" size="icon" onClick={() => openEdit(y)}><Pencil className="h-4 w-4" /></Button>
+                    <Button variant="ghost" size="icon" onClick={() => remove(y)}><Trash2 className="h-4 w-4 text-destructive" /></Button>
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Dialog open={open} onOpenChange={setOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader><DialogTitle>{editing?.id ? "Edit Financial Year" : "Add Financial Year"}</DialogTitle></DialogHeader>
+          {editing && (
+            <div className="space-y-3 py-2">
+              <div className="space-y-1.5"><label className="text-sm font-medium">Name</label><Input value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} placeholder="FY 2025-26" /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5"><label className="text-sm font-medium">Start</label><Input type="date" value={editing.start_date || ""} onChange={(e) => setEditing({ ...editing, start_date: e.target.value })} /></div>
+                <div className="space-y-1.5"><label className="text-sm font-medium">End</label><Input type="date" value={editing.end_date || ""} onChange={(e) => setEditing({ ...editing, end_date: e.target.value })} /></div>
+              </div>
+              <ToggleRow label="Active year" value={!!editing.is_active} onChange={(v) => setEditing({ ...editing, is_active: v })} />
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setOpen(false)} disabled={saving}>Cancel</Button>
+            <Button onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

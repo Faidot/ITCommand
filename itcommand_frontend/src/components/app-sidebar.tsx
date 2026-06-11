@@ -11,10 +11,9 @@ import {
   KeyRound,
   Shield,
   Wallet,
-  Receipt,
-  PiggyBank,
-  FileSpreadsheet,
-  Banknote,
+  ReceiptText,
+  ArrowDownCircle,
+  ArrowUpCircle,
   ChartBar,
   LineChart,
   LayoutDashboard,
@@ -55,6 +54,7 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { useAuthStore } from "@/store/authStore"
+import { can } from "@/lib/permissions"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Button } from "@/components/ui/button"
 import {
@@ -74,98 +74,115 @@ export function AppSidebar() {
     {
       label: "OVERVIEW",
       items: [
-        { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard },
+        { title: "Dashboard", url: "/dashboard", icon: LayoutDashboard, module: "dashboard" },
       ],
     },
     {
       label: "PEOPLE",
       items: [
-        { title: "Users", url: "/users", icon: Users },
-        { title: "Departments", url: "/departments", icon: Building },
-        { title: "Onboarding", url: "/onboarding", icon: UserPlus },
-        { title: "Seating Plan", url: "/seating", icon: Map },
+        { title: "Users", url: "/users", icon: Users, module: "users" },
+        { title: "Departments", url: "/departments", icon: Building, module: "departments" },
+        { title: "Onboarding", url: "/onboarding", icon: UserPlus, module: "onboarding" },
+        { title: "Seating Plan", url: "/seating", icon: Map, module: "seating" },
       ],
     },
     {
       label: "ASSETS",
       items: [
-        { title: "Asset Inventory", url: "/assets", icon: Box },
-        { title: "Asset Notes", url: "/asset-notes", icon: FileText },
-        { title: "Software Licenses", url: "/licenses", icon: KeyRound },
+        { title: "Asset Inventory", url: "/assets", icon: Box, module: "assets" },
+        { title: "Asset Notes", url: "/asset-notes", icon: FileText, module: "assets" },
+        { title: "Software Licenses", url: "/licenses", icon: KeyRound, module: "licenses" },
       ],
     },
     {
       label: "PROCUREMENT",
       items: [
-        { title: "Vendors", url: "/vendors", icon: Building },
-        { title: "Purchase Requests", url: "/procurement/requests", icon: ShoppingCart },
+        { title: "Vendors", url: "/vendors", icon: Building, module: "vendors" },
+        { title: "Purchase Requests", url: "/procurement/requests", icon: ShoppingCart, module: "procurement" },
       ],
     },
     {
       label: "NETWORK",
       items: [
-        { title: "Overview", url: "/network", icon: Network },
-        { title: "Devices", url: "/network/devices", icon: HardDrive },
-        { title: "IP Manager", url: "/network/ip-manager", icon: Globe },
-        { title: "Rack View", url: "/network/rack-view", icon: Server },
+        { title: "Overview", url: "/network", icon: Network, module: "network" },
+        { title: "Devices", url: "/network/devices", icon: HardDrive, module: "network" },
+        { title: "Topology", url: "/network/topology", icon: Share2, module: "network" },
+        { title: "IP Manager", url: "/network/ip-manager", icon: Globe, module: "network" },
+        { title: "Rack View", url: "/network/rack-view", icon: Server, module: "network" },
       ],
     },
     {
       label: "KNOWLEDGE BASE",
       items: [
-        { title: "Home", url: "/kb", icon: BookOpen },
-        { title: "All Articles", url: "/kb/articles", icon: FileText },
+        { title: "Home", url: "/kb", icon: BookOpen, module: "kb" },
+        { title: "All Articles", url: "/kb/articles", icon: FileText, module: "kb" },
       ],
     },
     {
       label: "VAULT",
       items: [
-        { title: "Password Vault", url: "/vault/passwords", icon: KeyRound },
-        { title: "Shared with Me", url: "/vault/shared", icon: Share2 },
-        { title: "Account Workspaces", url: "/vault/workspaces", icon: Shield },
+        { title: "Password Vault", url: "/vault/passwords", icon: KeyRound, module: "vault" },
+        { title: "Shared with Me", url: "/vault/shared", icon: Share2, module: "vault" },
+        { title: "Account Workspaces", url: "/vault/workspaces", icon: Shield, module: "vault" },
       ],
     },
     {
       label: "FINANCE",
       items: [
-        { title: "Budget", url: "/finance/budget", icon: Wallet },
-        { title: "Expenses", url: "/finance/expenses", icon: Receipt },
-        { title: "Petty Cash", url: "/finance/petty-cash", icon: PiggyBank },
-        { title: "Recurring Bills", url: "/finance/bills", icon: FileSpreadsheet },
-        { title: "Payments", url: "/finance/payments", icon: Banknote },
+        { title: "Budget", url: "/finance/budget", icon: Wallet, module: "finance" },
+      ],
+    },
+    {
+      label: "TRANSACTIONS",
+      items: [
+        { title: "Income", url: "/finance/income", icon: ArrowDownCircle, module: "finance" },
+        { title: "Expenses", url: "/finance/expenses", icon: ArrowUpCircle, module: "finance" },
+        { title: "Recurring Bills", url: "/finance/recurring-bills", icon: ReceiptText, module: "finance" },
+        { title: "Cost Overview", url: "/finance/cost-overview", icon: ChartBar, module: "finance" },
       ],
     },
     {
       label: "REPORTS",
       items: [
-        { title: "Financial Reports", url: "/reports/financial", icon: ChartBar },
-        { title: "Asset Reports", url: "/reports/assets", icon: LineChart },
+        { title: "All Reports", url: "/reports", icon: ChartBar, module: "reports" },
+        { title: "Financial", url: "/reports/financial", icon: Wallet, module: "reports" },
+        { title: "Assets", url: "/reports/assets", icon: Box, module: "reports" },
+        { title: "Helpdesk", url: "/reports/helpdesk", icon: Headset, module: "reports" },
+        { title: "Licenses", url: "/reports/licenses", icon: KeyRound, module: "reports" },
+        { title: "Procurement", url: "/reports/procurement", icon: ShoppingCart, module: "reports" },
+        { title: "Vendors", url: "/reports/vendors", icon: Building, module: "reports" },
+        { title: "Seating", url: "/reports/seating", icon: Map, module: "reports" },
+        { title: "Network", url: "/reports/network", icon: Network, module: "reports" },
+        { title: "Onboarding", url: "/reports/onboarding", icon: UserPlus, module: "reports" },
+        { title: "Knowledge Base", url: "/reports/kb", icon: BookOpen, module: "reports" },
+        { title: "People", url: "/reports/users", icon: Users, module: "reports" },
       ],
     },
     {
       label: "HELPDESK",
       items: [
-        { title: "Dashboard", url: "/helpdesk", icon: Headset },
-        { title: "All Tickets", url: "/helpdesk/tickets", icon: TicketCheck },
-        { title: "My Tickets", url: "/helpdesk/my-tickets", icon: ListTodo },
+        { title: "Dashboard", url: "/helpdesk", icon: Headset, module: "helpdesk" },
+        { title: "All Tickets", url: "/helpdesk/tickets", icon: TicketCheck, module: "helpdesk" },
+        { title: "My Tickets", url: "/helpdesk/my-tickets", icon: ListTodo, module: "helpdesk" },
       ],
     },
     {
       label: "SYSTEM",
       roles: ["ADMIN", "SUPERADMIN"],
       items: [
-        { title: "Master Settings", url: "/settings", icon: Settings },
-        { title: "Audit Logs", url: "/settings/audit-log", icon: Activity },
+        { title: "Master Settings", url: "/settings", icon: Settings, module: "settings" },
+        { title: "Audit Logs", url: "/settings/audit-log", icon: Activity, module: "settings" },
       ],
     },
   ]
 
   const filteredNavGroups = navGroups.map(group => {
-    // Hide Vault for VIEWER
-    if (group.label === "VAULT" && user?.role === "VIEWER") return null;
-    // Check custom roles if defined
+    // Admin-only groups still gate by explicit role list.
     if (group.roles && (!user || !group.roles.includes(user.role))) return null;
-    return group;
+    // Otherwise keep only the items this role can view.
+    const items = group.items.filter((item: any) => can(user, item.module, "view"));
+    if (items.length === 0) return null;
+    return { ...group, items };
   }).filter(Boolean);
 
   return (

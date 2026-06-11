@@ -14,7 +14,7 @@ from core.models import *
 from core.serializers import *
 from core.encryption import decrypt_value
 from core.mixins import AuditLogMixin
-from core.permissions import IsSuperadmin, IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher, VaultAccessPermission, UserManagementPermission
+from core.permissions import IsSuperadmin, IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher, VaultAccessPermission, UserManagementPermission, HasModulePermission
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.pagination import PageNumberPagination
 
@@ -67,10 +67,12 @@ class UserMeView(APIView):
 class DepartmentViewSet(AuditLogMixin, viewsets.ModelViewSet):
     queryset = Department.objects.all().order_by('-created_at')
     serializer_class = DepartmentSerializer
-    permission_classes = [ReadOnlyViewerOrHigher]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'departments'
 
     def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy', 'bulk_delete']:
+        # Bulk delete is destructive; keep it admin-only regardless of the map.
+        if self.action == 'bulk_delete':
             return [IsAdminOrSuperadmin()]
         return super().get_permissions()
 

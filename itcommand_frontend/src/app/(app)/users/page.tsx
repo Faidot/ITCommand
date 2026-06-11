@@ -113,6 +113,7 @@ export default function UsersPage() {
   const [users, setUsers] = useState<UserDetail[]>([]);
   const [userOptions, setUserOptions] = useState<UserDetail[]>([]);
   const [departments, setDepartments] = useState<Department[]>([]);
+  const [roles, setRoles] = useState<{ id: number; name: string; slug: string }[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
   // Filters
@@ -169,12 +170,14 @@ export default function UsersPage() {
 
   const fetchDependencies = async () => {
     try {
-      const [depts, allUsers] = await Promise.all([
+      const [depts, allUsers, rolesRes] = await Promise.all([
         api.get("/departments/"),
         api.get("/users/"),
+        api.get("/roles/"),
       ])
       setDepartments(depts.data);
       setUserOptions(allUsers.data);
+      setRoles(rolesRes.data.results || rolesRes.data);
     } catch {
       toast.error("Failed to load generic metadata.");
     }
@@ -342,10 +345,9 @@ export default function UsersPage() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="ALL">All Roles</SelectItem>
-            <SelectItem value="SUPERADMIN">Superadmin</SelectItem>
-            <SelectItem value="ADMIN">Admin</SelectItem>
-            <SelectItem value="MANAGER">Manager</SelectItem>
-            <SelectItem value="VIEWER">Viewer</SelectItem>
+            {roles.map((r) => (
+              <SelectItem key={r.id} value={r.slug}>{r.name}</SelectItem>
+            ))}
           </SelectContent>
         </Select>
 
@@ -546,10 +548,9 @@ export default function UsersPage() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          <SelectItem value="VIEWER">Viewer</SelectItem>
-                          <SelectItem value="MANAGER">Manager</SelectItem>
-                          <SelectItem value="ADMIN">Admin</SelectItem>
-                          <SelectItem value="SUPERADMIN">Superadmin</SelectItem>
+                          {roles.map((r) => (
+                            <SelectItem key={r.id} value={r.slug}>{r.name}</SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                       <FormMessage />

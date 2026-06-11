@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Save, Plus, Send } from "lucide-react";
+import { ArrowLeft, Save, Plus, Send, Activity, Wifi, WifiOff, Wrench } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -49,6 +49,18 @@ export default function DeviceDetailPage(){
     catch{toast.error("Failed to add note");}
   };
 
+  const setStatus=async(newStatus:string)=>{
+    if(dev?.status===newStatus)return;
+    try{await api.post(`/network/devices/${devId}/set-status/`,{status:newStatus});toast.success(`Marked ${newStatus.toLowerCase()}`);fetchDevice();}
+    catch{toast.error("Failed to update status");}
+  };
+
+  const STATUS_ACTIONS=[
+    {key:"ONLINE",label:"Online",icon:Wifi,cls:"text-emerald-600 hover:bg-emerald-50 border-emerald-200"},
+    {key:"OFFLINE",label:"Offline",icon:WifiOff,cls:"text-red-600 hover:bg-red-50 border-red-200"},
+    {key:"MAINTENANCE",label:"Maintenance",icon:Wrench,cls:"text-yellow-600 hover:bg-yellow-50 border-yellow-200"},
+  ];
+
   if(loading)return <div className="p-8 text-center text-neutral-500">Loading...</div>;
   if(!dev)return <div className="p-8 text-center text-red-500">Device not found</div>;
 
@@ -65,6 +77,13 @@ export default function DeviceDetailPage(){
             <Badge className={`border-0 ${SC[dev.status]}`}>{dev.status}</Badge>
           </div>
           {dev.brand&&<p className="text-sm text-neutral-500 mt-1">{dev.brand} {dev.model}</p>}
+        </div>
+        <div className="flex gap-2">
+          {STATUS_ACTIONS.map(a=>(
+            <Button key={a.key} size="sm" variant="outline" disabled={dev.status===a.key} className={dev.status===a.key?"opacity-40":a.cls} onClick={()=>setStatus(a.key)}>
+              <a.icon className="w-3.5 h-3.5 mr-1"/>{a.label}
+            </Button>
+          ))}
         </div>
       </div>
 
@@ -99,7 +118,7 @@ export default function DeviceDetailPage(){
       </div></Card>
 
       <Tabs defaultValue="ports" className="w-full">
-        <TabsList className="grid w-full grid-cols-2"><TabsTrigger value="ports">Port Map</TabsTrigger><TabsTrigger value="notes">Notes</TabsTrigger></TabsList>
+        <TabsList className="grid w-full grid-cols-3"><TabsTrigger value="ports">Port Map</TabsTrigger><TabsTrigger value="health">Health Timeline</TabsTrigger><TabsTrigger value="notes">Notes</TabsTrigger></TabsList>
 
         <TabsContent value="ports">
           <Card className="p-4">
@@ -123,6 +142,29 @@ export default function DeviceDetailPage(){
                   <TableCell>{editingPorts?<Checkbox checked={p.is_uplink} onCheckedChange={c=>{const v=[...ports];v[i].is_uplink=!!c;setPorts(v);}}/>:p.is_uplink?<Badge className="bg-blue-100 text-blue-700 border-0 text-xs">Uplink</Badge>:""}</TableCell>
                 </TableRow>
               ))}</TableBody></Table>}
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="health">
+          <Card className="p-4">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-semibold flex items-center gap-2"><Activity className="w-4 h-4 text-violet-500"/>Status Timeline</h3>
+              {dev.uptime_percent!=null&&<Badge variant="outline" className="text-xs">Uptime {dev.uptime_percent}%</Badge>}
+            </div>
+            {(!dev.recent_status_logs||dev.recent_status_logs.length===0)?<p className="text-neutral-500 text-sm">No status changes recorded yet.</p>:
+            <div className="relative pl-5 space-y-4 before:absolute before:left-1.5 before:top-1 before:bottom-1 before:w-px before:bg-neutral-200 dark:before:bg-neutral-700">
+              {dev.recent_status_logs.map((l:any)=>(
+                <div key={l.id} className="relative">
+                  <span className={`absolute -left-[18px] top-1 w-3 h-3 rounded-full ring-2 ring-white dark:ring-neutral-900 ${DOT[l.new_status]||"bg-neutral-400"}`}/>
+                  <div className="flex flex-wrap items-center gap-2 text-sm">
+                    {l.old_status&&<><Badge className={`border-0 text-[10px] ${SC[l.old_status]||""}`}>{l.old_status}</Badge><span className="text-neutral-400">→</span></>}
+                    <Badge className={`border-0 text-[10px] ${SC[l.new_status]||""}`}>{l.new_status}</Badge>
+                    <span className="text-xs text-neutral-500">{new Date(l.created_at).toLocaleString()}</span>
+                  </div>
+                  <div className="text-xs text-neutral-500 mt-0.5">{l.note||""}{l.changed_by_name?` · by ${l.changed_by_name}`:""}</div>
+                </div>
+              ))}
+            </div>}
           </Card>
         </TabsContent>
 

@@ -53,6 +53,47 @@ class VaultUnlockedPermission(permissions.BasePermission):
         request.vault_session = session
         return True
 
+class HasModulePermission(permissions.BasePermission):
+    """Enforces a role's per-module permission map (configured under
+    Settings → Roles & Permissions).
+
+    Usage on a viewset::
+
+        class FooViewSet(viewsets.ModelViewSet):
+            permission_classes = [HasModulePermission]
+            rbac_module = 'finance'
+
+    Maps HTTP methods to the view/add/edit/delete actions and checks the
+    signed-in user's role. SUPERADMIN always passes. Views without an
+    ``rbac_module`` fall back to allow (so this is opt-in per view).
+    """
+
+    method_action = {
+        'POST': 'add', 'PUT': 'edit', 'PATCH': 'edit', 'DELETE': 'delete',
+    }
+
+    def has_permission(self, request, view):
+        if not request.user.is_authenticated:
+            return False
+        module = getattr(view, 'rbac_module', None)
+        if not module:
+            return True
+        if request.user.role == 'SUPERADMIN':
+            return True
+        # Reads stay open to any authenticated user: list/detail endpoints are
+        # frequently used as cross-module reference data (vendors in an asset
+        # form, categories in a finance form, etc.), and the UI already hides
+        # sections a role can't view. Writes are what the map gates.
+        if request.method in permissions.SAFE_METHODS:
+            return True
+        action = self.method_action.get(request.method, 'edit')
+        from core.models import Role
+        role = Role.objects.filter(slug=request.user.role).first()
+        if not role:
+            return False
+        return role.can(module, action)
+
+
 class UserManagementPermission(permissions.BasePermission):
     def has_permission(self, request, view):
         if not request.user.is_authenticated:

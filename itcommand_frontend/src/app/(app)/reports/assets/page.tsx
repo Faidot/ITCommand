@@ -80,7 +80,7 @@ export default function AssetReportsPage() {
             {data.assets_by_status.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={data.assets_by_status} cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={5} dataKey="value" label={({name, percent}) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                  <Pie data={data.assets_by_status} cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={5} dataKey="value" label={({name, percent}: any) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}>
                     {data.assets_by_status.map((entry: any, index: number) => (
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}

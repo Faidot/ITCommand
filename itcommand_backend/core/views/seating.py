@@ -11,7 +11,7 @@ from core.serializers.seating import (
     SeatAssignmentSerializer,
     FloorMapObjectSerializer,
 )
-from core.permissions import IsAdminOrSuperadmin
+from core.permissions import IsAdminOrSuperadmin, HasModulePermission
 
 
 # ───────────────────────── Layout helpers ─────────────────────────
@@ -64,7 +64,8 @@ def _sync_seat(obj, seat_code=None):
 class OfficeViewSet(viewsets.ModelViewSet):
     queryset = Office.objects.all()
     serializer_class = OfficeSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'seating'
 
     @action(detail=True, methods=['get'])
     def floors(self, request, pk=None):
@@ -75,7 +76,8 @@ class OfficeViewSet(viewsets.ModelViewSet):
 class FloorViewSet(viewsets.ModelViewSet):
     queryset = Floor.objects.all()
     serializer_class = FloorSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'seating'
 
     @action(detail=True, methods=['get'])
     def layout(self, request, pk=None):
@@ -148,7 +150,8 @@ class FloorViewSet(viewsets.ModelViewSet):
 class SeatViewSet(viewsets.ModelViewSet):
     queryset = Seat.objects.all()
     serializer_class = SeatSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'seating'
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -296,7 +299,8 @@ class SeatAssignmentViewSet(viewsets.ModelViewSet):
         'user', 'proposed_by', 'from_seat',
     ).all().order_by('-proposed_at', '-created_at')
     serializer_class = SeatAssignmentSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'seating'
     http_method_names = ['get', 'post', 'delete', 'head', 'options']
 
     def get_queryset(self):
@@ -362,7 +366,8 @@ class SeatAssignmentViewSet(viewsets.ModelViewSet):
 class FloorMapObjectViewSet(viewsets.ModelViewSet):
     queryset = FloorMapObject.objects.select_related("floor", "seat").all()
     serializer_class = FloorMapObjectSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'seating'
 
     def get_queryset(self):
         qs = super().get_queryset()

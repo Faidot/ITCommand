@@ -14,6 +14,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { SplitScreenContainer } from "@/components/split-screen-container";
 import { BackgroundBlobs } from "@/components/background-blobs";
 import { ExtensionInstallPrompt } from "@/components/extension/extension-install-prompt";
+import { RouteGuard } from "@/components/route-guard";
 
 export default function ProtectedLayout({
   children,
@@ -80,7 +81,9 @@ export default function ProtectedLayout({
             <main className="flex-1 overflow-auto bg-transparent flex flex-col p-4 md:p-5 pb-16 md:pb-5">
               <ErrorBoundary>
                 <SplitScreenContainer>
-                  {children}
+                  <RouteGuard>
+                    {children}
+                  </RouteGuard>
                 </SplitScreenContainer>
               </ErrorBoundary>
             </main>

@@ -19,7 +19,7 @@ from core.serializers.licenses import (
     LicenseAssignmentSerializer, LicenseAlertSerializer,
     LicenseRenewalSerializer, UserLicenseSerializer,
 )
-from core.permissions import IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher
+from core.permissions import IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher, HasModulePermission
 from core.mixins import AuditLogMixin
 from core.encryption import decrypt_value
 from django.db import transaction
@@ -140,12 +140,8 @@ class LicensePagination(PageNumberPagination):
 class SoftwareProductViewSet(AuditLogMixin, viewsets.ModelViewSet):
     queryset = SoftwareProduct.objects.all()
     serializer_class = SoftwareProductSerializer
-    permission_classes = [permissions.IsAuthenticated]
-
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAdminOrSuperadmin()]
-        return super().get_permissions()
+    permission_classes = [HasModulePermission]
+    rbac_module = 'licenses'
 
     def get_queryset(self):
         qs = super().get_queryset()
@@ -164,7 +160,8 @@ class SoftwareProductViewSet(AuditLogMixin, viewsets.ModelViewSet):
 
 # ─── SoftwareLicense CRUD ───────────────────────────────────────────
 class SoftwareLicenseViewSet(AuditLogMixin, viewsets.ModelViewSet):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'licenses'
     pagination_class = LicensePagination
 
     def get_serializer_class(self):
@@ -173,11 +170,6 @@ class SoftwareLicenseViewSet(AuditLogMixin, viewsets.ModelViewSet):
         if self.action == 'list':
             return SoftwareLicenseListSerializer
         return SoftwareLicenseDetailSerializer
-
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAdminOrSuperadmin()]
-        return super().get_permissions()
 
     def get_queryset(self):
         qs = SoftwareLicense.objects.select_related('product', 'created_by').all()

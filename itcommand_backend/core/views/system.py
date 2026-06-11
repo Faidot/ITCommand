@@ -13,7 +13,7 @@ from core.models import *
 from core.serializers import *
 from core.encryption import decrypt_value
 from core.mixins import AuditLogMixin
-from core.permissions import IsSuperadmin, IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher, VaultAccessPermission, UserManagementPermission
+from core.permissions import IsSuperadmin, IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher, VaultAccessPermission, UserManagementPermission, HasModulePermission
 from rest_framework.pagination import PageNumberPagination
 
 
@@ -45,10 +45,11 @@ class FinanceDashboardView(APIView):
         if active_fy:
             budgets = Budget.objects.filter(financial_year=active_fy)
             total_budget = budgets.aggregate(Sum('allocated_amount'))['allocated_amount__sum'] or 0
-            
-            expenses = Expense.objects.filter(financial_year=active_fy)
+
+            # Only APPROVED expenses count toward spend.
+            expenses = Expense.objects.filter(financial_year=active_fy, status='APPROVED')
             total_spent = expenses.aggregate(Sum('amount'))['amount__sum'] or 0
-            
+
             remaining_budget = float(total_budget) - float(total_spent)
             
             for b in budgets:
@@ -76,12 +77,51 @@ class FinanceDashboardView(APIView):
         recent_expenses_qs = Expense.objects.all().order_by('-expense_date', '-created_at')[:10]
         recent_expenses = ExpenseSerializer(recent_expenses_qs, many=True).data
 
+        # Pending approvals
+        pending_count = Expense.objects.filter(status='PENDING').count()
+        pending_amount = float(Expense.objects.filter(status='PENDING').aggregate(Sum('amount'))['amount__sum'] or 0)
+
+        # Income vs expense trend (configurable length + optional category drilldown)
+        try:
+            n_months = max(1, min(24, int(request.query_params.get('months', 6))))
+        except (TypeError, ValueError):
+            n_months = 6
+        drill_cat = request.query_params.get('category') or None
+        monthly_trend = []
+        cursor = date(today.year, today.month, 1)
+        months = []
+        for _ in range(n_months):
+            months.append(cursor)
+            if cursor.month == 1:
+                cursor = date(cursor.year - 1, 12, 1)
+            else:
+                cursor = date(cursor.year, cursor.month - 1, 1)
+        for m in reversed(months):
+            nxt = date(m.year + 1, 1, 1) if m.month == 12 else date(m.year, m.month + 1, 1)
+            inc_q = Income.objects.filter(income_date__gte=m, income_date__lt=nxt)
+            exp_q = Expense.objects.filter(status='APPROVED', expense_date__gte=m, expense_date__lt=nxt)
+            if drill_cat:
+                inc_q = inc_q.filter(category_id=drill_cat)
+                exp_q = exp_q.filter(category_id=drill_cat)
+            inc = float(inc_q.aggregate(Sum('amount'))['amount__sum'] or 0)
+            exp = float(exp_q.aggregate(Sum('amount'))['amount__sum'] or 0)
+            monthly_trend.append({'month': m.strftime('%b %Y'), 'income': inc, 'expense': exp, 'net': inc - exp})
+
+        total_income_year = float(
+            (Income.objects.filter(financial_year=active_fy) if active_fy else Income.objects.all())
+            .aggregate(Sum('amount'))['amount__sum'] or 0)
+
         return Response({
             'total_budget': float(total_budget),
             'total_spent': float(total_spent),
             'remaining_budget': remaining_budget,
+            'total_income': total_income_year,
+            'net_cash_flow': total_income_year - float(total_spent),
             'spent_by_category': spent_by_category,
             'petty_cash_balance': petty_cash_balance,
+            'pending_approvals_count': pending_count,
+            'pending_approvals_amount': pending_amount,
+            'monthly_trend': monthly_trend,
             'upcoming_bills': upcoming_bills,
             'recent_expenses': recent_expenses,
         })
@@ -103,12 +143,9 @@ from rest_framework.pagination import PageNumberPagination
 class LocationViewSet(AuditLogMixin, viewsets.ModelViewSet):
     queryset = Location.objects.all()
     serializer_class = LocationSerializer
-    permission_classes = [ReadOnlyViewerOrHigher]
-
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAdminOrSuperadmin()]
-        return super().get_permissions()
+    # Locations are configuration data managed under Settings.
+    permission_classes = [HasModulePermission]
+    rbac_module = 'settings'
 
     def get_queryset(self):
         qs = super().get_queryset()

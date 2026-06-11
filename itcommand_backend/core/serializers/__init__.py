@@ -1,4 +1,5 @@
 from .users import *
+from .roles import *
 from .assets import *
 from .vault import *
 from .finance import *

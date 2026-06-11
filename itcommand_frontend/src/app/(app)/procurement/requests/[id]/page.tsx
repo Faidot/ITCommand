@@ -1,7 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { ArrowLeft, Clock, CheckCircle2, XCircle, Truck, Package, Box, Upload, Download, Trash2, MessageSquare } from "lucide-react";
+import { ArrowLeft, Clock, CheckCircle2, XCircle, Truck, Package, Box, Upload, Download, Trash2, MessageSquare, Receipt } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -74,6 +74,16 @@ export default function PRDetailPage() {
   const handleReject = () => { if(!rejectionReason){toast.error("Reason required");return;} doAction(`/procurement/requests/${prId}/reject/`,{rejection_reason:rejectionReason}); setRejectOpen(false); setRejectionReason(""); };
   const handleSubmit = () => doAction(`/procurement/requests/${prId}/submit/`);
   const handleOrder = () => doAction(`/procurement/requests/${prId}/order/`);
+
+  const handleConvertExpense = async () => {
+    if (!confirm("Create a finance expense from this purchase request?")) return;
+    setActionLoading(true);
+    try {
+      const r = await api.post(`/procurement/requests/${prId}/convert-to-expense/`, {});
+      toast.success(`Expense created (${r.data.status === "APPROVED" ? "approved" : "pending approval"})`);
+    } catch (e: any) { toast.error(e.response?.data?.detail || "Failed to convert"); }
+    finally { setActionLoading(false); }
+  };
 
   const handleReceive = async () => {
     setActionLoading(true);
@@ -203,6 +213,9 @@ export default function PRDetailPage() {
           >
             <Box className="w-4 h-4 mr-1"/>Add to Assets
           </Button>
+        )}
+        {['RECEIVED','PARTIALLY_RECEIVED'].includes(pr.status) && isManager && (
+          <Button variant="outline" className="text-rose-600" onClick={handleConvertExpense} disabled={actionLoading}><Receipt className="w-4 h-4 mr-1"/>Convert to Expense</Button>
         )}
         <Button variant="outline" onClick={()=>setUploadOpen(true)}><Upload className="w-4 h-4 mr-1"/>Upload Document</Button>
       </div>

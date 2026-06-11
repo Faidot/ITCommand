@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { Download, TrendingUp, PieChart as PieChartIcon } from "lucide-react";
+import { useEffect, useState, useCallback } from "react";
+import { Download, TrendingUp, BookOpen } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
@@ -11,28 +11,42 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
+const fmt = (v: number) => `$${Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export default function FinancialReportsPage() {
   const [data, setData] = useState<any>(null);
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async (s?: string, e?: string) => {
     try {
-      const res = await api.get('/reports/financial-summary/');
+      const params = new URLSearchParams();
+      if (s) params.set("start_date", s);
+      if (e) params.set("end_date", e);
+      const res = await api.get(`/reports/financial-summary/${params.toString() ? `?${params}` : ""}`);
       setData(res.data);
+      // Populate the date inputs from the resolved period on first load.
+      if (res.data.period) {
+        if (!s) setStart(res.data.period.start);
+        if (!e) setEnd(res.data.period.end);
+      }
     } catch {
       toast.error("Failed to load reports");
     }
-  };
+  }, []);
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => { fetchData(); }, [fetchData]);
 
   const handleExport = async () => {
     try {
-      const res = await api.get('/reports/export/financial/?format=excel', { responseType: 'blob' });
+      const params = new URLSearchParams();
+      if (start) params.set("start_date", start);
+      if (end) params.set("end_date", end);
+      const res = await api.get(`/reports/export/financial/?${params}`, { responseType: 'blob' });
       const url = window.URL.createObjectURL(new Blob([res.data]));
       const link = document.createElement('a');
       link.href = url;
-      link.setAttribute('download', 'financial_export.xlsx');
+      link.setAttribute('download', `financial_export.xlsx`);
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -46,10 +60,11 @@ export default function FinancialReportsPage() {
   const totalAllocated = data.budget_utilization.reduce((sum: number, b: any) => sum + b.allocated, 0);
   const totalSpent = data.budget_utilization.reduce((sum: number, b: any) => sum + b.spent, 0);
   const burnRate = totalAllocated > 0 ? (totalSpent / totalAllocated) * 100 : 0;
+  const ls = data.ledger_summary || {};
 
   return (
     <div className="p-4 max-w-7xl mx-auto space-y-6">
-      <div className="flex justify-between items-end">
+      <div className="flex flex-wrap justify-between items-end gap-3">
         <div>
           <h1 className="text-2xl font-bold flex items-center gap-2"><TrendingUp className="text-emerald-500" /> Financial Reports</h1>
           <p className="text-neutral-500">Analytics and exports for IT spending</p>
@@ -57,18 +72,38 @@ export default function FinancialReportsPage() {
         <Button onClick={handleExport}><Download className="w-4 h-4 mr-2" /> Export to Excel</Button>
       </div>
 
+      {/* Date range filter */}
+      <Card>
+        <CardContent className="flex flex-wrap items-end gap-4 py-4">
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-neutral-500">From</label>
+            <input type="date" value={start} onChange={(e) => setStart(e.target.value)}
+              className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-sm" />
+          </div>
+          <div className="flex flex-col gap-1">
+            <label className="text-xs font-medium text-neutral-500">To</label>
+            <input type="date" value={end} onChange={(e) => setEnd(e.target.value)}
+              className="h-9 rounded-md border border-input bg-transparent px-3 text-sm shadow-sm" />
+          </div>
+          <Button onClick={() => fetchData(start, end)}>Apply</Button>
+          <span className="text-sm text-neutral-500 ml-auto">
+            Showing <span className="font-medium">{data.period?.start}</span> → <span className="font-medium">{data.period?.end}</span>
+          </span>
+        </CardContent>
+      </Card>
+
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Total Budget</CardTitle></CardHeader>
-          <CardContent><div className="text-2xl font-bold">${totalAllocated.toFixed(2)}</div></CardContent>
+          <CardContent><div className="text-2xl font-bold">{fmt(totalAllocated)}</div></CardContent>
         </Card>
         <Card>
-          <CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Total Spent</CardTitle></CardHeader>
-          <CardContent><div className="text-2xl font-bold text-red-600">${totalSpent.toFixed(2)}</div></CardContent>
+          <CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Spent (Period)</CardTitle></CardHeader>
+          <CardContent><div className="text-2xl font-bold text-red-600">{fmt(totalSpent)}</div></CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Remaining</CardTitle></CardHeader>
-          <CardContent><div className="text-2xl font-bold text-emerald-600">${(totalAllocated - totalSpent).toFixed(2)}</div></CardContent>
+          <CardContent><div className="text-2xl font-bold text-emerald-600">{fmt(totalAllocated - totalSpent)}</div></CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Burn Rate</CardTitle></CardHeader>
@@ -78,7 +113,7 @@ export default function FinancialReportsPage() {
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card>
-          <CardHeader><CardTitle>Monthly Expenses (Last 12 Months)</CardTitle></CardHeader>
+          <CardHeader><CardTitle>Monthly Expenses</CardTitle></CardHeader>
           <CardContent className="h-80">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={data.monthly_expenses}>
@@ -98,7 +133,7 @@ export default function FinancialReportsPage() {
             {data.top_categories.length > 0 ? (
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
-                  <Pie data={data.top_categories} cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={5} dataKey="value" label={({name, percent}) => `${name} ${(percent * 100).toFixed(0)}%`}>
+                  <Pie data={data.top_categories} cx="50%" cy="50%" innerRadius={60} outerRadius={100} paddingAngle={5} dataKey="value" label={({name, percent}: any) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}>
                     {data.top_categories.map((entry: any, index: number) => (
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}
@@ -149,22 +184,74 @@ export default function FinancialReportsPage() {
 
         <div className="space-y-6">
           <Card>
-            <CardHeader><CardTitle>Petty Cash Summary</CardTitle></CardHeader>
+            <CardHeader><CardTitle>Petty Cash (Period)</CardTitle></CardHeader>
             <CardContent className="space-y-2">
-              <div className="flex justify-between"><span className="text-neutral-500">Total In</span><span className="font-medium text-emerald-600">${data.petty_cash.total_in.toFixed(2)}</span></div>
-              <div className="flex justify-between"><span className="text-neutral-500">Total Out</span><span className="font-medium text-red-600">${data.petty_cash.total_out.toFixed(2)}</span></div>
-              <div className="flex justify-between pt-2 border-t font-bold"><span className="text-neutral-500">Balance</span><span>${data.petty_cash.balance.toFixed(2)}</span></div>
+              <div className="flex justify-between"><span className="text-neutral-500">Total In</span><span className="font-medium text-emerald-600">{fmt(data.petty_cash.total_in)}</span></div>
+              <div className="flex justify-between"><span className="text-neutral-500">Total Out</span><span className="font-medium text-red-600">{fmt(data.petty_cash.total_out)}</span></div>
+              <div className="flex justify-between pt-2 border-t font-bold"><span className="text-neutral-500">Net</span><span>{fmt(data.petty_cash.balance)}</span></div>
             </CardContent>
           </Card>
           <Card>
             <CardHeader><CardTitle>Commitments</CardTitle></CardHeader>
             <CardContent className="space-y-2">
-              <div className="flex justify-between"><span className="text-neutral-500">Direct Payments (Total)</span><span className="font-medium">${data.direct_payments_total.toFixed(2)}</span></div>
-              <div className="flex justify-between"><span className="text-neutral-500">Recurring (Monthly Avg)</span><span className="font-medium text-blue-600">${data.monthly_commitment.toFixed(2)}</span></div>
+              <div className="flex justify-between"><span className="text-neutral-500">Direct Payments (Period)</span><span className="font-medium">{fmt(data.direct_payments_total)}</span></div>
+              <div className="flex justify-between"><span className="text-neutral-500">Recurring (Monthly)</span><span className="font-medium text-blue-600">{fmt(data.monthly_commitment)}</span></div>
             </CardContent>
           </Card>
         </div>
       </div>
+
+      {/* Ledger */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><BookOpen className="w-5 h-5 text-indigo-500" /> Ledger</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+            <div className="rounded-lg border p-3"><div className="text-xs text-neutral-500">Opening Balance</div><div className="text-lg font-bold">{fmt(ls.opening_balance)}</div></div>
+            <div className="rounded-lg border p-3"><div className="text-xs text-neutral-500">Money In</div><div className="text-lg font-bold text-emerald-600">{fmt(ls.total_in)}</div></div>
+            <div className="rounded-lg border p-3"><div className="text-xs text-neutral-500">Money Out</div><div className="text-lg font-bold text-red-600">{fmt(ls.total_out)}</div></div>
+            <div className="rounded-lg border p-3"><div className="text-xs text-neutral-500">Net</div><div className={`text-lg font-bold ${ls.net >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{fmt(ls.net)}</div></div>
+            <div className="rounded-lg border p-3 bg-muted/40"><div className="text-xs text-neutral-500">Closing Balance</div><div className="text-lg font-bold">{fmt(ls.closing_balance)}</div></div>
+          </div>
+
+          <div className="max-h-[480px] overflow-auto rounded-md border">
+            <Table>
+              <TableHeader className="sticky top-0 bg-background z-10">
+                <TableRow>
+                  <TableHead>Date</TableHead>
+                  <TableHead>Type</TableHead>
+                  <TableHead>Description</TableHead>
+                  <TableHead>Party</TableHead>
+                  <TableHead className="text-right">Debit</TableHead>
+                  <TableHead className="text-right">Credit</TableHead>
+                  <TableHead className="text-right">Balance</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                <TableRow className="bg-muted/30">
+                  <TableCell colSpan={6} className="font-medium text-neutral-500">Opening Balance</TableCell>
+                  <TableCell className="text-right font-semibold">{fmt(ls.opening_balance)}</TableCell>
+                </TableRow>
+                {data.ledger.map((r: any, i: number) => (
+                  <TableRow key={i}>
+                    <TableCell className="whitespace-nowrap">{r.date}</TableCell>
+                    <TableCell><span className={`text-xs px-1.5 py-0.5 rounded ${r.credit > 0 ? 'bg-emerald-100 text-emerald-700' : 'bg-red-100 text-red-700'}`}>{r.type}</span></TableCell>
+                    <TableCell className="font-medium max-w-[260px] truncate">{r.description}</TableCell>
+                    <TableCell className="text-neutral-500">{r.party}</TableCell>
+                    <TableCell className="text-right text-red-600">{r.debit ? fmt(r.debit) : ''}</TableCell>
+                    <TableCell className="text-right text-emerald-600">{r.credit ? fmt(r.credit) : ''}</TableCell>
+                    <TableCell className="text-right font-medium">{fmt(r.balance)}</TableCell>
+                  </TableRow>
+                ))}
+                {data.ledger.length === 0 && (
+                  <TableRow><TableCell colSpan={7} className="text-center text-neutral-500 py-6">No transactions in this period.</TableCell></TableRow>
+                )}
+              </TableBody>
+            </Table>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

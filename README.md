@@ -4,6 +4,8 @@ IT Command is an enterprise-grade full-stack IT Department Management platform. 
 
 ## 🚀 Features
 
+> 📖 **Full module-by-module feature reference:** see [FEATURES.md](FEATURES.md) for a detailed breakdown of every module (data model → API → UI → automation), with the Finance module documented in depth.
+
 - **Asset Management**: Track inventory, assignments, notes, and lifecycle history.
 - **Finance Module**: Manage budgets, track expenses, log petty cash, and schedule recurring bills.
 - **Secure Vault**: Encrypted credential and workspace management.

@@ -18,10 +18,13 @@ from core.serializers.procurement import (
     PurchaseRequestCreateSerializer, PurchaseRequestItemSerializer,
     PRApprovalLogSerializer, PRDocumentSerializer
 )
+from core.permissions import HasModulePermission
 
 
 class PurchaseRequestViewSet(viewsets.ModelViewSet):
     queryset = PurchaseRequest.objects.all()
+    permission_classes = [HasModulePermission]
+    rbac_module = 'procurement'
 
     def get_serializer_class(self):
         if self.action == 'retrieve':
@@ -333,6 +336,32 @@ class PurchaseRequestViewSet(viewsets.ModelViewSet):
         pr = self.get_object()
         logs = pr.approval_logs.all()
         return Response(PRApprovalLogSerializer(logs, many=True).data)
+
+    @action(detail=True, methods=['post'], url_path='convert-to-expense')
+    def convert_to_expense(self, request, pk=None):
+        """Create a finance Expense from a fulfilled purchase request."""
+        from core.models import Expense, FinancialYear
+        from core.serializers import ExpenseSerializer
+        pr = self.get_object()
+        amount = request.data.get('amount') or pr.total_actual_cost or pr.total_estimated_cost or 0
+        active_fy = FinancialYear.objects.filter(is_active=True).first()
+        role = getattr(request.user, 'role', None)
+        st = 'APPROVED' if role in ('ADMIN', 'SUPERADMIN') else 'PENDING'
+        exp = Expense.objects.create(
+            title=f"PR {pr.pr_number}: {pr.title}",
+            amount=amount,
+            expense_date=timezone.now().date(),
+            category=pr.budget_category,
+            financial_year=active_fy,
+            paid_to=pr.preferred_vendor.name if pr.preferred_vendor else '',
+            linked_purchase_request=pr,
+            description=f"Converted from purchase request {pr.pr_number}.",
+            status=st,
+            approved_by=request.user if st == 'APPROVED' else None,
+            approved_at=timezone.now() if st == 'APPROVED' else None,
+            created_by=request.user,
+        )
+        return Response(ExpenseSerializer(exp).data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=['post', 'get'], url_path='documents')
     def manage_documents(self, request, pk=None):

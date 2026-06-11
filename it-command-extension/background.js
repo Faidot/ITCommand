@@ -4,6 +4,7 @@
 // token and access token never live in page contexts.
 
 const DEFAULT_SERVER = "http://localhost:8000/api";
+const DEFAULT_APP = "http://localhost:3000";
 
 const KEYS = {
   settings: "it_settings", // { serverUrl, autofill }
@@ -27,6 +28,7 @@ async function getSettings() {
   const s = (await getStore(KEYS.settings)) || {};
   return {
     serverUrl: (s.serverUrl || DEFAULT_SERVER).replace(/\/+$/, ""),
+    appUrl: (s.appUrl || DEFAULT_APP).replace(/\/+$/, ""),
     autofill: s.autofill !== false, // default ON
   };
 }
@@ -87,6 +89,7 @@ async function getState() {
   const vaultUnlocked = !!vault.token && !!vault.expiresAt && new Date(vault.expiresAt).getTime() > Date.now();
   return {
     serverUrl: settings.serverUrl,
+    appUrl: settings.appUrl,
     autofill: settings.autofill,
     loggedIn: !!auth.access,
     user: auth.user || null,
@@ -154,13 +157,52 @@ async function reveal({ id }) {
   return { ok: true, password: data.password };
 }
 
-async function saveSettings({ serverUrl, autofill }) {
+async function saveSettings({ serverUrl, appUrl, autofill }) {
   const current = await getSettings();
   await setStore(KEYS.settings, {
     serverUrl: serverUrl !== undefined ? serverUrl : current.serverUrl,
+    appUrl: appUrl !== undefined ? appUrl : current.appUrl,
     autofill: autofill !== undefined ? autofill : current.autofill,
   });
   return { ok: true };
+}
+
+// ───────────────────────── network module ─────────────────────────
+
+async function getNetworkDevice({ host }) {
+  const state = await getState();
+  if (!state.loggedIn) return { ok: false, error: "not_logged_in" };
+  if (!host) return { ok: true, device: null };
+  const res = await apiFetch(`/network/lookup/?host=${encodeURIComponent(host)}`);
+  if (res.status === 403) return { ok: false, error: "no_permission" };
+  if (!res.ok) return { ok: false, error: "lookup_failed" };
+  const data = await res.json().catch(() => ({}));
+  return { ok: true, device: data.device || null };
+}
+
+async function setDeviceStatus({ id, status }) {
+  const res = await apiFetch(`/network/devices/${id}/set-status/`, {
+    method: "POST",
+    body: { status },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return { ok: false, error: data.detail || data.error || "Update failed." };
+  return { ok: true, device: data };
+}
+
+async function createTicket({ title, description, priority }) {
+  const state = await getState();
+  if (!state.loggedIn) return { ok: false, error: "not_logged_in" };
+  const res = await apiFetch(`/helpdesk/tickets/`, {
+    method: "POST",
+    body: { title, description, priority: priority || "MEDIUM" },
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) {
+    const msg = typeof data === "object" ? Object.values(data).flat().join(" ") : "Failed.";
+    return { ok: false, error: msg || "Failed to create ticket." };
+  }
+  return { ok: true, ticket: data };
 }
 
 // ───────────────────────── message router ─────────────────────────
@@ -174,6 +216,9 @@ const HANDLERS = {
   GET_MATCHES: getMatches,
   REVEAL: reveal,
   SAVE_SETTINGS: saveSettings,
+  GET_NETWORK_DEVICE: getNetworkDevice,
+  SET_DEVICE_STATUS: setDeviceStatus,
+  CREATE_TICKET: createTicket,
 };
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {

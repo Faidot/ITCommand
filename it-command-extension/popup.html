@@ -12,7 +12,7 @@
         <span class="logo">IT</span>
         <div>
           <div class="title">IT Command</div>
-          <div class="sub" id="subStatus">Password autofill</div>
+          <div class="sub" id="subStatus">Passwords &amp; Network</div>
         </div>
       </div>
       <button id="settingsBtn" class="icon-btn" title="Settings">⚙</button>
@@ -21,8 +21,12 @@
     <!-- Settings -->
     <section id="settingsView" class="view hidden">
       <label class="field">
-        <span>Server URL</span>
+        <span>Server URL (API)</span>
         <input id="serverUrl" type="text" placeholder="http://localhost:8000/api" />
+      </label>
+      <label class="field">
+        <span>App URL (web)</span>
+        <input id="appUrl" type="text" placeholder="http://localhost:3000" />
       </label>
       <label class="check">
         <input id="autofillToggle" type="checkbox" />
@@ -32,7 +36,7 @@
         <button id="saveSettings" class="btn primary">Save</button>
         <button id="closeSettings" class="btn ghost">Back</button>
       </div>
-      <p class="hint">If you change the server host, allow it when prompted.</p>
+      <p class="hint">If you change the server host, allow it when prompted. The App URL is used for “Open in IT Command” links.</p>
     </section>
 
     <!-- Login -->
@@ -49,26 +53,87 @@
       <button id="loginBtn" class="btn primary full">Sign in</button>
     </section>
 
-    <!-- Unlock vault -->
-    <section id="unlockView" class="view hidden">
-      <div class="msg" id="unlockError"></div>
-      <p class="lead">Enter the vault master password to unlock for this session.</p>
-      <label class="field">
-        <span>Master password</span>
-        <input id="masterPassword" type="password" placeholder="••••••••" />
-      </label>
-      <button id="unlockBtn" class="btn primary full">Unlock vault</button>
-    </section>
-
-    <!-- Matches -->
-    <section id="matchesView" class="view hidden">
-      <div class="domain-row">
-        <span class="domain" id="domainLabel">—</span>
-        <span class="timer" id="vaultTimer"></span>
+    <!-- Main (logged in): tabbed -->
+    <section id="mainView" class="view hidden">
+      <div class="tabs">
+        <button class="tab active" data-tab="passwords" id="tabPasswords">Passwords</button>
+        <button class="tab" data-tab="network" id="tabNetwork">Network</button>
       </div>
-      <div id="matchesList" class="list"></div>
-      <div id="emptyMatches" class="empty hidden">
-        No saved credentials for this site.
+
+      <!-- Passwords panel -->
+      <div id="passwordsPanel" class="panel">
+        <!-- locked -->
+        <div id="unlockBox" class="hidden">
+          <div class="msg" id="unlockError"></div>
+          <p class="lead">Unlock the vault for this session to see saved logins.</p>
+          <label class="field">
+            <span>Master password</span>
+            <input id="masterPassword" type="password" placeholder="••••••••" />
+          </label>
+          <button id="unlockBtn" class="btn primary full">Unlock vault</button>
+        </div>
+        <!-- unlocked -->
+        <div id="matchesBox" class="hidden">
+          <div class="domain-row">
+            <span class="domain" id="domainLabel">—</span>
+            <span class="timer" id="vaultTimer"></span>
+          </div>
+          <div id="matchesList" class="list"></div>
+          <div id="emptyMatches" class="empty hidden">No saved credentials for this site.</div>
+        </div>
+      </div>
+
+      <!-- Network panel -->
+      <div id="networkPanel" class="panel hidden">
+        <div class="domain-row">
+          <span class="domain" id="netHostLabel">—</span>
+          <button id="netRefresh" class="link">Refresh</button>
+        </div>
+
+        <div id="netLoading" class="empty hidden">Looking up device…</div>
+
+        <!-- matched device card -->
+        <div id="deviceCard" class="device-card hidden">
+          <div class="device-head">
+            <span class="status-dot" id="devDot"></span>
+            <div class="device-id">
+              <div class="device-name" id="devName">—</div>
+              <div class="device-meta" id="devMeta">—</div>
+            </div>
+            <span class="device-code" id="devCode"></span>
+          </div>
+          <div class="device-rows" id="devRows"></div>
+          <div class="status-actions">
+            <button class="mini status-online" data-status="ONLINE">Online</button>
+            <button class="mini status-offline" data-status="OFFLINE">Offline</button>
+            <button class="mini status-maint" data-status="MAINTENANCE">Maint.</button>
+          </div>
+          <button id="openDeviceBtn" class="btn ghost full small">Open in IT Command →</button>
+        </div>
+
+        <!-- no match -->
+        <div id="noDevice" class="empty hidden">
+          No network device matches <b id="noDeviceHost"></b>.
+        </div>
+
+        <!-- report issue -->
+        <div class="report-box">
+          <button id="reportToggle" class="link">＋ Report an issue for this site</button>
+          <div id="reportForm" class="hidden">
+            <input id="ticketTitle" type="text" placeholder="Short summary" class="ti" />
+            <textarea id="ticketDesc" placeholder="What's wrong?" class="ti" rows="2"></textarea>
+            <div class="row">
+              <select id="ticketPriority" class="ti">
+                <option value="LOW">Low</option>
+                <option value="MEDIUM" selected>Medium</option>
+                <option value="HIGH">High</option>
+                <option value="CRITICAL">Critical</option>
+              </select>
+              <button id="ticketSubmit" class="btn primary small">Send</button>
+            </div>
+            <div class="msg" id="ticketMsg"></div>
+          </div>
+        </div>
       </div>
     </section>
 

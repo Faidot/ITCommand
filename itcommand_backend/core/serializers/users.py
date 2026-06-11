@@ -42,6 +42,11 @@ class DepartmentSerializer(serializers.ModelSerializer):
 class UserSerializer(serializers.ModelSerializer):
     manager_name = serializers.SerializerMethodField(read_only=True)
     team_lead_name = serializers.SerializerMethodField(read_only=True)
+    # Override the model ChoiceField so any role defined in the Roles &
+    # Permissions section (not just the four built-ins) can be assigned.
+    role = serializers.CharField()
+    role_label = serializers.SerializerMethodField(read_only=True)
+    permissions = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = User
@@ -50,6 +55,8 @@ class UserSerializer(serializers.ModelSerializer):
             'email',
             'full_name',
             'role',
+            'role_label',
+            'permissions',
             'department',
             'avatar',
             'designation',
@@ -72,6 +79,30 @@ class UserSerializer(serializers.ModelSerializer):
         if not getattr(obj, "team_lead_id", None):
             return None
         return obj.team_lead.full_name
+
+    def _role(self, obj):
+        from core.models import Role
+        return Role.objects.filter(slug=obj.role).first()
+
+    def get_role_label(self, obj):
+        role = self._role(obj)
+        return role.name if role else obj.role
+
+    def get_permissions(self, obj):
+        from core.models import Role
+        from core import rbac
+        role = self._role(obj)
+        if role:
+            return role.effective_permissions()
+        # Unknown/unseeded role slug: deny everything rather than guess.
+        return rbac.blank_permissions()
+
+    def validate_role(self, value):
+        from core.models import Role
+        value = (value or "").strip().upper()
+        if not Role.objects.filter(slug=value).exists():
+            raise serializers.ValidationError("Unknown role.")
+        return value
 
 class LoginSerializer(serializers.Serializer):
     email = serializers.EmailField()

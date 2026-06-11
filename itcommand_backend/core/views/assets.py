@@ -16,28 +16,21 @@ from core.serializers.assets import (
     AssetUnitAssignmentSerializer,
 )
 from core.mixins import AuditLogMixin
-from core.permissions import IsAdminOrSuperadmin, ReadOnlyViewerOrHigher
+from core.permissions import IsAdminOrSuperadmin, ReadOnlyViewerOrHigher, HasModulePermission
 
 
 class AssetCategoryViewSet(AuditLogMixin, viewsets.ModelViewSet):
     queryset = AssetCategory.objects.all().order_by('name')
     serializer_class = AssetCategorySerializer
-    permission_classes = [ReadOnlyViewerOrHigher]
-
-    def get_permissions(self):
-        if self.action in ['create', 'update', 'partial_update', 'destroy']:
-            return [IsAdminOrSuperadmin()]
-        return super().get_permissions()
+    # Categories are configuration data managed under Settings.
+    permission_classes = [HasModulePermission]
+    rbac_module = 'settings'
 
 class AssetViewSet(AuditLogMixin, viewsets.ModelViewSet):
     queryset = Asset.objects.all().order_by('-created_at')
     serializer_class = AssetSerializer
-    permission_classes = [ReadOnlyViewerOrHigher]
-
-    def get_permissions(self):
-        if self.action in ['create', 'destroy']:
-            return [IsAdminOrSuperadmin()]
-        return super().get_permissions()
+    permission_classes = [HasModulePermission]
+    rbac_module = 'assets'
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -356,12 +349,8 @@ class AssetViewSet(AuditLogMixin, viewsets.ModelViewSet):
 class AssetNoteViewSet(AuditLogMixin, viewsets.ModelViewSet):
     queryset = AssetNote.objects.all().order_by('-created_at')
     serializer_class = AssetNoteSerializer
-    permission_classes = [ReadOnlyViewerOrHigher]
-
-    def get_permissions(self):
-        if self.action in ['update', 'partial_update', 'destroy']:
-            return [IsAdminOrSuperadmin()]
-        return super().get_permissions()
+    permission_classes = [HasModulePermission]
+    rbac_module = 'assets'
 
     def get_queryset(self):
         queryset = super().get_queryset()

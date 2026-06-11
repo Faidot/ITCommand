@@ -6,6 +6,8 @@ interface User {
   email: string;
   full_name: string;
   role: string;
+  role_label?: string;
+  permissions?: Record<string, Record<string, boolean>>;
   department: number | null;
   avatar: string | null;
   designation?: string | null;

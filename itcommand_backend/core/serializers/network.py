@@ -1,5 +1,16 @@
 from rest_framework import serializers
-from core.models.network import NetworkLocation, NetworkDevice, IPAddressPool, NetworkDevicePort, NetworkNote
+from core.models.network import (
+    NetworkLocation, NetworkDevice, IPAddressPool, NetworkDevicePort, NetworkNote,
+    NetworkDeviceStatusLog,
+)
+
+
+class NetworkDeviceStatusLogSerializer(serializers.ModelSerializer):
+    changed_by_name = serializers.CharField(source='changed_by.full_name', read_only=True, default=None)
+
+    class Meta:
+        model = NetworkDeviceStatusLog
+        fields = ['id', 'old_status', 'new_status', 'note', 'changed_by_name', 'created_at']
 
 
 class NetworkLocationSerializer(serializers.ModelSerializer):
@@ -54,11 +65,16 @@ class NetworkDeviceDetailSerializer(serializers.ModelSerializer):
     linked_asset_name = serializers.CharField(source='linked_asset.name', read_only=True, default=None)
     ports = NetworkDevicePortSerializer(many=True, read_only=True)
     device_notes = NetworkNoteSerializer(many=True, read_only=True)
+    recent_status_logs = serializers.SerializerMethodField()
 
     class Meta:
         model = NetworkDevice
         fields = '__all__'
         read_only_fields = ['device_code', 'created_by', 'created_at', 'updated_at']
+
+    def get_recent_status_logs(self, obj):
+        logs = obj.status_logs.all()[:15]
+        return NetworkDeviceStatusLogSerializer(logs, many=True).data
 
 
 class NetworkDeviceCreateSerializer(serializers.ModelSerializer):

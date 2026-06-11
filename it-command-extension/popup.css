@@ -96,3 +96,48 @@ body {
 .footer-actions { display: flex; gap: 12px; }
 .link { background: none; border: none; color: var(--primary); cursor: pointer; font-size: 12px; font-weight: 600; }
 .link:hover { text-decoration: underline; }
+
+/* ── tabs ── */
+.tabs { display: flex; gap: 4px; padding: 2px; background: var(--soft); border: 1px solid var(--border); border-radius: 9px; margin-bottom: 12px; }
+.tab {
+  flex: 1; padding: 7px 10px; border: none; background: transparent; border-radius: 7px;
+  cursor: pointer; font-size: 12px; font-weight: 600; color: var(--muted);
+}
+.tab.active { background: #fff; color: var(--fg); box-shadow: 0 1px 2px rgba(0,0,0,.06); }
+.panel { display: flex; flex-direction: column; gap: 8px; }
+
+.btn.small { padding: 6px 10px; font-size: 12px; }
+
+/* ── device card ── */
+.device-card {
+  border: 1px solid var(--border); border-radius: 12px; padding: 12px; background: var(--soft);
+  display: flex; flex-direction: column; gap: 10px;
+}
+.device-head { display: flex; align-items: center; gap: 8px; }
+.status-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.device-id { min-width: 0; flex: 1; }
+.device-name { font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.device-meta { color: var(--muted); font-size: 11px; text-transform: capitalize; }
+.device-code { font-size: 10px; color: var(--muted); font-family: ui-monospace, monospace; flex-shrink: 0; }
+.device-rows { display: flex; flex-direction: column; gap: 4px; }
+.drow { display: flex; justify-content: space-between; font-size: 12px; }
+.drow span { color: var(--muted); }
+.drow b { font-weight: 600; font-family: ui-monospace, monospace; max-width: 60%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.status-actions { display: flex; gap: 6px; }
+.status-actions .mini { flex: 1; }
+.status-actions .mini:disabled { opacity: .45; cursor: default; }
+.status-online { color: #047857; }
+.status-offline { color: #b91c1c; }
+.status-maint { color: #a16207; }
+
+/* ── report issue ── */
+.report-box { border-top: 1px solid var(--border); padding-top: 8px; margin-top: 2px; display: flex; flex-direction: column; gap: 6px; }
+.ti {
+  width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 8px;
+  font-size: 12px; font-family: inherit; outline: none; resize: vertical;
+}
+.ti:focus { border-color: var(--primary); }
+.report-box .row select.ti { flex: 1; }
+.report-box .row .btn { flex: 0 0 auto; }
+.msg.ok { color: var(--primary); }

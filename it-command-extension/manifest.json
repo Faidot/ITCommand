@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "IT Command",
-  "version": "0.1.0",
-  "description": "Auto-fill passwords from your IT Command vault. (Passwords for now; more modules to come.)",
+  "version": "0.2.0",
+  "description": "Autofill vault passwords and link the page you're on to its IT Command network device — check status, flip it online/offline, or file a ticket.",
   "permissions": ["storage", "tabs"],
   "host_permissions": [
     "http://localhost:8000/*",
