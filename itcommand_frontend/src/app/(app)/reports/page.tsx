@@ -4,12 +4,14 @@ import Link from "next/link";
 import {
   TrendingUp, MonitorSmartphone, Headset, KeyRound, ShoppingCart,
   Building, Map, Network, UserPlus, BookOpen, Users, BarChart3, ArrowRight,
+  ClipboardList,
 } from "lucide-react";
 import { useAuthStore } from "@/store/authStore";
 import { can } from "@/lib/permissions";
 import { Card, CardContent } from "@/components/ui/card";
 
 const REPORTS = [
+  { title: "Master Report", desc: "User-wise: assets, subscriptions & all linked data", href: "/reports/master", icon: ClipboardList, color: "text-primary", module: "users" },
   { title: "Financial", desc: "Budgets, spend & cash flow", href: "/reports/financial", icon: TrendingUp, color: "text-emerald-500", module: "finance" },
   { title: "Assets", desc: "Inventory, value & warranties", href: "/reports/assets", icon: MonitorSmartphone, color: "text-blue-500", module: "assets" },
   { title: "Helpdesk", desc: "Tickets, SLA & agents", href: "/reports/helpdesk", icon: Headset, color: "text-sky-500", module: "helpdesk" },

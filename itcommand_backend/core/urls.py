@@ -34,6 +34,7 @@ from .reports import (
     SeatingSummaryView, NetworkSummaryView, OnboardingSummaryView, KBSummaryView, UserSummaryView,
     ExportHelpdeskView, ExportLicensesView, ExportProcurementView, ExportVendorsView,
     ExportNetworkView, ExportSeatingView, ExportOnboardingView, ExportKBView, ExportUsersView,
+    MasterUserReportView, ExportMasterUserView,
 )
 
 router = DefaultRouter()
@@ -115,6 +116,7 @@ urlpatterns = [
     path('reports/onboarding-summary/', OnboardingSummaryView.as_view(), name='reports_onboarding_summary'),
     path('reports/kb-summary/', KBSummaryView.as_view(), name='reports_kb_summary'),
     path('reports/user-summary/', UserSummaryView.as_view(), name='reports_user_summary'),
+    path('reports/master-user/', MasterUserReportView.as_view(), name='reports_master_user'),
     path('reports/export/financial/', ExportFinancialView.as_view(), name='reports_export_financial'),
     path('reports/export/assets/', ExportAssetsView.as_view(), name='reports_export_assets'),
     path('reports/export/helpdesk/', ExportHelpdeskView.as_view(), name='reports_export_helpdesk'),
@@ -126,6 +128,7 @@ urlpatterns = [
     path('reports/export/onboarding/', ExportOnboardingView.as_view(), name='reports_export_onboarding'),
     path('reports/export/kb/', ExportKBView.as_view(), name='reports_export_kb'),
     path('reports/export/users/', ExportUsersView.as_view(), name='reports_export_users'),
+    path('reports/export/master-user/', ExportMasterUserView.as_view(), name='reports_export_master_user'),
     path('dashboard/', MainDashboardView.as_view(), name='main_dashboard'),
     path('settings/', SettingsView.as_view(), name='app_settings'),
     # Helpdesk

@@ -1119,6 +1119,171 @@ class UserSummaryView(APIView):
 
 
 # ===========================================================================
+# MASTER USER REPORT
+# ---------------------------------------------------------------------------
+# One consolidated, user-wise view of everything linked to each person:
+# assets, software licenses / subscriptions, seat, helpdesk tickets,
+# onboarding and vault items. Shared by the JSON summary and the Excel export.
+# ===========================================================================
+_OPEN_TICKET_STATUSES = ['OPEN', 'IN_PROGRESS', 'PENDING']
+
+
+def _master_users_queryset():
+    """Users with every linked relation prefetched, so building the rows
+    below stays a constant number of queries regardless of headcount."""
+    return User.objects.select_related('department', 'manager', 'team_lead').prefetch_related(
+        'assigned_assets__category',
+        'asset_unit_assignments__asset__category',
+        'license_assignments__license__product',
+        'seat_assignments__seat__floor__office',
+        'submitted_tickets',
+        'assigned_tickets',
+        'onboarding_records',
+        'vault_shares_received',
+        'created_credentials',
+    ).order_by('full_name', 'email')
+
+
+def _master_user_rows(users):
+    """Build a list of per-user dicts holding all linked data.
+
+    Relations are filtered in Python (not the DB) so the prefetched
+    querysets above are reused instead of issuing fresh queries per user.
+    """
+    today = timezone.now().date()
+    rows = []
+
+    for u in users:
+        # ---- Assets: single-owner rows + active bulk-unit assignments ----
+        assets = []
+        for a in u.assigned_assets.all():
+            assets.append({
+                'tag': a.asset_tag,
+                'name': a.name,
+                'category': a.category.name if a.category else '—',
+                'status': a.status,
+                'kind': 'Owned',
+            })
+        for ua in u.asset_unit_assignments.all():
+            if not ua.is_active:
+                continue
+            a = ua.asset
+            assets.append({
+                'tag': a.asset_tag,
+                'name': a.name,
+                'category': a.category.name if a.category else '—',
+                'status': a.status,
+                'kind': 'Unit',
+            })
+
+        # ---- Licenses / subscriptions (active assignments only) ----
+        licenses = []
+        subscription_count = 0
+        for la in u.license_assignments.all():
+            if not la.is_active:
+                continue
+            lic = la.license
+            is_sub = lic.license_type == 'SUBSCRIPTION'
+            if is_sub:
+                subscription_count += 1
+            licenses.append({
+                'product': lic.product.name if lic.product else '—',
+                'type': lic.license_type,
+                'is_subscription': is_sub,
+                'expiry': lic.expiry_date.strftime('%Y-%m-%d') if lic.expiry_date else '',
+                'expired': bool(lic.expiry_date and lic.expiry_date < today),
+            })
+
+        # ---- Seat (first active assignment) ----
+        seat = None
+        for sa in u.seat_assignments.all():
+            if not sa.is_active or not sa.seat:
+                continue
+            s = sa.seat
+            floor = s.floor
+            office = floor.office if floor else None
+            seat = {
+                'code': s.seat_code,
+                'floor': floor.floor_name if floor else '—',
+                'office': office.name if office else '—',
+            }
+            break
+
+        # ---- Helpdesk tickets (as requester and as assignee) ----
+        submitted = list(u.submitted_tickets.all())
+        assigned = list(u.assigned_tickets.all())
+        tickets = {
+            'submitted_total': len(submitted),
+            'submitted_open': sum(1 for t in submitted if t.status in _OPEN_TICKET_STATUSES),
+            'assigned_total': len(assigned),
+            'assigned_open': sum(1 for t in assigned if t.status in _OPEN_TICKET_STATUSES),
+        }
+
+        # ---- Onboarding records (as the employee) ----
+        onboarding = [{
+            'process': r.process_type,
+            'status': r.status,
+        } for r in u.onboarding_records.all()]
+
+        # ---- Vault items ----
+        vault = {
+            'shared_with_me': u.vault_shares_received.count(),
+            'created': u.created_credentials.count(),
+        }
+
+        rows.append({
+            'id': u.id,
+            'name': u.full_name or u.email,
+            'email': u.email,
+            'role': u.role,
+            'department': u.department.name if u.department else '—',
+            'designation': u.designation or '',
+            'is_active': u.is_active,
+            'joined': u.created_at.strftime('%Y-%m-%d') if u.created_at else '',
+            'manager': u.manager.full_name if u.manager else '',
+            'team_lead': u.team_lead.full_name if u.team_lead else '',
+            'counts': {
+                'assets': len(assets),
+                'licenses': len(licenses),
+                'subscriptions': subscription_count,
+                'seat': 1 if seat else 0,
+                'tickets_open': tickets['submitted_open'] + tickets['assigned_open'],
+                'onboarding': len(onboarding),
+                'vault': vault['shared_with_me'] + vault['created'],
+            },
+            'assets': assets,
+            'licenses': licenses,
+            'seat': seat,
+            'tickets': tickets,
+            'onboarding': onboarding,
+            'vault': vault,
+        })
+
+    return rows
+
+
+class MasterUserReportView(APIView):
+    """User-wise master report: every user with all the data linked to them."""
+    permission_classes = [IsAdminOrSuperadmin]
+
+    def get(self, request):
+        rows = _master_user_rows(_master_users_queryset())
+
+        totals = {
+            'total_users': len(rows),
+            'active_users': sum(1 for r in rows if r['is_active']),
+            'users_with_assets': sum(1 for r in rows if r['counts']['assets']),
+            'users_with_subscriptions': sum(1 for r in rows if r['counts']['subscriptions']),
+            'assigned_assets': sum(r['counts']['assets'] for r in rows),
+            'active_licenses': sum(r['counts']['licenses'] for r in rows),
+            'active_subscriptions': sum(r['counts']['subscriptions'] for r in rows),
+            'seats_assigned': sum(r['counts']['seat'] for r in rows),
+        }
+
+        return Response({'totals': totals, 'users': rows})
+
+
+# ===========================================================================
 # EXPORTS
 # ===========================================================================
 class ExportHelpdeskView(APIView):
@@ -1302,3 +1467,47 @@ class ExportUsersView(APIView):
                 u.created_at.strftime('%Y-%m-%d') if u.created_at else '',
             ])
         return make_xlsx('users_export.xlsx', [('Users', headers, rows)])
+
+
+class ExportMasterUserView(APIView):
+    """Excel workbook of the master user report: a summary sheet (one row per
+    user with counts) plus detail sheets for assets, licenses and seating."""
+    permission_classes = [IsAdminOrSuperadmin]
+
+    def get(self, request):
+        rows = _master_user_rows(_master_users_queryset())
+
+        summary_headers = ['Name', 'Email', 'Role', 'Department', 'Designation', 'Status',
+                           'Assets', 'Licenses', 'Subscriptions', 'Seat', 'Open Tickets',
+                           'Onboarding', 'Vault Items']
+        summary_rows = [[
+            r['name'], r['email'], r['role'], r['department'], r['designation'],
+            'Active' if r['is_active'] else 'Inactive',
+            r['counts']['assets'], r['counts']['licenses'], r['counts']['subscriptions'],
+            'Yes' if r['counts']['seat'] else 'No', r['counts']['tickets_open'],
+            r['counts']['onboarding'], r['counts']['vault'],
+        ] for r in rows]
+
+        asset_headers = ['User', 'Email', 'Asset Tag', 'Asset Name', 'Category', 'Status', 'Held As']
+        asset_rows = [[
+            r['name'], r['email'], a['tag'], a['name'], a['category'], a['status'], a['kind'],
+        ] for r in rows for a in r['assets']]
+
+        license_headers = ['User', 'Email', 'Product', 'Type', 'Subscription', 'Expiry', 'Expired']
+        license_rows = [[
+            r['name'], r['email'], l['product'], l['type'],
+            'Yes' if l['is_subscription'] else 'No', l['expiry'],
+            'Yes' if l['expired'] else 'No',
+        ] for r in rows for l in r['licenses']]
+
+        seat_headers = ['User', 'Email', 'Seat Code', 'Floor', 'Office']
+        seat_rows = [[
+            r['name'], r['email'], r['seat']['code'], r['seat']['floor'], r['seat']['office'],
+        ] for r in rows if r['seat']]
+
+        return make_xlsx('master_user_report.xlsx', [
+            ('User Summary', summary_headers, summary_rows),
+            ('Assets', asset_headers, asset_rows),
+            ('Licenses', license_headers, license_rows),
+            ('Seating', seat_headers, seat_rows),
+        ])
