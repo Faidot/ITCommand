@@ -21,7 +21,11 @@ COPY . .
 ARG NEXT_PUBLIC_API_URL=/api
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 ENV NEXT_TELEMETRY_DISABLED=1
-RUN npm run build
+# Invoke the Next.js CLI by its real path instead of via `npm run build` /
+# the node_modules/.bin/next symlink. Some Docker storage drivers don't create
+# the .bin symlinks during `npm ci`, which makes `next` "not found" (exit 127).
+# The next package files always exist after install, so this path is reliable.
+RUN node node_modules/next/dist/bin/next build
 
 # ---- runner: minimal image that runs the standalone server ----
 FROM node:20-alpine AS runner
