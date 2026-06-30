@@ -1,15 +1,18 @@
 # ITCommand frontend — Next.js (standalone production build)
 
-# ---- deps: install node_modules (cached unless lockfile changes) ----
-FROM node:20-alpine AS deps
+# ---- builder: install dependencies AND compile in one stage ----
+# Installing and building in the same stage avoids copying node_modules across
+# stages (whose .bin symlinks can be lost on some Docker storage drivers,
+# making `next` "not found"). The `npm ci` layer is still cached on its own
+# because it runs before the source is copied in.
+FROM node:20-alpine AS builder
 WORKDIR /app
+
+# Dependencies first (cached unless the lockfile changes).
 COPY package.json package-lock.json ./
 RUN npm ci
 
-# ---- builder: compile the Next.js app ----
-FROM node:20-alpine AS builder
-WORKDIR /app
-COPY --from=deps /app/node_modules ./node_modules
+# Build the app.
 COPY . .
 # NEXT_PUBLIC_* values are baked into the browser bundle at build time.
 # Defaulting the API base to the relative "/api" keeps the image portable:
