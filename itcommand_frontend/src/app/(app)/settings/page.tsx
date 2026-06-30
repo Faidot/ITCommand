@@ -157,7 +157,7 @@ export default function SettingsPage() {
       </div>
 
       <Tabs defaultValue={initialTab} className="space-y-4">
-        <TabsList>
+        <TabsList className="flex flex-wrap h-auto justify-start gap-1">
           <TabsTrigger value="company">
             <Building className="h-4 w-4 mr-2" /> Company
           </TabsTrigger>

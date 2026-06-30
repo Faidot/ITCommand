@@ -33,6 +33,7 @@ import {
   Globe,
   BookOpen,
   Share2,
+  ClipboardList,
   ChevronsLeft,
   ChevronsRight,
   ChevronLeft,
@@ -145,6 +146,7 @@ export function AppSidebar() {
       label: "REPORTS",
       items: [
         { title: "All Reports", url: "/reports", icon: ChartBar, module: "reports" },
+        { title: "Master Report", url: "/reports/master", icon: ClipboardList, module: "reports" },
         { title: "Financial", url: "/reports/financial", icon: Wallet, module: "reports" },
         { title: "Assets", url: "/reports/assets", icon: Box, module: "reports" },
         { title: "Helpdesk", url: "/reports/helpdesk", icon: Headset, module: "reports" },
