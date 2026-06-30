@@ -5,7 +5,7 @@
 # stages (whose .bin symlinks can be lost on some Docker storage drivers,
 # making `next` "not found"). The `npm ci` layer is still cached on its own
 # because it runs before the source is copied in.
-FROM node:20-alpine AS builder
+FROM node:20-slim AS builder
 WORKDIR /app
 
 # Dependencies first (cached unless the lockfile changes).
@@ -21,14 +21,10 @@ COPY . .
 ARG NEXT_PUBLIC_API_URL=/api
 ENV NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL}
 ENV NEXT_TELEMETRY_DISABLED=1
-# Invoke the Next.js CLI by its real path instead of via `npm run build` /
-# the node_modules/.bin/next symlink. Some Docker storage drivers don't create
-# the .bin symlinks during `npm ci`, which makes `next` "not found" (exit 127).
-# The next package files always exist after install, so this path is reliable.
-RUN node node_modules/next/dist/bin/next build
+RUN npm run build
 
 # ---- runner: minimal image that runs the standalone server ----
-FROM node:20-alpine AS runner
+FROM node:20-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
