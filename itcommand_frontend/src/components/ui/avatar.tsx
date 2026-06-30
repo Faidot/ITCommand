@@ -19,11 +19,17 @@ function resolveMediaUrl(src?: string | null) {
   }
 
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api"
-  let origin = "http://localhost:8000"
-  try {
-    origin = new URL(apiUrl).origin
-  } catch {
-    // keep fallback origin
+
+  // When the API base is an absolute URL, media lives on that same origin.
+  // When it's a relative path (e.g. "/api" behind a reverse proxy), media is
+  // served from the current origin, so we leave the path origin-relative.
+  let origin = ""
+  if (/^https?:\/\//.test(apiUrl)) {
+    try {
+      origin = new URL(apiUrl).origin
+    } catch {
+      origin = "http://localhost:8000"
+    }
   }
 
   if (src.startsWith("/")) return `${origin}${src}`

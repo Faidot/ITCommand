@@ -1,0 +1,76 @@
+# ITCommand — full stack (PostgreSQL + Django/Gunicorn + Next.js + nginx).
+#
+# All configuration comes from the .env file in this directory
+# (copy .env.example to .env and edit it first).
+#
+#   docker compose up -d --build      # build & start everything
+#   docker compose logs -f            # follow logs
+#   docker compose down               # stop (data is kept in named volumes)
+#
+# Only nginx publishes a port to the host; the app is reached at
+# http://<server>:${HTTP_PORT:-80}/
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build: ./itcommand_backend
+    restart: unless-stopped
+    # Loads SECRET_KEY, DEBUG, VAULT_ENCRYPTION_KEY, ALLOWED_HOSTS, DB_NAME/USER/
+    # PASSWORD, CORS/CSRF origins, etc. straight into the container.
+    env_file: .env
+    environment:
+      # Inside the compose network the database host is the "db" service.
+      DB_HOST: db
+      DB_PORT: "5432"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - static_volume:/app/staticfiles
+      - media_volume:/app/media
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: ./itcommand_frontend
+      args:
+        # Baked into the browser bundle at build time. "/api" => same-origin.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+    restart: unless-stopped
+    depends_on:
+      - backend
+    expose:
+      - "3000"
+
+  nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      - backend
+      - frontend
+    ports:
+      - "${HTTP_PORT:-80}:80"
+    volumes:
+      - ./deploy/nginx/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - static_volume:/vol/static:ro
+      - media_volume:/vol/media:ro
+
+volumes:
+  pgdata:
+  static_volume:
+  media_volume:

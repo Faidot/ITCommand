@@ -1,0 +1,12 @@
+# Keep the build context small and deterministic.
+node_modules
+.next
+.git
+.gitignore
+# Ignore local env files so the build uses the NEXT_PUBLIC_API_URL build arg
+# (e.g. "/api") rather than a developer's localhost value.
+.env
+.env.*
+npm-debug.log*
+.DS_Store
+README.md

@@ -22,8 +22,27 @@ IT Command is an enterprise-grade full-stack IT Department Management platform. 
 - **Frontend**: Next.js 14, TypeScript, Tailwind CSS, shadcn/ui, Zustand, Recharts, React Hook Form + Zod.
 - **Backend**: Django 5, Django REST Framework, SimpleJWT, Cryptography (Fernet AES-256).
 - **Database**: PostgreSQL / SQLite (Development).
+- **Deployment**: Docker, Docker Compose, nginx, Gunicorn — see [DEPLOYMENT.md](DEPLOYMENT.md).
 
-## 📦 Setup & Installation
+## 🐳 Quick Start with Docker (recommended)
+
+The whole stack (PostgreSQL + Django/Gunicorn + Next.js + nginx) is
+containerized. From the repository root:
+
+```bash
+cp .env.example .env          # then edit .env (keys, ALLOWED_HOSTS, DB password)
+docker compose up -d --build  # build & start everything
+docker compose exec backend python manage.py createsuperuser
+```
+
+Open **http://localhost/** (admin at **/admin/**). Migrations and static-file
+collection run automatically on startup.
+
+> 📖 **Deploying to another server (e.g. Ubuntu)?** Follow the full step-by-step
+> guide in **[DEPLOYMENT.md](DEPLOYMENT.md)** — prerequisites, environment
+> variables, HTTPS, backups, and troubleshooting.
+
+## 📦 Manual Setup & Installation (without Docker)
 
 ### 1. Backend Setup (Django)
 

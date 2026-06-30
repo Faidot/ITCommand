@@ -1,5 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Produce a self-contained build (.next/standalone) for a small Docker image.
+  output: "standalone",
   eslint: {
     ignoreDuringBuilds: true,
   },

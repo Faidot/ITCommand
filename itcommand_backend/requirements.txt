@@ -8,3 +8,7 @@ python-decouple
 python-dotenv
 Pillow
 django-simple-history>=3.5.0
+# Production server & deployment
+gunicorn>=21.2.0
+psycopg2-binary>=2.9.9
+whitenoise>=6.6.0

@@ -23,7 +23,19 @@ SECRET_KEY = config('SECRET_KEY', default='django-insecure-change-me-in-producti
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = config('DEBUG', default=True, cast=bool)
 
-ALLOWED_HOSTS = ['localhost', '127.0.0.1','192.168.62.83']
+
+def _csv(value):
+    """Parse a comma-separated env value into a clean list of strings."""
+    return [item.strip() for item in str(value).split(',') if item.strip()]
+
+
+# Hosts/domains this site can serve. In production set ALLOWED_HOSTS in the
+# environment to your server's domain and/or IP (comma-separated).
+ALLOWED_HOSTS = config(
+    'ALLOWED_HOSTS',
+    default='localhost,127.0.0.1',
+    cast=_csv,
+)
 
 
 # Application definition
@@ -47,6 +59,9 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    # WhiteNoise serves collected static files (e.g. the Django admin) directly
+    # from the app, so it works even without a separate static file server.
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -136,11 +151,17 @@ USE_TZ = True
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
-STATIC_URL = 'static/'
+STATIC_URL = '/static/'
+# `collectstatic` gathers everything here; nginx (and/or WhiteNoise) serves it.
+STATIC_ROOT = BASE_DIR / 'staticfiles'
 
-# Media files
-MEDIA_URL = 'media/'
+# Media files (user uploads — avatars, bills, etc.)
+MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
+
+# Behind a TLS-terminating reverse proxy (e.g. nginx), trust the forwarded
+# protocol header so Django knows the original request was HTTPS.
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
@@ -167,12 +188,20 @@ SIMPLE_JWT = {
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
 
-# CORS
-CORS_ALLOWED_ORIGINS = [
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'http://192.168.62.83:3000',
-]
+# CORS — origins (scheme://host[:port]) allowed to call the API from a browser.
+# When the frontend is served from the same origin as the API (the default
+# Docker/nginx setup), CORS is effectively a no-op, but it's kept env-driven so
+# the frontend can also run on a separate origin during development.
+CORS_ALLOWED_ORIGINS = config(
+    'CORS_ALLOWED_ORIGINS',
+    default='http://localhost:3000,http://localhost:3001',
+    cast=_csv,
+)
+
+# Trusted origins for CSRF (needed for the Django admin when DEBUG=False and
+# served over a domain). Set CSRF_TRUSTED_ORIGINS in the environment, e.g.
+# "https://itcommand.example.com".
+CSRF_TRUSTED_ORIGINS = config('CSRF_TRUSTED_ORIGINS', default='', cast=_csv)
 
 from corsheaders.defaults import default_headers
 CORS_ALLOW_HEADERS = list(default_headers) + [
