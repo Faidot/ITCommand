@@ -28,6 +28,7 @@ class NotificationSerializer(serializers.ModelSerializer):
             'id', 'user', 'message', 'notification_type',
             'is_read', 'link', 'created_at',
         ]
+        read_only_fields = ['id', 'user', 'created_at']
 
 
 class LocationSerializer(serializers.ModelSerializer):

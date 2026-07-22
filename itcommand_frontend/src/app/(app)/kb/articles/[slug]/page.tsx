@@ -1,8 +1,9 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { ArrowLeft, Eye, Clock, Edit, ThumbsUp, ThumbsDown, History, FileText, ChevronRight } from "lucide-react";
 import api from "@/lib/api";
+import { sanitizeStoredHtml } from "@/lib/sanitize-html";
 import { toast } from "sonner";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -27,6 +28,10 @@ export default function KBArticleDetailPage() {
   const [related, setRelated] = useState<any[]>([]);
 
   const canEdit = user?.role && ['MANAGER', 'ADMIN', 'SUPERADMIN'].includes(user.role);
+  const sanitizedContent = useMemo(
+    () => sanitizeStoredHtml(article?.content || ""),
+    [article?.content],
+  );
 
   useEffect(() => {
     setLoading(true);
@@ -76,7 +81,7 @@ export default function KBArticleDetailPage() {
   };
 
   if (loading) return <div className="p-10 text-center">Loading article...</div>;
-  if (!article) return <div className="p-10 text-center text-red-500">Article not found or you don't have permission to view it.</div>;
+  if (!article) return <div className="p-10 text-center text-red-500">Article not found or you don&apos;t have permission to view it.</div>;
 
   return (
     <div className="flex flex-col w-full max-w-4xl mx-auto p-4 pb-20">
@@ -116,7 +121,7 @@ export default function KBArticleDetailPage() {
       {/* Content Rendered */}
       <div className="prose prose-violet dark:prose-invert max-w-none mb-12 min-h-[300px]">
         {article.content ? (
-          <div dangerouslySetInnerHTML={{ __html: article.content }} />
+          <div dangerouslySetInnerHTML={{ __html: sanitizedContent }} />
         ) : (
           <p className="text-neutral-500 italic">No content available.</p>
         )}

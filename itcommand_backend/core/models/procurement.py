@@ -1,6 +1,7 @@
 from django.db import models
 from django.conf import settings
 from django.utils import timezone
+import uuid
 from .users import Department
 from .vendors import Vendor
 from .finance import BudgetCategory
@@ -98,20 +99,15 @@ class PurchaseRequest(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
-        if not self.pr_number:
-            year = timezone.now().year
-            last_pr = PurchaseRequest.objects.filter(
-                pr_number__startswith=f'PR-{year}-'
-            ).order_by('-id').first()
-            if last_pr:
-                try:
-                    last_num = int(last_pr.pr_number.split('-')[2])
-                    self.pr_number = f"PR-{year}-{last_num + 1:03d}"
-                except (ValueError, IndexError):
-                    self.pr_number = f"PR-{year}-{PurchaseRequest.objects.count() + 1:03d}"
-            else:
-                self.pr_number = f"PR-{year}-001"
+        generate_number = self.pk is None and not self.pr_number
+        if generate_number:
+            self.pr_number = f"TMP-{uuid.uuid4().hex[:16]}"
         super().save(*args, **kwargs)
+        if generate_number:
+            self.pr_number = f"PR-{timezone.now().year}-{self.pk:03d}"
+            PurchaseRequest.objects.filter(pk=self.pk).update(
+                pr_number=self.pr_number
+            )
 
     def recalculate_total(self):
         """Recalculate estimated and actual costs from items."""

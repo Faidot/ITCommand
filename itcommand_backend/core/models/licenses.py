@@ -136,6 +136,13 @@ class LicenseAssignment(models.Model):
 
     class Meta:
         ordering = ['-assigned_date']
+        constraints = [
+            models.UniqueConstraint(
+                fields=['license', 'user'],
+                condition=models.Q(is_active=True),
+                name='unique_active_license_assignment',
+            ),
+        ]
 
     def __str__(self):
         return f"{self.user.full_name} → {self.license.product.name} ({'Active' if self.is_active else 'Revoked'})"

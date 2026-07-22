@@ -50,7 +50,7 @@ export default function AuditLogPage() {
         <Alert variant="destructive">
           <ShieldAlert className="h-4 w-4" />
           <AlertTitle>Access Denied</AlertTitle>
-          <AlertDescription>You don't have permission to view audit logs.</AlertDescription>
+          <AlertDescription>You don&apos;t have permission to view audit logs.</AlertDescription>
         </Alert>
       </div>
     );

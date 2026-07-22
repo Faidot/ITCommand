@@ -18,6 +18,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { RowActions } from "@/components/finance/row-actions";
 import { DetailDialog } from "@/components/finance/detail-dialog";
 import { SourceSelect } from "@/components/finance/source-select";
+import { useMoney, useCurrencyCode } from "@/lib/currency";
 
 type Entry = { title: string; amount: string; category: string };
 const emptyShared = { source: "", income_date: "", financial_year: "", payment_method: "BANK_TRANSFER" };
@@ -32,6 +33,8 @@ function downloadBlob(data: BlobPart, filename: string) {
 }
 
 export default function IncomePage() {
+  const money = useMoney();
+  const currencyCode = useCurrencyCode();
   const { user } = useAuthStore();
   const canModify = user?.role !== "VIEWER";
 
@@ -144,7 +147,12 @@ export default function IncomePage() {
 
   const deleteOne = async (id: number) => { if (!confirm("Delete this income entry?")) return; try { await api.delete(`/finance/income/${id}/`); toast.success("Deleted"); fetchData(); } catch { toast.error("Delete failed"); } };
   const deleteSelected = async () => { if (!confirm(`Delete ${selected.size} selected?`)) return; try { await Promise.all(Array.from(selected).map((id) => api.delete(`/finance/income/${id}/`))); toast.success("Deleted selected"); fetchData(); } catch { toast.error("Bulk delete failed"); } };
-  const toggle = (id: number) => { const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n); };
+  const toggle = (id: number) => {
+    const n = new Set(selected);
+    if (n.has(id)) n.delete(id);
+    else n.add(id);
+    setSelected(n);
+  };
   const toggleAll = () => setSelected(selected.size === filtered.length ? new Set() : new Set(filtered.map((i) => i.id)));
 
   const exportData = async (fmt: "csv" | "xlsx") => {
@@ -200,8 +208,8 @@ export default function IncomePage() {
         {/* Entries tab */}
         <TabsContent value="entries" className="space-y-4">
           <div className="grid grid-cols-3 gap-4">
-            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Total (filtered)</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold text-emerald-600">${total.toFixed(2)}</div></CardContent></Card>
-            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">This Month</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold">${thisMonth.toFixed(2)}</div></CardContent></Card>
+            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Total (filtered)</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold text-emerald-600">{money(total)}</div></CardContent></Card>
+            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">This Month</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold">{money(thisMonth)}</div></CardContent></Card>
             <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Entries</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold">{filtered.length}</div></CardContent></Card>
           </div>
 
@@ -266,7 +274,7 @@ export default function IncomePage() {
                     <TableCell>{r.source_name || "—"}</TableCell>
                     <TableCell><Badge variant="outline">{r.frequency}</Badge></TableCell>
                     <TableCell>{r.next_date}</TableCell>
-                    <TableCell className="text-right font-bold">${r.amount}</TableCell>
+                    <TableCell className="text-right font-bold">{money(r.amount)}</TableCell>
                     <TableCell><div className="flex items-center justify-end gap-1">
                       {canModify && <Button size="sm" variant="secondary" onClick={() => receiveRec(r)} title="Mark received"><CheckCircle2 className="w-4 h-4" /></Button>}
                       <RowActions canModify={canModify} onEdit={() => openRec(r)} onDelete={() => deleteRec(r.id)} />
@@ -362,7 +370,7 @@ export default function IncomePage() {
       {viewing && (
         <DetailDialog open={!!viewing} onOpenChange={(o) => !o && setViewing(null)} title={viewing.title} subtitle={viewing.source_name}
           fields={[
-            { label: "Amount", value: `$${viewing.amount}` }, { label: "Date", value: viewing.income_date },
+            { label: "Amount", value: money(viewing.amount) }, { label: "Date", value: viewing.income_date },
             { label: "Source", value: viewing.source_name }, { label: "Category", value: viewing.category_name },
             { label: "Method", value: viewing.payment_method }, { label: "Financial Year", value: viewing.financial_year_name },
             { label: "Receipt", value: viewing.bill_document_url ? <a href={viewing.bill_document_url} target="_blank" rel="noopener noreferrer" className="text-blue-500">Open</a> : viewing.reference },

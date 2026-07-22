@@ -7,6 +7,7 @@ from rest_framework import viewsets, permissions, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import action
+from rest_framework.throttling import ScopedRateThrottle
 from django.db.models import Q
 from django.utils import timezone
 
@@ -26,6 +27,7 @@ from core import vault_crypto
 from core.mixins import AuditLogMixin
 from core.permissions import (
     IsSuperadmin, VaultAccessPermission, VaultUnlockedPermission,
+    HasModulePermission, has_role_permission,
 )
 
 User = get_user_model()
@@ -74,7 +76,9 @@ class VaultMasterStatusView(APIView):
         session = None
         if token:
             session = VaultUnlockSession.objects.filter(
-                token=token, user=request.user, revoked=False
+                token=VaultUnlockSession.digest_token(token),
+                user=request.user,
+                revoked=False,
             ).first()
             if session and not session.is_valid():
                 session = None
@@ -147,6 +151,8 @@ class VaultMasterSetView(APIView):
 class VaultUnlockView(APIView):
     """POST — any vault user. Verifies master password, returns a session token."""
     permission_classes = [VaultAccessPermission]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'vault_unlock'
 
     def post(self, request):
         password = request.data.get('master_password') or ''
@@ -181,7 +187,10 @@ class VaultLockView(APIView):
     def post(self, request):
         token = request.headers.get('X-Vault-Token')
         if token:
-            VaultUnlockSession.objects.filter(token=token, user=request.user).update(revoked=True)
+            VaultUnlockSession.objects.filter(
+                token=VaultUnlockSession.digest_token(token),
+                user=request.user,
+            ).update(revoked=True)
         return Response({'detail': 'Vault locked.'})
 
 
@@ -380,7 +389,15 @@ class VaultPersonalResetView(APIView):
 class VaultCredentialViewSet(AuditLogMixin, viewsets.ModelViewSet):
     queryset = VaultCredential.objects.all().select_related('workspace').prefetch_related('shares__recipient').order_by('-is_favorite', '-created_at')
     serializer_class = VaultCredentialSerializer
-    permission_classes = [VaultUnlockedPermission]
+    permission_classes = [VaultUnlockedPermission, HasModulePermission]
+    rbac_module = 'vault'
+    rbac_action_permissions = {'duplicate': 'add'}
+
+    def get_throttles(self):
+        if self.action in {'reveal', 'reveal_extras', 'reveal_shared'}:
+            self.throttle_scope = 'vault_reveal'
+            return [ScopedRateThrottle()]
+        return super().get_throttles()
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -436,8 +453,11 @@ class VaultCredentialViewSet(AuditLogMixin, viewsets.ModelViewSet):
         """Users eligible to receive a private share: vault users (Manager+),
         excluding the requester, with a flag for whether they have set up their
         personal key yet (a prerequisite for E2E sharing)."""
-        users = (User.objects.filter(role__in=['MANAGER', 'ADMIN', 'SUPERADMIN'])
-                 .exclude(id=request.user.id).order_by('full_name'))
+        users = [
+            user for user in User.objects.filter(is_active=True)
+            .exclude(id=request.user.id).order_by('full_name')
+            if has_role_permission(user, 'vault', 'view')
+        ]
         have_keys = set(VaultUserKey.objects.values_list('user_id', flat=True))
         return Response([
             {'id': u.id, 'name': u.full_name, 'role': u.role,
@@ -647,7 +667,9 @@ class VaultCredentialViewSet(AuditLogMixin, viewsets.ModelViewSet):
         if not isinstance(ids, list) or not ids:
             return Response({'detail': 'ids[] is required.'}, status=status.HTTP_400_BAD_REQUEST)
 
-        qs = VaultCredential.objects.filter(id__in=ids)
+        # Reuse the viewset's visibility scope so guessed private credential IDs
+        # cannot be mutated or deleted by another vault user.
+        qs = self.get_queryset().filter(id__in=ids)
         n = qs.count()
         if n == 0:
             return Response({'detail': 'No matching credentials.'}, status=status.HTTP_404_NOT_FOUND)
@@ -739,7 +761,7 @@ class VaultCredentialViewSet(AuditLogMixin, viewsets.ModelViewSet):
             h = host_of(c.url)
             if not h:
                 continue
-            if h == target or target.endswith('.' + h) or h.endswith('.' + target):
+            if h == target:
                 out.append({
                     'id': c.id, 'title': c.title, 'username': c.username,
                     'url': c.url, 'category': c.category, 'host': h,
@@ -750,7 +772,7 @@ class VaultCredentialViewSet(AuditLogMixin, viewsets.ModelViewSet):
     def tags(self, request):
         """Return all distinct tags currently in use."""
         seen = set()
-        for c in VaultCredential.objects.all().values_list('tags', flat=True):
+        for c in self.get_queryset().values_list('tags', flat=True):
             for t in (c or []):
                 if t:
                     seen.add(t)
@@ -760,7 +782,8 @@ class VaultCredentialViewSet(AuditLogMixin, viewsets.ModelViewSet):
 class AccountWorkspaceViewSet(AuditLogMixin, viewsets.ModelViewSet):
     queryset = AccountWorkspace.objects.all().order_by('-created_at')
     serializer_class = AccountWorkspaceSerializer
-    permission_classes = [VaultUnlockedPermission]
+    permission_classes = [VaultUnlockedPermission, HasModulePermission]
+    rbac_module = 'vault'
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -803,8 +826,12 @@ class AccountWorkspaceViewSet(AuditLogMixin, viewsets.ModelViewSet):
     def credentials(self, request, pk=None):
         """List credentials linked to this workspace."""
         ws = self.get_object()
-        qs = ws.credentials.all().order_by('-is_favorite', '-created_at')
-        return Response(VaultCredentialSerializer(qs, many=True).data)
+        qs = ws.credentials.filter(
+            Q(visibility='ORG') | Q(created_by=request.user)
+        ).order_by('-is_favorite', '-created_at')
+        return Response(VaultCredentialSerializer(
+            qs, many=True, context={'request': request}
+        ).data)
 
     @action(detail=False, methods=['get'])
     def stats(self, request):

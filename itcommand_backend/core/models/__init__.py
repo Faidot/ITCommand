@@ -12,3 +12,7 @@ from .vendors import *
 from .procurement import *
 from .network import *
 from .kb import *
+from .integrations import *
+from .payments import *
+from .discovery import *
+from .subscriptions import *

@@ -10,10 +10,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { useMoney } from "@/lib/currency";
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
 
 export default function AssetReportsPage() {
+  const money = useMoney();
   const [data, setData] = useState<any>(null);
 
   const fetchData = async () => {
@@ -61,7 +63,7 @@ export default function AssetReportsPage() {
         </Card>
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Total Value</CardTitle></CardHeader>
-          <CardContent><div className="text-2xl font-bold">${data.total_value.toFixed(2)}</div></CardContent>
+          <CardContent><div className="text-2xl font-bold">{money(data.total_value)}</div></CardContent>
         </Card>
         <Card>
           <CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Assigned (%)</CardTitle></CardHeader>
@@ -100,7 +102,7 @@ export default function AssetReportsPage() {
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} />
                 <XAxis type="number" />
                 <YAxis dataKey="category" type="category" width={100} />
-                <RechartsTooltip formatter={(value) => `$${value}`} />
+                <RechartsTooltip formatter={(value) => money(Number(value))} />
                 <Bar dataKey="value" fill="#8b5cf6" radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>

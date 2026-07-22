@@ -9,6 +9,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
+import { useMoney, useCurrencyCode } from "@/lib/currency";
 
 const LICENSE_TYPE_BADGE: Record<string, string> = {
   PERPETUAL: "bg-blue-100 text-blue-800",
@@ -20,6 +21,8 @@ const LICENSE_TYPE_BADGE: Record<string, string> = {
 };
 
 export default function LicenseDashboardPage() {
+  const money = useMoney();
+  const currencyCode = useCurrencyCode();
   const router = useRouter();
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -114,11 +117,11 @@ export default function LicenseDashboardPage() {
         </Card>
         <Card className="border-l-4 border-l-emerald-500">
           <CardHeader className="pb-2">
-            <CardTitle className="text-xs font-medium text-neutral-500 uppercase tracking-wider">Annual Cost (PKR)</CardTitle>
+            <CardTitle className="text-xs font-medium text-neutral-500 uppercase tracking-wider">Annual Cost ({currencyCode})</CardTitle>
           </CardHeader>
           <CardContent>
             <div className="text-3xl font-bold text-emerald-600 dark:text-emerald-400">
-              Rs {data.total_annual_cost.toLocaleString()}
+              {money(data.total_annual_cost, { decimals: 0 })}
             </div>
           </CardContent>
         </Card>

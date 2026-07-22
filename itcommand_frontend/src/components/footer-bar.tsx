@@ -17,7 +17,7 @@ export function FooterBar() {
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <Link href="/helpdesk/tickets/new">
+        <Link href="/helpdesk/tickets?new=1">
           <Button variant="ghost" size="sm" className="h-8 text-xs gap-2 text-muted-foreground hover:text-primary hover:bg-primary/5 rounded-xl transition-all">
             <PlusCircle className="h-4 w-4" />
             New Ticket

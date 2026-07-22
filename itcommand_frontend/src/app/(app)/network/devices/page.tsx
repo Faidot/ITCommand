@@ -54,7 +54,12 @@ export default function NetworkDevicesPage() {
     finally { setLoading(false); }
   };
 
-  const toggle = (id: number) => setSelected(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggle = (id: number) => setSelected(s => {
+    const n = new Set(s);
+    if (n.has(id)) n.delete(id);
+    else n.add(id);
+    return n;
+  });
   const toggleAll = () => setSelected(s => s.size === devices.length ? new Set() : new Set(devices.map(d => d.id)));
 
   const applyBulk = async () => {

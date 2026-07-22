@@ -17,9 +17,9 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useMoney } from "@/lib/currency";
 
 const COLORS = ["#6366f1", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16"];
-const money = (v: any) => `$${Number(v || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
 const ACT_COLOR: Record<string, string> = {
   EXPENSE: "text-red-500", ASSET: "text-blue-500", TICKET: "text-sky-500", PROCUREMENT: "text-indigo-500",
@@ -68,6 +68,7 @@ function ModuleCard({ icon: Icon, title, href, color, stats }: any) {
 }
 
 export default function DashboardPage() {
+  const money = useMoney();
   const [data, setData] = useState<any>(null);
 
   useEffect(() => {

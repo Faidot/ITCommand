@@ -1,5 +1,6 @@
 import json
 
+from django.db.models import Q
 from .users import UserSerializer
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
@@ -128,7 +129,15 @@ class AccountWorkspaceSerializer(serializers.ModelSerializer):
         read_only_fields = ['created_by', 'last_renewed_at']
 
     def get_credential_count(self, obj):
-        return obj.credentials.count()
+        request = self.context.get('request')
+        qs = obj.credentials.all()
+        if request and request.user.is_authenticated:
+            qs = qs.filter(Q(visibility='ORG') | Q(created_by=request.user))
+        else:
+            # Serializers without request context must not expose private-row
+            # counts belonging to an unknown caller.
+            qs = qs.filter(visibility='ORG')
+        return qs.count()
 
     def get_annual_cost(self, obj):
         return obj.annual_cost

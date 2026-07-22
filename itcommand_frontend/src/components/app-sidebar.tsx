@@ -12,6 +12,7 @@ import {
   Shield,
   Wallet,
   ReceiptText,
+  CreditCard,
   ArrowDownCircle,
   ArrowUpCircle,
   ChartBar,
@@ -30,6 +31,7 @@ import {
   ShoppingCart,
   Network,
   HardDrive,
+  Radar,
   Globe,
   BookOpen,
   Share2,
@@ -93,6 +95,7 @@ export function AppSidebar() {
         { title: "Asset Inventory", url: "/assets", icon: Box, module: "assets" },
         { title: "Asset Notes", url: "/asset-notes", icon: FileText, module: "assets" },
         { title: "Software Licenses", url: "/licenses", icon: KeyRound, module: "licenses" },
+        { title: "Subscriptions", url: "/subscriptions", icon: CreditCard, module: "subscriptions" },
       ],
     },
     {
@@ -107,6 +110,7 @@ export function AppSidebar() {
       items: [
         { title: "Overview", url: "/network", icon: Network, module: "network" },
         { title: "Devices", url: "/network/devices", icon: HardDrive, module: "network" },
+        { title: "Discovery", url: "/network/discovery", icon: Radar, module: "network" },
         { title: "Topology", url: "/network/topology", icon: Share2, module: "network" },
         { title: "IP Manager", url: "/network/ip-manager", icon: Globe, module: "network" },
         { title: "Rack View", url: "/network/rack-view", icon: Server, module: "network" },

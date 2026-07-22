@@ -52,7 +52,7 @@ export function ExtensionInstallPrompt() {
             <div className="min-w-0 flex-1">
               <div className="font-semibold text-sm">Install the IT Command extension</div>
               <p className="text-xs text-muted-foreground mt-0.5">
-                Auto-fill your vault passwords on any site, right from the browser.
+                Fill vault logins, check network devices, and report issues from the browser.
               </p>
             </div>
             <button
@@ -78,7 +78,7 @@ export function ExtensionInstallPrompt() {
             <DialogTitle className="flex items-center gap-2">
               <Puzzle className="w-5 h-5 text-emerald-600" /> Add IT Command to your browser
             </DialogTitle>
-            <DialogDescription>Password auto-fill from your vault. More modules coming.</DialogDescription>
+            <DialogDescription>Vault login fill, network lookup, status updates, and helpdesk reporting.</DialogDescription>
           </DialogHeader>
           <ExtensionInstallGuide />
         </DialogContent>

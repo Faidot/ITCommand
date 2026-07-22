@@ -7,7 +7,9 @@ from django.utils import timezone
 from datetime import timedelta
 
 from core.models.kb import KBCategory, KBArticle, KBTag, KBFeedback
-from core.permissions import ReadOnlyViewerOrHigher, HasModulePermission
+from core.permissions import (
+    ReadOnlyViewerOrHigher, HasModulePermission, has_role_permission,
+)
 from core.serializers.kb import (
     KBCategorySerializer, KBArticleListSerializer,
     KBArticleDetailSerializer, KBTagSerializer, KBFeedbackSerializer
@@ -15,19 +17,19 @@ from core.serializers.kb import (
 
 
 def visible_to(user, qs):
-    """Restrict an article queryset to what `user`'s role is allowed to see.
-
-    VIEWER → All-Staff only. MANAGER → All-Staff + IT-Only. ADMIN/SUPERADMIN →
-    everything. Applied everywhere articles surface (list, dashboard, suggest,
-    related) so titles/excerpts never leak above a user's clearance.
-    """
+    """Apply article clearance using role JSON permissions, failing closed."""
     role = getattr(user, 'role', None)
-    if role == 'VIEWER':
-        return qs.filter(visibility='ALL_STAFF')
-    if role == 'MANAGER':
+    if role in ('ADMIN', 'SUPERADMIN'):
+        return qs
+    if (
+        has_role_permission(user, 'kb', 'add')
+        or has_role_permission(user, 'kb', 'edit')
+        or has_role_permission(user, 'kb', 'delete')
+    ):
         return qs.filter(visibility__in=['ALL_STAFF', 'IT_ONLY'])
-    # ADMIN / SUPERADMIN see all
-    return qs
+    if has_role_permission(user, 'kb', 'view'):
+        return qs.filter(visibility='ALL_STAFF')
+    return qs.none()
 
 
 class KBCategoryViewSet(viewsets.ModelViewSet):
@@ -52,6 +54,7 @@ class KBTagViewSet(viewsets.ModelViewSet):
 
 
 class KBArticleViewSet(viewsets.ModelViewSet):
+    rbac_action_permissions = {'feedback': {'POST': 'view'}}
     queryset = KBArticle.objects.all()
     lookup_field = 'slug'
     permission_classes = [HasModulePermission]
@@ -73,6 +76,17 @@ class KBArticleViewSet(viewsets.ModelViewSet):
 
     def get_queryset(self):
         qs = visible_to(self.request.user, super().get_queryset())
+
+        can_add = has_role_permission(self.request.user, 'kb', 'add')
+        can_edit = (
+            has_role_permission(self.request.user, 'kb', 'edit')
+            or has_role_permission(self.request.user, 'kb', 'delete')
+        )
+        if not can_edit:
+            if can_add:
+                qs = qs.filter(Q(status='PUBLISHED') | Q(author=self.request.user))
+            else:
+                qs = qs.filter(status='PUBLISHED')
 
         # Filters
         cat = self.request.query_params.get('category')
@@ -192,7 +206,8 @@ class KBArticleViewSet(viewsets.ModelViewSet):
 
 
 class KBDashboardView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'kb'
 
     def get(self, request):
         now = timezone.now()
@@ -224,7 +239,8 @@ class KBDashboardView(APIView):
 
 
 class KBSuggestView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'kb'
 
     def get(self, request):
         cat_id = request.query_params.get('ticket_category_id')

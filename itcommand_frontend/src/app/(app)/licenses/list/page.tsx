@@ -49,6 +49,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useAuthStore } from "@/store/authStore";
 import { useBulkSelection, summarizeBulkDelete } from "@/hooks/use-bulk-selection";
 import { AddLicenseDialog } from "../add-license-dialog";
+import { useMoney, useCurrencyCode } from "@/lib/currency";
 
 const LICENSE_TYPE_BADGE: Record<string, string> = {
   PERPETUAL: "bg-blue-100 text-blue-800",
@@ -76,6 +77,7 @@ interface License {
 }
 
 export default function LicenseListPage() {
+  const money = useMoney();
   const router = useRouter();
   const { user } = useAuthStore();
   const isAdmin = user?.role === "ADMIN" || user?.role === "SUPERADMIN";
@@ -381,7 +383,7 @@ export default function LicenseListPage() {
                       </div>
                     </TableCell>
                     <TableCell>
-                      <div className="text-sm font-medium">Rs {lic.annual_cost.toLocaleString()}</div>
+                      <div className="text-sm font-medium">{money(lic.annual_cost, { decimals: 0 })}</div>
                       <div className="text-[10px] text-neutral-500">{lic.billing_cycle ? lic.billing_cycle.replace("_", " ") : "N/A"}</div>
                     </TableCell>
                     <TableCell>

@@ -77,6 +77,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Plug, CalendarDays, Copy } from "lucide-react";
+import { useSettingsStore } from "@/store/settingsStore";
 import { Textarea } from "@/components/ui/textarea";
 import { FloorManagerPanel } from "@/components/seating/floor-manager";
 import { NetworkSettingsTab } from "@/components/network/network-settings";
@@ -191,12 +193,20 @@ export default function SettingsPage() {
           <TabsTrigger value="vault">
             <ShieldCheck className="h-4 w-4 mr-2" /> Vault Security
           </TabsTrigger>
+          <TabsTrigger value="calendar">
+            <CalendarDays className="h-4 w-4 mr-2" /> Calendar
+          </TabsTrigger>
+          <TabsTrigger value="integrations">
+            <Plug className="h-4 w-4 mr-2" /> Integrations
+          </TabsTrigger>
           <TabsTrigger value="extension">
             <Puzzle className="h-4 w-4 mr-2" /> Browser Extension
           </TabsTrigger>
         </TabsList>
 
         <TabsContent value="company"><CompanyTab role={user?.role} /></TabsContent>
+        <TabsContent value="calendar"><CalendarTab /></TabsContent>
+        <TabsContent value="integrations"><IntegrationsTab role={user?.role} /></TabsContent>
         <TabsContent value="categories"><CategoriesTab /></TabsContent>
         <TabsContent value="locations"><LocationsTab /></TabsContent>
         <TabsContent value="vendors"><VendorsTab /></TabsContent>
@@ -232,15 +242,15 @@ function BrowserExtensionTab() {
             <Puzzle className="w-5 h-5 text-emerald-600" /> IT Command Browser Extension
           </CardTitle>
           <CardDescription>
-            Auto-fills your vault passwords on matching sites. Sign in and unlock the vault from the
-            extension, then it offers credentials whose saved URL matches the page. Passwords only for
-            now — more modules will use this same extension later.
+            Fill matching vault credentials without auto-submitting, look up the current site in Network
+            inventory, update a matched device&apos;s status, and create helpdesk tickets from the browser.
+            Sign in and unlock the vault inside the extension before using saved credentials.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
           <div className="grid sm:grid-cols-2 gap-3 max-w-md">
             <StatBlock label="Status on this browser" value={statusBlock.label} tone={statusBlock.tone} />
-            <StatBlock label="Auto-fill" value="Single match, no auto-submit" />
+            <StatBlock label="Credential safety" value="Single match, no auto-submit" />
           </div>
 
           {state === "installed" ? (
@@ -248,7 +258,7 @@ function BrowserExtensionTab() {
               <ShieldCheck className="h-4 w-4" />
               <AlertTitle>You&apos;re all set</AlertTitle>
               <AlertDescription>
-                The extension is active in this browser. Open it from the toolbar to sign in and unlock the vault.
+                The extension is active. Open it from the toolbar to sign in, unlock the vault, or inspect the current site&apos;s network device.
               </AlertDescription>
             </Alert>
           ) : (
@@ -861,6 +871,22 @@ const companySchema = z.object({
 });
 
 function CompanyTab({ role }: { role?: string }) {
+  const applySettings = useSettingsStore((state) => state.apply);
+  // Currencies come from the admin-managed list of values, so a superadmin can
+  // add one in Django admin without a code change.
+  const [currencies, setCurrencies] = useState<{ value: string; label: string }[]>([]);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await api.get("/lov/?group=currency");
+        const values = Array.isArray(res.data?.values) ? res.data.values : [];
+        if (values.length) setCurrencies(values);
+      } catch {
+        setCurrencies([{ value: "USD", label: "US Dollar" }]);
+      }
+    })();
+  }, []);
   const [loading, setLoading] = useState(true);
 
   const form = useForm<z.infer<typeof companySchema>>({
@@ -897,6 +923,13 @@ function CompanyTab({ role }: { role?: string }) {
   const onSubmit = async (values: z.infer<typeof companySchema>) => {
     try {
       await api.put("/settings/", values);
+      // Push into the global store so currency/company updates everywhere
+      // immediately, without a page refresh.
+      applySettings({
+        company_name: values.company_name,
+        default_currency: values.default_currency,
+        fiscal_year_start_month: Number(values.fiscal_year_start_month),
+      });
       toast.success("Settings saved");
     } catch {
       toast.error("Failed to save settings");
@@ -928,13 +961,11 @@ function CompanyTab({ role }: { role?: string }) {
                   <Select onValueChange={field.onChange} value={field.value}>
                     <FormControl><SelectTrigger><SelectValue /></SelectTrigger></FormControl>
                     <SelectContent>
-                      <SelectItem value="USD">USD ($)</SelectItem>
-                      <SelectItem value="EUR">EUR (€)</SelectItem>
-                      <SelectItem value="GBP">GBP (£)</SelectItem>
-                      <SelectItem value="INR">INR (₹)</SelectItem>
-                      <SelectItem value="AED">AED (د.إ)</SelectItem>
-                      <SelectItem value="CAD">CAD ($)</SelectItem>
-                      <SelectItem value="AUD">AUD ($)</SelectItem>
+                      {currencies.map((c) => (
+                        <SelectItem key={c.value} value={c.value}>
+                          {c.value} — {c.label}
+                        </SelectItem>
+                      ))}
                     </SelectContent>
                   </Select>
                 </FormItem>
@@ -1735,6 +1766,346 @@ function OfficesTab({ role }: { role?: string }) {
       </CardHeader>
       <CardContent>
         <FloorManagerPanel editable={editable} />
+      </CardContent>
+    </Card>
+  );
+}
+
+
+interface IntegrationRow {
+  provider: string;
+  label: string;
+  description: string;
+  help: string;
+  needs_api_key: boolean;
+  credential_label: string;
+  default_base_url: string;
+  is_enabled: boolean;
+  base_url: string;
+  has_api_key: boolean;
+  last_status: string;
+  last_message: string;
+  last_sync_at: string | null;
+}
+
+function IntegrationsTab({ role }: { role?: string }) {
+  const [rows, setRows] = useState<IntegrationRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [drafts, setDrafts] = useState<Record<string, { api_key: string; base_url: string }>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const load = async () => {
+    try {
+      const res = await api.get("/integrations/");
+      setRows(res.data?.integrations || []);
+    } catch {
+      toast.error("Could not load integrations");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  if (role !== "SUPERADMIN") {
+    return (
+      <Card>
+        <CardContent className="py-6 text-sm text-muted-foreground">
+          Only a superadmin can configure integrations.
+        </CardContent>
+      </Card>
+    );
+  }
+  if (loading) {
+    return <Card><CardContent className="py-6 text-sm text-muted-foreground">Loading…</CardContent></Card>;
+  }
+
+  const save = async (row: IntegrationRow, changes: Record<string, unknown>) => {
+    setBusy(row.provider);
+    try {
+      await api.put("/integrations/", { provider: row.provider, ...changes });
+      toast.success(`${row.label} updated`);
+      setDrafts((d) => ({ ...d, [row.provider]: { api_key: "", base_url: "" } }));
+      await load();
+    } catch (err) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      toast.error(detail || "Could not save the integration");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const runNow = async (row: IntegrationRow) => {
+    setBusy(row.provider);
+    try {
+      const res = await api.post("/integrations/test/", { provider: row.provider });
+      if (res.data?.ok) toast.success(res.data.output || "Completed");
+      else toast.error(res.data?.output || "The provider returned an error");
+      await load();
+    } catch {
+      toast.error("Could not run the integration");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      {rows.map((row) => {
+        const draft = drafts[row.provider] || { api_key: "", base_url: "" };
+        return (
+          <Card key={row.provider}>
+            <CardHeader>
+              <CardTitle className="flex flex-wrap items-center gap-2 text-base">
+                {row.label}
+                {row.is_enabled ? (
+                  <Badge variant="outline" className="border-emerald-300 text-emerald-700">Enabled</Badge>
+                ) : (
+                  <Badge variant="outline">Disabled</Badge>
+                )}
+                {row.last_status === "OK" && <Badge variant="outline">Last run OK</Badge>}
+                {row.last_status === "ERROR" && (
+                  <Badge variant="outline" className="border-red-300 text-red-700">Last run failed</Badge>
+                )}
+              </CardTitle>
+              <p className="text-sm text-muted-foreground">{row.description}</p>
+            </CardHeader>
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="space-y-1.5">
+                  <label className="text-sm font-medium">API endpoint</label>
+                  <Input
+                    value={draft.base_url || row.base_url}
+                    onChange={(e) =>
+                      setDrafts((d) => ({ ...d, [row.provider]: { ...draft, base_url: e.target.value } }))
+                    }
+                    placeholder={row.default_base_url}
+                  />
+                  <p className="text-xs text-muted-foreground">{row.help}</p>
+                </div>
+                {row.needs_api_key && (
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">
+                      {row.credential_label || "API key"}{" "}
+                      {row.has_api_key && <span className="text-emerald-600">(saved)</span>}
+                    </label>
+                    <Input
+                      type="password"
+                      value={draft.api_key}
+                      onChange={(e) =>
+                        setDrafts((d) => ({ ...d, [row.provider]: { ...draft, api_key: e.target.value } }))
+                      }
+                      placeholder={
+                        row.has_api_key
+                          ? "Leave blank to keep the current value"
+                          : `Paste your ${(row.credential_label || "API key").toLowerCase()}`
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Stored encrypted and never shown again after saving.
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {row.last_message && (
+                <p className={`text-xs ${row.last_status === "ERROR" ? "text-red-600" : "text-muted-foreground"}`}>
+                  {row.last_sync_at ? `${new Date(row.last_sync_at).toLocaleString()} — ` : ""}
+                  {row.last_message}
+                </p>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  disabled={busy === row.provider}
+                  onClick={() =>
+                    void save(row, {
+                      base_url: draft.base_url || row.base_url,
+                      ...(draft.api_key ? { api_key: draft.api_key } : {}),
+                    })
+                  }
+                >
+                  Save
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={busy === row.provider}
+                  onClick={() => void save(row, { is_enabled: !row.is_enabled })}
+                >
+                  {row.is_enabled ? "Disable" : "Enable"}
+                </Button>
+                <Button
+                  variant="outline"
+                  disabled={busy === row.provider || !row.is_enabled}
+                  onClick={() => void runNow(row)}
+                >
+                  Run now
+                </Button>
+                {row.has_api_key && (
+                  <Button
+                    variant="ghost"
+                    className="text-destructive"
+                    disabled={busy === row.provider}
+                    onClick={() => void save(row, { clear_api_key: true, is_enabled: false })}
+                  >
+                    Remove key
+                  </Button>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })}
+    </div>
+  );
+}
+
+
+interface CalendarFeed {
+  is_enabled: boolean;
+  url: string;
+  include: string[];
+  available_sources: { key: string; label: string; module: string }[];
+  last_accessed_at: string | null;
+  access_count: number;
+}
+
+function CalendarTab() {
+  const [feed, setFeed] = useState<CalendarFeed | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    try {
+      const res = await api.get("/calendar/me/");
+      setFeed(res.data);
+    } catch {
+      toast.error("Could not load your calendar feed");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void load(); }, []);
+
+  if (loading) {
+    return <Card><CardContent className="py-6 text-sm text-muted-foreground">Loading…</CardContent></Card>;
+  }
+  if (!feed) return null;
+
+  const update = async (changes: Record<string, unknown>) => {
+    setBusy(true);
+    try {
+      const res = await api.patch("/calendar/me/", changes);
+      setFeed(res.data);
+    } catch {
+      toast.error("Could not update the feed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const regenerate = async () => {
+    if (!confirm("Generate a new link? The current one stops working immediately and you will need to re-add it in your calendar.")) return;
+    setBusy(true);
+    try {
+      const res = await api.post("/calendar/me/", {});
+      setFeed(res.data);
+      toast.success("New link generated");
+    } catch {
+      toast.error("Could not regenerate the link");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const toggleSource = (key: string) => {
+    const next = feed.include.includes(key)
+      ? feed.include.filter((s) => s !== key)
+      : [...feed.include, key];
+    void update({ include: next });
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Your calendar feed</CardTitle>
+        <p className="text-sm text-muted-foreground">
+          Subscribe from Google Calendar, Outlook or Apple Calendar to see renewals,
+          expiries and due dates alongside your own events. Each item includes a
+          reminder the day before.
+        </p>
+      </CardHeader>
+      <CardContent className="space-y-5">
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium">Private link</label>
+          <div className="flex flex-wrap gap-2">
+            <Input readOnly value={feed.url} className="flex-1 min-w-[16rem] font-mono text-xs" />
+            <Button
+              variant="outline"
+              onClick={() => {
+                void navigator.clipboard.writeText(feed.url);
+                toast.success("Link copied");
+              }}
+            >
+              <Copy className="mr-2 h-4 w-4" /> Copy
+            </Button>
+            <Button variant="outline" disabled={busy} onClick={() => void regenerate()}>
+              <RefreshCw className="mr-2 h-4 w-4" /> New link
+            </Button>
+          </div>
+          <p className="text-xs text-amber-700 dark:text-amber-400">
+            Treat this like a password — anyone with the link can read these dates.
+            Generate a new one if it is ever shared by mistake.
+          </p>
+        </div>
+
+        <div className="rounded-lg border bg-muted/30 p-3 text-sm">
+          <p className="font-medium">Add it to Google Calendar</p>
+          <ol className="mt-1 list-decimal space-y-0.5 pl-5 text-muted-foreground">
+            <li>Open Google Calendar on a computer</li>
+            <li>Left sidebar → <strong>Other calendars</strong> → <strong>+</strong> → <strong>From URL</strong></li>
+            <li>Paste the link above and click <strong>Add calendar</strong></li>
+          </ol>
+          <p className="mt-2 text-xs text-muted-foreground">
+            Google refreshes external calendars on its own schedule, usually every
+            few hours — new items may not appear instantly.
+          </p>
+        </div>
+
+        <div className="space-y-2">
+          <label className="text-sm font-medium">What to include</label>
+          <div className="grid gap-2 sm:grid-cols-2">
+            {feed.available_sources.map((source) => (
+              <label key={source.key} className="flex items-center gap-2 text-sm">
+                <Checkbox
+                  checked={feed.include.includes(source.key)}
+                  onCheckedChange={() => toggleSource(source.key)}
+                  disabled={busy}
+                />
+                {source.label}
+              </label>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            You will only ever see records your role can already view.
+          </p>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-3 border-t pt-4">
+          <Button
+            variant={feed.is_enabled ? "outline" : "default"}
+            disabled={busy}
+            onClick={() => void update({ is_enabled: !feed.is_enabled })}
+          >
+            {feed.is_enabled ? "Disable feed" : "Enable feed"}
+          </Button>
+          <span className="text-xs text-muted-foreground">
+            {feed.access_count > 0
+              ? `Fetched ${feed.access_count} time(s)${feed.last_accessed_at ? ` · last ${new Date(feed.last_accessed_at).toLocaleString()}` : ""}`
+              : "Not fetched yet"}
+          </span>
+        </div>
       </CardContent>
     </Card>
   );

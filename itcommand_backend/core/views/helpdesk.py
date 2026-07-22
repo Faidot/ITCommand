@@ -17,7 +17,10 @@ from core.serializers.helpdesk import (
     TicketListSerializer, TicketDetailSerializer, TicketCreateSerializer,
     TicketCommentSerializer, TicketAttachmentSerializer
 )
-from core.permissions import IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher, HasModulePermission
+from core.permissions import (
+    IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher,
+    HasModulePermission, has_role_permission,
+)
 from core.mixins import AuditLogMixin
 
 
@@ -38,6 +41,14 @@ def notify_admins(message, notification_type='TICKET', link=None):
     admins = User.objects.filter(role__in=['ADMIN', 'SUPERADMIN'], is_active=True)
     for admin in admins:
         create_notification(admin, message, notification_type, link)
+
+
+def can_manage_helpdesk(user):
+    """Roles with edit/delete access can see and operate on the full queue."""
+    return (
+        has_role_permission(user, 'helpdesk', 'edit')
+        or has_role_permission(user, 'helpdesk', 'delete')
+    )
 
 
 class TicketPagination(PageNumberPagination):
@@ -66,6 +77,10 @@ class SLAPolicyViewSet(AuditLogMixin, viewsets.ModelViewSet):
 class TicketViewSet(AuditLogMixin, viewsets.ModelViewSet):
     permission_classes = [HasModulePermission]
     rbac_module = 'helpdesk'
+    rbac_action_permissions = {
+        'comments': {'POST': 'add'},
+        'attachments': {'POST': 'add'},
+    }
     pagination_class = TicketPagination
 
     def get_serializer_class(self):
@@ -81,10 +96,10 @@ class TicketViewSet(AuditLogMixin, viewsets.ModelViewSet):
             'category', 'requester', 'assigned_to', 'asset'
         )
 
-        # Role-based visibility
-        if user.role == 'VIEWER':
+        # Self-service/view-only roles can only see tickets they submitted.
+        # Custom roles gain queue-wide visibility only with edit/delete access.
+        if not can_manage_helpdesk(user):
             qs = qs.filter(requester=user)
-        # MANAGER, ADMIN, SUPERADMIN see all
 
         # Filters
         params = self.request.query_params
@@ -127,7 +142,7 @@ class TicketViewSet(AuditLogMixin, viewsets.ModelViewSet):
         self.log_action('CREATE', ticket, serializer.data)
 
     # POST /tickets/{id}/assign/
-    @action(detail=True, methods=['post'], permission_classes=[IsAdminOrSuperadmin])
+    @action(detail=True, methods=['post'], permission_classes=[HasModulePermission])
     def assign(self, request, pk=None):
         ticket = self.get_object()
         user_id = request.data.get('user_id')
@@ -214,10 +229,8 @@ class TicketViewSet(AuditLogMixin, viewsets.ModelViewSet):
 
         if request.method == 'GET':
             qs = ticket.comments.all()
-            # Hide internal notes from VIEWER/requester
-            if request.user.role == 'VIEWER' or request.user == ticket.requester:
-                if request.user.role == 'VIEWER':
-                    qs = qs.filter(is_internal=False)
+            if not can_manage_helpdesk(request.user):
+                qs = qs.filter(is_internal=False)
             return Response(TicketCommentSerializer(qs, many=True).data)
 
         # POST
@@ -279,14 +292,16 @@ class TicketViewSet(AuditLogMixin, viewsets.ModelViewSet):
 
 # ─── Helpdesk Dashboard ─────────────────────────────────────────────
 class HelpdeskDashboardView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'helpdesk'
 
     def get(self, request):
         now = timezone.now()
         thirty_days_ago = now - timedelta(days=30)
 
-        # All tickets
         all_tickets = Ticket.objects.all()
+        if not can_manage_helpdesk(request.user):
+            all_tickets = all_tickets.filter(requester=request.user)
 
         # Counts by status
         status_counts = dict(
@@ -332,7 +347,7 @@ class HelpdeskDashboardView(APIView):
 
         # My assigned tickets (for IT staff)
         my_open_tickets = []
-        if request.user.role in ['MANAGER', 'ADMIN', 'SUPERADMIN']:
+        if can_manage_helpdesk(request.user):
             my_qs = all_tickets.filter(
                 assigned_to=request.user
             ).exclude(status__in=['RESOLVED', 'CLOSED']).order_by('-created_at')[:10]

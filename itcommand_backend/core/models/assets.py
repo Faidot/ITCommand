@@ -166,6 +166,13 @@ class Asset(models.Model):
         User, on_delete=models.SET_NULL, null=True, blank=True,
         related_name='created_assets'
     )
+    source_purchase_request_item = models.OneToOneField(
+        'PurchaseRequestItem',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='created_asset',
+    )
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

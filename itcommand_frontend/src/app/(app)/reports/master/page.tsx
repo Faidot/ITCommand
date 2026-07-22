@@ -75,8 +75,8 @@ function UserDetail({ u }: { u: any }) {
         ) : <p className="text-sm text-neutral-400">No assets assigned.</p>}
       </DetailSection>
 
-      {/* Licenses & subscriptions */}
-      <DetailSection title={`Licenses & Subscriptions (${u.licenses.length})`} icon={<KeyRound className="w-4 h-4 text-amber-500" />}>
+      {/* Licenses */}
+      <DetailSection title={`Licenses (${u.licenses.length})`} icon={<KeyRound className="w-4 h-4 text-amber-500" />}>
         {u.licenses.length ? (
           <Table>
             <TableHeader><TableRow>
@@ -98,7 +98,37 @@ function UserDetail({ u }: { u: any }) {
               ))}
             </TableBody>
           </Table>
-        ) : <p className="text-sm text-neutral-400">No licenses or subscriptions.</p>}
+        ) : <p className="text-sm text-neutral-400">No licenses.</p>}
+      </DetailSection>
+
+      {/* Subscriptions (seats on the Subscriptions module) */}
+      <DetailSection
+        title={`Subscriptions (${(u.subscriptions || []).length})`}
+        icon={<Repeat className="w-4 h-4 text-violet-500" />}
+      >
+        {(u.subscriptions || []).length ? (
+          <Table>
+            <TableHeader><TableRow>
+              <TableHead>Service</TableHead><TableHead>Plan</TableHead>
+              <TableHead>Cost</TableHead><TableHead>Renews</TableHead>
+            </TableRow></TableHeader>
+            <TableBody>
+              {(u.subscriptions || []).map((sub: any, i: number) => (
+                <TableRow key={i}>
+                  <TableCell className="font-medium">
+                    {sub.name}
+                    <span className="block text-xs text-neutral-400">{sub.platform}</span>
+                  </TableCell>
+                  <TableCell>{sub.plan || "—"}</TableCell>
+                  <TableCell>{sub.currency} {sub.cost} <span className="text-xs text-neutral-400">/{sub.billing_cycle === "MONTHLY" ? "mo" : "yr"}</span></TableCell>
+                  <TableCell className={sub.expired ? "text-red-600" : ""}>
+                    {sub.expiry || "—"}{sub.expired ? " (expired)" : ""}
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        ) : <p className="text-sm text-neutral-400">No subscription seats.</p>}
       </DetailSection>
 
       {/* Seat + tickets + vault + org */}
@@ -149,7 +179,8 @@ export default function MasterReportPage() {
   const toggle = (id: number) =>
     setExpanded((prev) => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
 

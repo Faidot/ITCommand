@@ -1,5 +1,23 @@
 from rest_framework import permissions
 
+
+def has_role_permission(user, module, action):
+    """Return the effective JSON permission for a user/role.
+
+    Keeping this lookup in one place lets queryset scoping use the same source
+    of truth as ``HasModulePermission``. Unknown or unseeded roles fail closed;
+    SUPERADMIN remains the only unconditional bypass.
+    """
+    if not user or not user.is_authenticated:
+        return False
+    if user.role == 'SUPERADMIN':
+        return True
+
+    from core.models import Role
+    role = Role.objects.filter(slug=user.role).first()
+    return bool(role and role.can(module, action))
+
+
 class IsSuperadmin(permissions.BasePermission):
     def has_permission(self, request, view):
         return request.user.is_authenticated and request.user.role == 'SUPERADMIN'
@@ -22,10 +40,7 @@ class ReadOnlyViewerOrHigher(permissions.BasePermission):
 
 class VaultAccessPermission(permissions.BasePermission):
     def has_permission(self, request, view):
-        # Viewer has no access to Vault
-        if not request.user.is_authenticated:
-            return False
-        return request.user.role in ['MANAGER', 'ADMIN', 'SUPERADMIN']
+        return has_role_permission(request.user, 'vault', 'view')
 
 
 class VaultUnlockedPermission(permissions.BasePermission):
@@ -38,12 +53,16 @@ class VaultUnlockedPermission(permissions.BasePermission):
         from core.models import VaultUnlockSession, VaultMasterPassword
         if not request.user.is_authenticated:
             return False
-        if request.user.role not in ['MANAGER', 'ADMIN', 'SUPERADMIN']:
+        if not has_role_permission(request.user, 'vault', 'view'):
             return False
         token = request.headers.get('X-Vault-Token') or request.META.get('HTTP_X_VAULT_TOKEN')
         if not token:
             return False
-        session = VaultUnlockSession.objects.filter(token=token, user=request.user, revoked=False).first()
+        session = VaultUnlockSession.objects.filter(
+            token=VaultUnlockSession.digest_token(token),
+            user=request.user,
+            revoked=False,
+        ).first()
         if not session or not session.is_valid():
             return False
         # Slide expiry
@@ -78,20 +97,29 @@ class HasModulePermission(permissions.BasePermission):
         module = getattr(view, 'rbac_module', None)
         if not module:
             return True
-        if request.user.role == 'SUPERADMIN':
-            return True
-        # Reads stay open to any authenticated user: list/detail endpoints are
-        # frequently used as cross-module reference data (vendors in an asset
-        # form, categories in a finance form, etc.), and the UI already hides
-        # sections a role can't view. Writes are what the map gates.
         if request.method in permissions.SAFE_METHODS:
-            return True
-        action = self.method_action.get(request.method, 'edit')
-        from core.models import Role
-        role = Role.objects.filter(slug=request.user.role).first()
-        if not role:
-            return False
-        return role.can(module, action)
+            action = 'view'
+        else:
+            view_action = getattr(view, 'action', None)
+            configured = getattr(view, 'rbac_action_permissions', {}).get(view_action)
+            if isinstance(configured, dict):
+                configured = configured.get(request.method)
+            if configured:
+                action = configured
+            elif view_action and 'bulk_delete' in view_action:
+                action = 'delete'
+            elif (
+                view_action == 'bulk_action'
+                and request.data.get('action') == 'delete'
+            ):
+                action = 'delete'
+            elif request.method == 'POST' and view_action not in (None, 'create'):
+                # DRF custom actions frequently mutate existing records. Treat
+                # them as edits unless the view explicitly declares otherwise.
+                action = 'edit'
+            else:
+                action = self.method_action.get(request.method, 'edit')
+        return has_role_permission(request.user, module, action)
 
 
 class UserManagementPermission(permissions.BasePermission):
@@ -99,7 +127,7 @@ class UserManagementPermission(permissions.BasePermission):
         if not request.user.is_authenticated:
             return False
         if request.method in permissions.SAFE_METHODS:
-            return True
+            return has_role_permission(request.user, 'users', 'view')
         # Only admin/superadmin can write to users
         return request.user.role in ['ADMIN', 'SUPERADMIN']
 

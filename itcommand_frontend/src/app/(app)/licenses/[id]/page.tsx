@@ -24,6 +24,7 @@ import { Switch } from "@/components/ui/switch";
 import { AssignSeatDialog } from "../assign-seat-dialog";
 import { AddLicenseDialog } from "../add-license-dialog";
 import { useAuthStore } from "@/store/authStore";
+import { useMoney, useCurrencyCode } from "@/lib/currency";
 
 const LICENSE_TYPE_BADGE: Record<string, string> = {
   PERPETUAL: "bg-blue-100 text-blue-800",
@@ -35,6 +36,7 @@ const LICENSE_TYPE_BADGE: Record<string, string> = {
 };
 
 export default function LicenseDetailPage() {
+  const money = useMoney();
   const params = useParams();
   const router = useRouter();
   const licenseId = params.id as string;
@@ -263,7 +265,7 @@ export default function LicenseDetailPage() {
                 </div>
                 <div>
                   <span className="text-neutral-500 block mb-1 flex items-center gap-1"><DollarSign className="w-3 h-3"/> Annual Cost</span>
-                  <span className="font-medium text-emerald-600">Rs {license.annual_cost.toLocaleString()}</span>
+                  <span className="font-medium text-emerald-600">{money(license.annual_cost, { decimals: 0 })}</span>
                 </div>
                 <div>
                   <span className="text-neutral-500 block mb-1">PO Number</span>

@@ -8,10 +8,11 @@ import { useVaultStore } from "@/store/vaultStore";
 import { useAuthStore } from "@/store/authStore";
 import { VaultLockScreen } from "@/components/vault-lock-screen";
 import { Button } from "@/components/ui/button";
+import { can } from "@/lib/permissions";
 
 export default function VaultLayout({ children }: { children: React.ReactNode }) {
   const { user } = useAuthStore();
-  const { token, expiresAt, loadFromStorage, clear, isUnlocked } = useVaultStore();
+  const { expiresAt, loadFromStorage, clear, isUnlocked, setExpiry } = useVaultStore();
   const [, force] = useState(0);
   const [bootstrapped, setBootstrapped] = useState(false);
 
@@ -20,6 +21,17 @@ export default function VaultLayout({ children }: { children: React.ReactNode })
     loadFromStorage();
     setBootstrapped(true);
   }, [loadFromStorage]);
+
+  // Protected vault API calls slide the server session. The API client mirrors
+  // the authoritative expiry and broadcasts it so this countdown stays current.
+  useEffect(() => {
+    const onExpiry = (event: Event) => {
+      const expiresAt = (event as CustomEvent<{ expiresAt?: string }>).detail?.expiresAt;
+      if (expiresAt) setExpiry(expiresAt);
+    };
+    window.addEventListener("it-command:vault-expiry", onExpiry);
+    return () => window.removeEventListener("it-command:vault-expiry", onExpiry);
+  }, [setExpiry]);
 
   // Refresh ticker so the countdown updates and auto-locks at zero
   useEffect(() => {
@@ -52,21 +64,13 @@ export default function VaultLayout({ children }: { children: React.ReactNode })
     return () => clearTimeout(id);
   }, [expiresAt, clear]);
 
-  if (user?.role === "VIEWER") {
+  if (user && !can(user, "vault", "view")) {
     return (
       <div className="p-8 max-w-2xl mx-auto">
         <div className="bg-red-50 text-red-900 p-4 rounded-xl border border-red-200">
           <h2 className="font-bold mb-2">Access Denied</h2>
           <p>You don&apos;t have permission to view the Vault.</p>
         </div>
-      </div>
-    );
-  }
-
-  if (user?.role && !["MANAGER", "ADMIN", "SUPERADMIN"].includes(user.role)) {
-    return (
-      <div className="p-8 text-center text-red-500">
-        Access Denied. Manager privileges or higher required.
       </div>
     );
   }

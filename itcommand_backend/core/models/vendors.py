@@ -2,6 +2,7 @@ from django.db import models
 from django.conf import settings
 from django.utils import timezone
 import datetime
+import uuid
 
 class VendorCategory(models.TextChoices):
     HARDWARE_SUPPLIER = 'HARDWARE_SUPPLIER', 'Hardware Supplier'
@@ -64,18 +65,13 @@ class Vendor(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
-        if not self.vendor_code:
-            # Simple auto-generation. Better approach would use a sequence.
-            last_vendor = Vendor.objects.order_by('-id').first()
-            if last_vendor and last_vendor.vendor_code.startswith('VND-'):
-                try:
-                    last_num = int(last_vendor.vendor_code.split('-')[1])
-                    self.vendor_code = f"VND-{last_num + 1:03d}"
-                except ValueError:
-                    self.vendor_code = f"VND-{Vendor.objects.count() + 1:03d}"
-            else:
-                self.vendor_code = f"VND-{Vendor.objects.count() + 1:03d}"
+        generate_code = self.pk is None and not self.vendor_code
+        if generate_code:
+            self.vendor_code = f"TMP-{uuid.uuid4().hex[:16]}"
         super().save(*args, **kwargs)
+        if generate_code:
+            self.vendor_code = f"VND-{self.pk:03d}"
+            Vendor.objects.filter(pk=self.pk).update(vendor_code=self.vendor_code)
 
     def __str__(self):
         return f"{self.name} ({self.vendor_code})"
@@ -106,16 +102,9 @@ class VendorContract(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     def save(self, *args, **kwargs):
-        if not self.contract_number:
-            last_contract = VendorContract.objects.order_by('-id').first()
-            if last_contract and last_contract.contract_number.startswith('CTR-'):
-                try:
-                    last_num = int(last_contract.contract_number.split('-')[1])
-                    self.contract_number = f"CTR-{last_num + 1:03d}"
-                except ValueError:
-                    self.contract_number = f"CTR-{VendorContract.objects.count() + 1:03d}"
-            else:
-                self.contract_number = f"CTR-{VendorContract.objects.count() + 1:03d}"
+        generate_number = self.pk is None and not self.contract_number
+        if generate_number:
+            self.contract_number = f"TMP-{uuid.uuid4().hex[:16]}"
         
         # Auto-update status to EXPIRED if end_date has passed
         if self.end_date and self.status == ContractStatus.ACTIVE:
@@ -123,6 +112,11 @@ class VendorContract(models.Model):
                 self.status = ContractStatus.EXPIRED
 
         super().save(*args, **kwargs)
+        if generate_number:
+            self.contract_number = f"CTR-{self.pk:03d}"
+            VendorContract.objects.filter(pk=self.pk).update(
+                contract_number=self.contract_number
+            )
 
     def __str__(self):
         return self.title

@@ -51,6 +51,47 @@ async function rawFetch(path, { method = "GET", body, useVault = false } = {}) {
   });
 }
 
+async function storeVaultExpiry(expiresAt) {
+  if (!expiresAt || !Number.isFinite(new Date(expiresAt).getTime())) return false;
+  const vault = (await getStore(KEYS.vault)) || {};
+  if (!vault.token) return false;
+  await setStore(KEYS.vault, { ...vault, expiresAt: new Date(expiresAt).toISOString() });
+  return true;
+}
+
+async function syncVaultExpiryFromStatus() {
+  try {
+    const res = await rawFetch("/vault/master/status/", { useVault: true });
+    if (!res.ok) return null;
+    const data = await res.json().catch(() => ({}));
+    if (!data.unlocked) {
+      await delStore(KEYS.vault);
+      return null;
+    }
+    await storeVaultExpiry(data.unlock_expires_at);
+    return data.unlock_expires_at || null;
+  } catch {
+    return null;
+  }
+}
+
+async function reconcileVaultExpiry(path, opts, res) {
+  if (!opts.useVault || !res.ok) return;
+
+  const headerExpiry = res.headers.get("X-Vault-Expires-At")
+    || res.headers.get("X-Vault-Expiry");
+  if (await storeVaultExpiry(headerExpiry)) return;
+
+  // Some endpoints may include the expiry in their JSON body. Clone so the
+  // action handler can still consume the original response.
+  const data = await res.clone().json().catch(() => ({}));
+  if (await storeVaultExpiry(data.unlock_expires_at || data.expires_at)) return;
+
+  // Current backend exposes the slid expiry through the status response rather
+  // than repeating it on every protected endpoint.
+  if (path !== "/vault/master/status/") await syncVaultExpiryFromStatus();
+}
+
 // Fetch with one transparent access-token refresh on 401.
 async function apiFetch(path, opts = {}) {
   let res = await rawFetch(path, opts);
@@ -58,6 +99,7 @@ async function apiFetch(path, opts = {}) {
     const refreshed = await tryRefresh();
     if (refreshed) res = await rawFetch(path, opts);
   }
+  await reconcileVaultExpiry(path, opts, res);
   return res;
 }
 
@@ -73,7 +115,12 @@ async function tryRefresh() {
     });
     if (!res.ok) return false;
     const data = await res.json();
-    await setStore(KEYS.auth, { ...auth, access: data.access });
+    await setStore(KEYS.auth, {
+      ...auth,
+      access: data.access,
+      // SimpleJWT may rotate refresh tokens and blacklist the old value.
+      refresh: data.refresh || auth.refresh,
+    });
     return true;
   } catch {
     return false;
@@ -144,17 +191,24 @@ async function getMatches({ domain }) {
   if (!state.vaultUnlocked) return { ok: false, error: "vault_locked", matches: [] };
   const res = await apiFetch(`/vault/credentials/match/?domain=${encodeURIComponent(domain)}`, { useVault: true });
   if (res.status === 401 || res.status === 403) {
+    await delStore(KEYS.vault);
     return { ok: false, error: "vault_locked", matches: [] };
   }
   const data = await res.json().catch(() => []);
-  return { ok: true, matches: Array.isArray(data) ? data : [] };
+  const vault = (await getStore(KEYS.vault)) || {};
+  return {
+    ok: true,
+    matches: Array.isArray(data) ? data : [],
+    vaultExpiresAt: vault.expiresAt || null,
+  };
 }
 
 async function reveal({ id }) {
   const res = await apiFetch(`/vault/credentials/${id}/reveal/`, { useVault: true });
   const data = await res.json().catch(() => ({}));
   if (!res.ok) return { ok: false, error: data.detail || "Reveal failed." };
-  return { ok: true, password: data.password };
+  const vault = (await getStore(KEYS.vault)) || {};
+  return { ok: true, password: data.password, vaultExpiresAt: vault.expiresAt || null };
 }
 
 async function saveSettings({ serverUrl, appUrl, autofill }) {

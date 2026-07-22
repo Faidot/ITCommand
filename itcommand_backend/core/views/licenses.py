@@ -19,7 +19,10 @@ from core.serializers.licenses import (
     LicenseAssignmentSerializer, LicenseAlertSerializer,
     LicenseRenewalSerializer, UserLicenseSerializer,
 )
-from core.permissions import IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher, HasModulePermission
+from core.permissions import (
+    IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher,
+    HasModulePermission, has_role_permission,
+)
 from core.mixins import AuditLogMixin
 from core.encryption import decrypt_value
 from django.db import transaction
@@ -223,8 +226,11 @@ class SoftwareLicenseViewSet(AuditLogMixin, viewsets.ModelViewSet):
 
     # POST /licenses/{id}/assign/ → assign license seat to a user
     @action(detail=True, methods=['post'], url_path='assign', permission_classes=[IsAdminOrSuperadmin])
+    @transaction.atomic
     def assign_seat(self, request, pk=None):
-        license_obj = self.get_object()
+        license_obj = SoftwareLicense.objects.select_for_update().get(
+            pk=self.get_object().pk
+        )
         user_id = request.data.get('user_id')
 
         if not user_id:
@@ -488,7 +494,10 @@ class UserLicensesView(APIView):
 
     def get(self, request, user_id):
         # Users can view their own, managers+ can view anyone's
-        if str(request.user.id) != str(user_id) and request.user.role not in ['MANAGER', 'ADMIN', 'SUPERADMIN']:
+        if (
+            str(request.user.id) != str(user_id)
+            and not has_role_permission(request.user, 'licenses', 'view')
+        ):
             return Response({'detail': 'Permission denied.'}, status=status.HTTP_403_FORBIDDEN)
 
         assignments = LicenseAssignment.objects.filter(
@@ -500,7 +509,8 @@ class UserLicensesView(APIView):
 
 # ─── License Dashboard ─────────────────────────────────────────────
 class LicenseDashboardView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'licenses'
 
     def get(self, request):
         today = timezone.now().date()

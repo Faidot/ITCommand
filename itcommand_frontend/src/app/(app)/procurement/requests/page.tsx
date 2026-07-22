@@ -11,6 +11,7 @@ import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useMoney, useCurrencyCode } from "@/lib/currency";
 
 const STATUS_COLORS: Record<string, string> = {
   DRAFT: "bg-neutral-100 text-neutral-700 border-neutral-200",
@@ -32,6 +33,7 @@ const PRIORITY_COLORS: Record<string, string> = {
 };
 
 export default function ProcurementRequestsPage() {
+  const money = useMoney();
   const router = useRouter();
   const [prs, setPrs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -60,8 +62,7 @@ export default function ProcurementRequestsPage() {
     }
   };
 
-  const formatCurrency = (amount: number) =>
-    new Intl.NumberFormat("en-PK", { style: "currency", currency: "PKR", maximumFractionDigits: 0 }).format(amount);
+  const formatCurrency = (amount: number) => money(amount, { decimals: 0 });
 
   return (
     <div className="flex flex-col gap-6 w-full max-w-7xl mx-auto p-4">

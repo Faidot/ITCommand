@@ -14,8 +14,11 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, ResponsiveContainer, Legend } from "recharts";
 import { RowActions } from "@/components/finance/row-actions";
 import { DetailDialog } from "@/components/finance/detail-dialog";
+import { useMoney, useCurrencyCode } from "@/lib/currency";
 
 export default function BudgetPage() {
+  const money = useMoney();
+  const currencyCode = useCurrencyCode();
   const { user } = useAuthStore();
   const isAdmin = user?.role === "ADMIN" || user?.role === "SUPERADMIN";
 
@@ -124,11 +127,11 @@ export default function BudgetPage() {
       {dashboardData && (
         <>
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Total Budget</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">${(dashboardData.total_budget || 0).toFixed(2)}</div></CardContent></Card>
-            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Total Spent</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-red-600">${(dashboardData.total_spent || 0).toFixed(2)}</div></CardContent></Card>
-            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Remaining</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-emerald-600">${(dashboardData.remaining_budget || 0).toFixed(2)}</div></CardContent></Card>
-            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Net Cash Flow</CardTitle></CardHeader><CardContent><div className={`text-2xl font-bold ${(dashboardData.net_cash_flow ?? 0) >= 0 ? "text-emerald-600" : "text-red-600"}`}>${(dashboardData.net_cash_flow || 0).toFixed(2)}</div><div className="text-xs text-neutral-500">Income ${(dashboardData.total_income || 0).toFixed(0)}</div></CardContent></Card>
-            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Pending Approvals</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-amber-600">{dashboardData.pending_approvals_count || 0}</div><div className="text-xs text-neutral-500">${(dashboardData.pending_approvals_amount || 0).toFixed(0)}</div></CardContent></Card>
+            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Total Budget</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold">{money(dashboardData.total_budget)}</div></CardContent></Card>
+            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Total Spent</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-red-600">{money(dashboardData.total_spent)}</div></CardContent></Card>
+            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Remaining</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-emerald-600">{money(dashboardData.remaining_budget)}</div></CardContent></Card>
+            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Net Cash Flow</CardTitle></CardHeader><CardContent><div className={`text-2xl font-bold ${(dashboardData.net_cash_flow ?? 0) >= 0 ? "text-emerald-600" : "text-red-600"}`}>{money(dashboardData.net_cash_flow)}</div><div className="text-xs text-neutral-500">Income {money(dashboardData.total_income, { decimals: 0 })}</div></CardContent></Card>
+            <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Pending Approvals</CardTitle></CardHeader><CardContent><div className="text-2xl font-bold text-amber-600">{dashboardData.pending_approvals_count || 0}</div><div className="text-xs text-neutral-500">{money(dashboardData.pending_approvals_amount, { decimals: 0 })}</div></CardContent></Card>
           </div>
 
           {dashboardData.monthly_trend?.length > 0 && (
@@ -153,7 +156,7 @@ export default function BudgetPage() {
                       <CartesianGrid strokeDasharray="3 3" className="stroke-neutral-200 dark:stroke-neutral-800" />
                       <XAxis dataKey="month" fontSize={12} />
                       <YAxis fontSize={12} />
-                      <RTooltip formatter={(v: any) => `$${Number(v).toFixed(2)}`} />
+                      <RTooltip formatter={(v: any) => money(Number(v))} />
                       <Legend />
                       <Bar dataKey="income" name="Income" fill="#10b981" radius={[4, 4, 0, 0]} />
                       <Bar dataKey="expense" name="Expense" fill="#f43f5e" radius={[4, 4, 0, 0]} />
@@ -180,14 +183,14 @@ export default function BudgetPage() {
                 <div className="flex justify-between items-center mb-2">
                   <span className="font-semibold cursor-pointer" onClick={() => setViewing({ ...b, spent, remaining })}>{b.category_name}</span>
                   <div className="flex items-center gap-2">
-                    <span className="text-sm text-neutral-500">${spent.toFixed(0)} / ${allocated.toFixed(0)}</span>
+                    <span className="text-sm text-neutral-500">{money(spent, { decimals: 0 })} / {money(allocated, { decimals: 0 })}</span>
                     <RowActions onView={() => setViewing({ ...b, spent, remaining })} onEdit={() => openEdit(b)} onDelete={() => deleteBudget(b.id)} />
                   </div>
                 </div>
                 <div className="w-full h-2 bg-neutral-100 rounded-full overflow-hidden">
                   <div className={`h-full ${pct > 90 ? "bg-red-500" : pct > 75 ? "bg-amber-500" : "bg-emerald-500"}`} style={{ width: `${Math.min(pct, 100)}%` }} />
                 </div>
-                <div className="mt-2 text-xs text-neutral-500 text-right">${remaining.toFixed(2)} remaining</div>
+                <div className="mt-2 text-xs text-neutral-500 text-right">{money(remaining)} remaining</div>
               </CardContent>
             </Card>
           );
@@ -207,7 +210,7 @@ export default function BudgetPage() {
               </Select>
             </div>
             <div className="space-y-1">
-              <label className="text-sm font-medium">Amount ($)</label>
+              <label className="text-sm font-medium">Amount ({currencyCode})</label>
               <Input type="number" step="0.01" value={formAmount} onChange={(e) => setFormAmount(e.target.value)} />
             </div>
             <DialogFooter><Button onClick={onSubmit}>{editing ? "Update" : "Allocate"}</Button></DialogFooter>
@@ -245,9 +248,9 @@ export default function BudgetPage() {
           title={viewing.category_name}
           subtitle={viewing.financial_year_name}
           fields={[
-            { label: "Allocated", value: `$${parseFloat(viewing.allocated_amount).toFixed(2)}` },
-            { label: "Spent", value: `$${(viewing.spent ?? 0).toFixed(2)}` },
-            { label: "Remaining", value: `$${(viewing.remaining ?? 0).toFixed(2)}` },
+            { label: "Allocated", value: money(parseFloat(viewing.allocated_amount)) },
+            { label: "Spent", value: money(viewing.spent ?? 0) },
+            { label: "Remaining", value: money(viewing.remaining ?? 0) },
             { label: "Notes", value: viewing.notes, full: true },
           ]}
           footer={<div className="flex justify-end gap-2 pt-3"><Button variant="outline" onClick={() => { setViewing(null); openEdit(viewing); }}>Edit</Button></div>}

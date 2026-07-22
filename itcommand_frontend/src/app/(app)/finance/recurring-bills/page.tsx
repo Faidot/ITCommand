@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { RowActions } from "@/components/finance/row-actions";
 import { DetailDialog } from "@/components/finance/detail-dialog";
 import { PaymentCalendar, CalEvent } from "@/components/finance/payment-calendar";
+import { useMoney, useCurrencyCode } from "@/lib/currency";
 
 const dayDiff = (s: string) => Math.ceil((new Date(s).getTime() - new Date().getTime()) / (1000 * 3600 * 24));
 const freqDays = (f: string) => (f === "YEARLY" ? 365 : f === "QUARTERLY" ? 90 : 30);
@@ -28,6 +29,8 @@ const monthly = (b: any) => { const a = parseFloat(b.amount || 0); return b.freq
 const addDays = (s: string, n: number) => { const d = new Date(s); d.setDate(d.getDate() + n); return d.toISOString().split("T")[0]; };
 
 export default function RecurringBillsPage() {
+  const money = useMoney();
+  const currencyCode = useCurrencyCode();
   const { user } = useAuthStore();
   const canModify = user?.role !== "VIEWER";
 
@@ -122,10 +125,10 @@ export default function RecurringBillsPage() {
 
   const calendarEvents = (b: any): CalEvent[] => {
     const evs: CalEvent[] = [];
-    (paymentsByBill[b.id] || []).forEach((p) => evs.push({ date: p.paid_date, label: `Paid $${p.amount_paid}${p.paid_from === "COMPANY" ? " (company)" : " (IT)"}`, type: "paid" }));
+    (paymentsByBill[b.id] || []).forEach((p) => evs.push({ date: p.paid_date, label: `Paid ${money(p.amount_paid)}${p.paid_from === "COMPANY" ? " (company)" : " (IT)"}`, type: "paid" }));
     if (b.next_due_date) {
-      evs.push({ date: b.next_due_date, label: `Due $${b.amount}`, type: "due" });
-      for (let k = 1; k <= 3; k++) evs.push({ date: addDays(b.next_due_date, freqDays(b.frequency) * k), label: `Projected $${b.amount}`, type: "projected" });
+      evs.push({ date: b.next_due_date, label: `Due ${money(b.amount)}`, type: "due" });
+      for (let k = 1; k <= 3; k++) evs.push({ date: addDays(b.next_due_date, freqDays(b.frequency) * k), label: `Projected ${money(b.amount)}`, type: "projected" });
     }
     return evs;
   };
@@ -141,10 +144,10 @@ export default function RecurringBillsPage() {
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500 flex items-center gap-1"><AlertTriangle className="w-4 h-4 text-red-500" /> Overdue</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold text-red-600">{stats.overdue.length}</div><div className="text-xs text-neutral-500">${stats.overdue.reduce((s, b) => s + parseFloat(b.amount || 0), 0).toFixed(2)}</div></CardContent></Card>
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500 flex items-center gap-1"><AlertTriangle className="w-4 h-4 text-red-500" /> Overdue</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold text-red-600">{stats.overdue.length}</div><div className="text-xs text-neutral-500">{money(stats.overdue.reduce((s, b) => s + parseFloat(b.amount || 0), 0))}</div></CardContent></Card>
         <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500 flex items-center gap-1"><Clock className="w-4 h-4 text-amber-500" /> Due in 7 days</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold text-amber-600">{stats.dueSoon.length}</div></CardContent></Card>
         <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500 flex items-center gap-1"><ReceiptText className="w-4 h-4" /> Active</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold">{stats.active}</div></CardContent></Card>
-        <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500 flex items-center gap-1"><Wallet className="w-4 h-4" /> Est. Monthly</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold">${stats.monthlyTotal.toFixed(2)}</div></CardContent></Card>
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500 flex items-center gap-1"><Wallet className="w-4 h-4" /> Est. Monthly</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold">{money(stats.monthlyTotal)}</div></CardContent></Card>
       </div>
 
       <Tabs value={tab} onValueChange={setTab}>
@@ -166,8 +169,8 @@ export default function RecurringBillsPage() {
                   <TableCell><Badge variant="outline">{b.frequency}</Badge></TableCell>
                   <TableCell>{b.next_due_date}</TableCell>
                   <TableCell>{statusBadge(b)}</TableCell>
-                  <TableCell className="text-sm text-neutral-500">{last ? `${last.paid_date} ($${last.amount_paid})` : "—"}</TableCell>
-                  <TableCell className="text-right font-bold">${b.amount}</TableCell>
+                  <TableCell className="text-sm text-neutral-500">{last ? `${last.paid_date} (${money(last.amount_paid)})` : "—"}</TableCell>
+                  <TableCell className="text-right font-bold">{money(b.amount)}</TableCell>
                   <TableCell><div className="flex items-center justify-end gap-1">
                     {canModify && <Button size="sm" variant="secondary" onClick={() => openPay(b)}><CalendarCheck2 className="w-4 h-4" /></Button>}
                     <RowActions canModify={canModify} onView={() => setViewing(b)} onEdit={() => openEdit(b)} onDelete={() => deleteBill(b.id)} />
@@ -251,7 +254,7 @@ export default function RecurringBillsPage() {
       {viewing && (
         <DetailDialog open={!!viewing} onOpenChange={(o) => !o && setViewing(null)} title={viewing.title} subtitle={viewing.frequency}
           fields={[
-            { label: "Amount", value: `$${viewing.amount}` }, { label: "Next Due", value: viewing.next_due_date },
+            { label: "Amount", value: money(viewing.amount) }, { label: "Next Due", value: viewing.next_due_date },
             { label: "Vendor", value: vendors.find((v) => v.id === viewing.vendor)?.name }, { label: "Category", value: viewing.category_name },
             { label: "Status", value: statusBadge(viewing) }, { label: "Active", value: viewing.is_active ? "Yes" : "No" },
             { label: "Notes", value: viewing.notes, full: true },

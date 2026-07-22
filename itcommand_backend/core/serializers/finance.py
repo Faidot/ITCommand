@@ -55,6 +55,7 @@ class ExpenseSerializer(serializers.ModelSerializer):
     linked_asset_name = serializers.CharField(source='linked_asset.name', read_only=True)
     linked_license_name = serializers.CharField(source='linked_license.product.name', read_only=True)
     linked_pr_number = serializers.CharField(source='linked_purchase_request.pr_number', read_only=True)
+    linked_subscription_name = serializers.CharField(source='linked_subscription.name', read_only=True)
     approved_by_name = serializers.CharField(source='approved_by.full_name', read_only=True)
     status_display = serializers.CharField(source='get_status_display', read_only=True)
     approval_logs = ExpenseApprovalLogSerializer(many=True, read_only=True)

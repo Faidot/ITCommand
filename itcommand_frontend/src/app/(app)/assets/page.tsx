@@ -84,6 +84,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { useMoney, useCurrencyCode } from "@/lib/currency";
 
 export interface SpecField {
   key: string;
@@ -208,6 +209,8 @@ interface LocationOption {
 }
 
 export default function AssetsPage() {
+  const formatMoneyFor = useMoney();
+  const currencyCode = useCurrencyCode();
   const { user } = useAuthStore();
   const isAdmin = user?.role === "ADMIN" || user?.role === "SUPERADMIN";
 
@@ -501,7 +504,7 @@ export default function AssetsPage() {
       const res = await api.post("/assets/bulk_delete/", { ids: sel.ids });
       const sum = summarizeBulkDelete(res.data);
       if (sum.kind === "success") toast.success(sum.message);
-      else toast.warning?.(sum.message) ?? toast(sum.message);
+      else toast.warning(sum.message);
       // If anything was blocked, show first few reasons for context.
       const blocked: any[] = res.data?.blocked || [];
       if (blocked.length) {
@@ -675,9 +678,7 @@ export default function AssetsPage() {
   };
 
   const money = (v?: string | null) =>
-    v == null || v === ""
-      ? "—"
-      : new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(Number(v));
+    v == null || v === "" ? "—" : formatMoneyFor(Number(v));
 
   const addNote = async () => {
     if (!selectedAsset || !newNote) return;
@@ -1219,7 +1220,7 @@ export default function AssetsPage() {
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel>
-                            Unit Price ($)
+                            Unit Price ({currencyCode})
                             {showBulkPricing && <span className="text-xs text-muted-foreground ml-1">per unit</span>}
                           </FormLabel>
                           <FormControl>
@@ -1252,7 +1253,7 @@ export default function AssetsPage() {
                       render={({ field }) => (
                         <FormItem>
                           <FormLabel>
-                            Total Price ($)
+                            Total Price ({currencyCode})
                             {autoTotal && <span className="text-xs text-emerald-600 ml-1">= ${autoTotal} ({qty}× units)</span>}
                           </FormLabel>
                           <FormControl>
@@ -1806,7 +1807,7 @@ export default function AssetsPage() {
                         <p className="text-neutral-600 dark:text-neutral-400 text-xs mt-1">
                           {h.from_user_name && `From: ${h.from_user_name}`} {h.to_user_name && `To: ${h.to_user_name}`}
                         </p>
-                        {h.note && <p className="text-neutral-500 mt-1 italic">"{h.note}"</p>}
+                        {h.note && <p className="text-neutral-500 mt-1 italic">&ldquo;{h.note}&rdquo;</p>}
                       </div>
                     ))
                   )}

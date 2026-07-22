@@ -32,7 +32,8 @@ class LogoutView(APIView):
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 class FinanceDashboardView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'finance'
 
     def get(self, request):
         active_fy = FinancialYear.objects.filter(is_active=True).first()
@@ -126,15 +127,198 @@ class FinanceDashboardView(APIView):
             'recent_expenses': recent_expenses,
         })
 
-class SettingsView(APIView):
+class IntegrationsView(APIView):
+    """Configure third-party integrations from Settings.
+
+    API keys are write-only: a caller can set or clear one, but the stored
+    value is never returned — only whether a key is present.
+    """
+
     permission_classes = [permissions.IsAuthenticated, IsSuperadmin]
 
+    def _serialize(self, integration, provider, spec):
+        return {
+            'provider': provider,
+            'label': spec.get('label', provider),
+            'description': spec.get('description', ''),
+            'help': spec.get('help', ''),
+            'needs_api_key': spec.get('needs_api_key', False),
+            'supports_sync': spec.get('supports_sync', False),
+            'credential_label': spec.get('credential_label', 'API key'),
+            'default_base_url': spec.get('default_base_url', ''),
+            'is_enabled': bool(integration and integration.is_enabled),
+            'base_url': (integration.base_url if integration else '') or spec.get('default_base_url', ''),
+            'has_api_key': bool(integration and integration.has_api_key),
+            'last_status': integration.last_status if integration else '',
+            'last_message': integration.last_message if integration else '',
+            'last_sync_at': integration.last_sync_at if integration else None,
+        }
+
     def get(self, request):
-        settings = AppSettings.objects.all()
-        return Response({s.key: s.value for s in settings})
+        existing = {i.provider: i for i in Integration.objects.all()}
+        return Response({
+            'integrations': [
+                self._serialize(existing.get(provider), provider, spec)
+                for provider, spec in Integration.PROVIDER_SPECS.items()
+            ]
+        })
+
+    def put(self, request):
+        provider = (request.data.get('provider') or '').strip()
+        spec = Integration.PROVIDER_SPECS.get(provider)
+        if not spec:
+            return Response(
+                {'detail': f"Unknown integration '{provider}'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        integration, _ = Integration.objects.get_or_create(provider=provider)
+        if 'is_enabled' in request.data:
+            integration.is_enabled = bool(request.data['is_enabled'])
+        if 'base_url' in request.data:
+            integration.base_url = (request.data.get('base_url') or '').strip()
+        if request.data.get('clear_api_key'):
+            integration.set_api_key('')
+        elif request.data.get('api_key'):
+            integration.set_api_key(str(request.data['api_key']).strip())
+
+        if integration.is_enabled and spec.get('needs_api_key') and not integration.has_api_key:
+            return Response(
+                {'detail': 'An API key is required before enabling this integration.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        integration.updated_by = request.user
+        integration.save()
+        return Response(self._serialize(integration, provider, spec))
+
+
+class IntegrationTestView(APIView):
+    """Run an integration once, on demand, and report what happened."""
+
+    permission_classes = [permissions.IsAuthenticated, IsSuperadmin]
+
+    COMMANDS = {'EXCHANGE_RATES': 'fetch_exchange_rates', 'BREX': 'sync_brex'}
+
+    def post(self, request):
+        from io import StringIO
+
+        from django.core.management import call_command
+
+        from core.notify import send_to_provider
+
+        provider = (request.data.get('provider') or '').strip()
+
+        # Chat/webhook providers are tested by actually delivering a message.
+        if provider in Integration.CHAT_PROVIDERS:
+            integration = Integration.objects.filter(provider=provider).first()
+            if not integration:
+                return Response(
+                    {'ok': False, 'output': 'Save the webhook URL first.'},
+                    status=status.HTTP_200_OK,
+                )
+            ok, detail = send_to_provider(
+                integration,
+                title='ITCommand test message',
+                message='If you can read this, the integration is working.',
+            )
+            integration.mark_result('OK' if ok else 'ERROR', detail)
+            return Response({'ok': ok, 'output': detail})
+
+        command = self.COMMANDS.get(provider)
+        if not command:
+            return Response(
+                {'detail': f"Nothing to run for '{provider}'."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        out, err = StringIO(), StringIO()
+        try:
+            call_command(command, stdout=out, stderr=err)
+        except Exception as exc:  # a provider error must not 500 the page
+            return Response(
+                {'ok': False, 'output': f'{type(exc).__name__}: {exc}'},
+                status=status.HTTP_200_OK,
+            )
+        problem = err.getvalue().strip()
+        return Response({
+            'ok': not problem,
+            'output': problem or out.getvalue().strip() or 'Completed.',
+        })
+
+
+class ListOfValuesView(APIView):
+    """Admin-managed dropdown values, for populating selects in the UI.
+
+    GET /api/lov/                -> every group
+    GET /api/lov/?group=currency -> one group
+
+    Falls back to the application's built-in choices when a group has not
+    been customised, so the UI never renders an empty dropdown.
+    """
+
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        from core.lov import GROUPS, get_values
+
+        requested = (request.query_params.get('group') or '').strip()
+        keys = [requested] if requested else list(GROUPS)
+        payload = {}
+        for key in keys:
+            if key not in GROUPS:
+                return Response(
+                    {'detail': f"Unknown group '{key}'."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            payload[key] = [
+                {'value': code, 'label': label} for code, label in get_values(key)
+            ]
+        if requested:
+            return Response({'group': requested, 'values': payload[requested]})
+        return Response(payload)
+
+
+class SettingsView(APIView):
+    """Company-wide display settings.
+
+    Everyone signed in may READ these — currency and company name drive how
+    money and headers render on every page — but only a superadmin may write.
+    Internal bookkeeping rows (automation run markers) are never exposed.
+    """
+
+    # Keys any authenticated user may read. Anything else is superadmin-only,
+    # so adding an internal key later does not leak it by default.
+    PUBLIC_KEYS = ('company_name', 'default_currency', 'fiscal_year_start_month')
+    DEFAULTS = {
+        'company_name': '',
+        'default_currency': 'USD',
+        'fiscal_year_start_month': '1',
+    }
+
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [permissions.IsAuthenticated()]
+        return [permissions.IsAuthenticated(), IsSuperadmin()]
+
+    def get(self, request):
+        stored = {s.key: s.value for s in AppSettings.objects.all()}
+        if request.user.role == 'SUPERADMIN':
+            payload = {
+                key: value for key, value in stored.items()
+                if not key.startswith('automation.')
+            }
+        else:
+            payload = {key: stored.get(key) for key in self.PUBLIC_KEYS}
+        # Always answer with a usable value so the frontend never has to guess.
+        for key, fallback in self.DEFAULTS.items():
+            if not payload.get(key):
+                payload[key] = fallback
+        return Response(payload)
 
     def put(self, request):
         for key, value in request.data.items():
+            if key.startswith('automation.'):
+                continue  # internal bookkeeping, not user-editable
             AppSettings.objects.update_or_create(key=key, defaults={'value': value})
         return Response({"status": "success"})
 

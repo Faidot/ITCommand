@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from core.models import TicketCategory, SLAPolicy, Ticket, TicketComment, TicketAttachment
+from core.permissions import has_role_permission
 
 User = get_user_model()
 
@@ -94,16 +95,26 @@ class TicketDetailSerializer(serializers.ModelSerializer):
     def get_comments(self, obj):
         request = self.context.get('request')
         qs = obj.comments.all()
-        # If the requester is viewing, hide internal notes
-        if request and request.user == obj.requester and request.user.role == 'VIEWER':
+        # Self-service/view-only custom roles must never receive internal notes.
+        can_manage = bool(request) and (
+            has_role_permission(request.user, 'helpdesk', 'edit')
+            or has_role_permission(request.user, 'helpdesk', 'delete')
+        )
+        if request and not can_manage:
             qs = qs.filter(is_internal=False)
         return TicketCommentSerializer(qs, many=True).data
 
     def get_suggested_kb_articles(self, obj):
         from core.serializers.kb import KBArticleListSerializer
-        if not obj.category:
+        from core.views.kb import visible_to
+
+        request = self.context.get('request')
+        if not obj.category or not request:
             return []
-        articles = obj.category.kb_articles.filter(status='PUBLISHED').order_by('-view_count')[:3]
+        articles = visible_to(
+            request.user,
+            obj.category.kb_articles.filter(status='PUBLISHED'),
+        ).order_by('-view_count')[:3]
         return KBArticleListSerializer(articles, many=True).data
 
 

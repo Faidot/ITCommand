@@ -1,83 +1,109 @@
+"""Create or refresh vendor-contract notifications for active administrators."""
+
+from datetime import timedelta
+
 from django.core.management.base import BaseCommand
 from django.utils import timezone
-from datetime import timedelta
-from core.models.vendors import VendorContract
-from core.models.notifications import Notification
+
+from core.models.system import Notification
 from core.models.users import User
+from core.models.vendors import ContractStatus, VendorContract
+
+
+ALERT_TYPE = "CONTRACT"
+
 
 class Command(BaseCommand):
-    help = 'Checks for vendor contracts expiring soon or already expired and generates notifications'
+    help = "Check vendor contracts for upcoming or past expiry dates."
 
     def handle(self, *args, **kwargs):
-        now = timezone.now().date()
-        thirty_days_later = now + timedelta(days=30)
-        
-        # Get admin users to notify
-        admins = User.objects.filter(role__in=['ADMIN', 'SUPERADMIN'], is_active=True)
-        if not admins.exists():
+        today = timezone.localdate()
+        alert_through = today + timedelta(days=30)
+
+        # A contract can pass its end date without being saved again. Keep its
+        # persisted status accurate before creating notifications.
+        VendorContract.objects.filter(
+            status=ContractStatus.ACTIVE,
+            end_date__lt=today,
+        ).update(status=ContractStatus.EXPIRED)
+
+        admins = list(User.objects.filter(
+            role__in=["ADMIN", "SUPERADMIN"],
+            is_active=True,
+        ))
+        if not admins:
             self.stdout.write(self.style.WARNING("No active admins to notify."))
             return
 
-        # 1. Check for Expiring Contracts (within 30 days)
-        expiring_contracts = VendorContract.objects.filter(
-            status='ACTIVE',
-            end_date__isnull=False,
-            end_date__lte=thirty_days_later,
-            end_date__gt=now
+        contracts = list(
+            VendorContract.objects.select_related("vendor").filter(
+                status=ContractStatus.ACTIVE,
+                end_date__isnull=False,
+                end_date__gte=today,
+                end_date__lte=alert_through,
+            )
+        )
+        contracts.extend(
+            VendorContract.objects.select_related("vendor").filter(
+                status=ContractStatus.EXPIRED,
+                end_date__isnull=False,
+                end_date__lt=today,
+            )
         )
 
-        for contract in expiring_contracts:
-            days_left = (contract.end_date - now).days
-            message = f"Contract '{contract.title}' with {contract.vendor.name} is expiring in {days_left} days ({contract.end_date})."
-            
-            # Check if notification already exists recently to avoid spam
-            recent_notif = Notification.objects.filter(
-                title__contains=contract.contract_number,
+        created = updated = unchanged = 0
+        for contract in contracts:
+            if contract.status == ContractStatus.EXPIRED:
+                message = (
+                    f"Contract '{contract.title}' with {contract.vendor.name} "
+                    f"expired on {contract.end_date} and has not been renewed."
+                )
+            else:
+                message = (
+                    f"Contract '{contract.title}' with {contract.vendor.name} "
+                    f"expires on {contract.end_date}."
+                )
+
+            # The contract id makes this stable even when one vendor has several
+            # contracts. Unchanged alerts preserve the user's read state; a new
+            # date/status changes the message and reopens the existing alert.
+            link = f"/vendors/{contract.vendor_id}?contract={contract.id}"
+            for admin in admins:
+                result = self._upsert_notification(admin, link, message)
+                if result == "created":
+                    created += 1
+                elif result == "updated":
+                    updated += 1
+                else:
+                    unchanged += 1
+
+        self.stdout.write(self.style.SUCCESS(
+            "Contract alerts checked: "
+            f"{created} created, {updated} updated/reopened, "
+            f"{unchanged} unchanged."
+        ))
+
+    @staticmethod
+    def _upsert_notification(user, link, message):
+        notification = Notification.objects.filter(
+            user=user,
+            notification_type=ALERT_TYPE,
+            link=link,
+        ).order_by("id").first()
+
+        if notification is None:
+            Notification.objects.create(
+                user=user,
+                notification_type=ALERT_TYPE,
                 message=message,
-                created_at__gte=timezone.now() - timedelta(days=7)
-            ).exists()
-            
-            if not recent_notif:
-                for admin in admins:
-                    Notification.objects.create(
-                        user=admin,
-                        title=f"Contract Expiring Soon: {contract.contract_number}",
-                        message=message,
-                        type='WARNING',
-                        link=f"/vendors/{contract.vendor.id}"
-                    )
-                self.stdout.write(self.style.SUCCESS(f"Notified admins about expiring contract: {contract.contract_number}"))
+                link=link,
+            )
+            return "created"
 
+        if notification.message == message:
+            return "unchanged"
 
-        # 2. Check for Expired Contracts
-        # Note: The model's save method auto-updates status to EXPIRED if end_date < today
-        # But for ones already marked EXPIRED, we might want to alert if not renewed.
-        # We will just alert for newly expired ones (expired within the last 7 days)
-        recently_expired = VendorContract.objects.filter(
-            status='EXPIRED',
-            end_date__isnull=False,
-            end_date__gte=now - timedelta(days=7),
-            end_date__lte=now
-        )
-
-        for contract in recently_expired:
-            message = f"Contract '{contract.title}' with {contract.vendor.name} has expired on {contract.end_date} and is not renewed."
-            
-            recent_notif = Notification.objects.filter(
-                title__contains=contract.contract_number,
-                message=message,
-                created_at__gte=timezone.now() - timedelta(days=3)
-            ).exists()
-            
-            if not recent_notif:
-                for admin in admins:
-                    Notification.objects.create(
-                        user=admin,
-                        title=f"Contract Expired: {contract.contract_number}",
-                        message=message,
-                        type='ERROR',
-                        link=f"/vendors/{contract.vendor.id}"
-                    )
-                self.stdout.write(self.style.SUCCESS(f"Notified admins about expired contract: {contract.contract_number}"))
-
-        self.stdout.write(self.style.SUCCESS("Successfully checked contract alerts."))
+        notification.message = message
+        notification.is_read = False
+        notification.save(update_fields=["message", "is_read"])
+        return "updated"

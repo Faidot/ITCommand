@@ -16,6 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Checkbox } from "@/components/ui/checkbox";
 import { useAuthStore } from "@/store/authStore";
 import { format } from "date-fns";
+import { useMoney, useCurrencyCode } from "@/lib/currency";
 
 const SC: Record<string,string> = {
   DRAFT:"bg-neutral-100 text-neutral-700",SUBMITTED:"bg-blue-100 text-blue-800",
@@ -27,6 +28,7 @@ const SC: Record<string,string> = {
 const PC: Record<string,string> = {LOW:"bg-neutral-100 text-neutral-600",NORMAL:"bg-blue-50 text-blue-600",URGENT:"bg-orange-100 text-orange-700",CRITICAL:"bg-red-100 text-red-700"};
 
 export default function PRDetailPage() {
+  const money = useMoney();
   const params = useParams(); const router = useRouter();
   const { user } = useAuthStore();
   const prId = params.id as string;
@@ -59,7 +61,7 @@ export default function PRDetailPage() {
     finally { setLoading(false); }
   };
 
-  const fmt = (a:number) => new Intl.NumberFormat("en-PK",{style:"currency",currency:"PKR",maximumFractionDigits:0}).format(a);
+  const fmt = (a: number) => money(a, { decimals: 0 });
   const isManager = user?.role && ['MANAGER','ADMIN','SUPERADMIN'].includes(user.role);
   const isOwner = pr?.requested_by === user?.id;
 
@@ -363,11 +365,11 @@ export default function PRDetailPage() {
                         </div>
                         <div className="rounded border px-2 py-1 bg-card">
                           <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Unit Price</div>
-                          <div className="font-medium tabular-nums">${item.unit_price.toFixed(2)}</div>
+                          <div className="font-medium tabular-nums">{money(item.unit_price)}</div>
                         </div>
                         <div className="rounded border px-2 py-1 bg-card">
                           <div className="text-[10px] text-muted-foreground uppercase tracking-wider">Total</div>
-                          <div className="font-medium tabular-nums">${item.total_price.toFixed(2)}</div>
+                          <div className="font-medium tabular-nums">{money(item.total_price)}</div>
                         </div>
                       </div>
                     </div>

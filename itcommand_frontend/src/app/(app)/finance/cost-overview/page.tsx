@@ -6,10 +6,11 @@ import { toast } from "sonner";
 import api from "@/lib/api";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useMoney } from "@/lib/currency";
 
-const money = (n: number) => `$${(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export default function CostOverviewPage() {
+  const money = useMoney();
   const [data, setData] = useState<any>(null);
 
   useEffect(() => {

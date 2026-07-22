@@ -33,6 +33,7 @@ MODULES = [
     {"key": "seating", "label": "Seating Plan", "group": "People"},
     {"key": "assets", "label": "Asset Inventory", "group": "Assets"},
     {"key": "licenses", "label": "Software Licenses", "group": "Assets"},
+    {"key": "subscriptions", "label": "Software Subscriptions", "group": "Assets"},
     {"key": "vendors", "label": "Vendors", "group": "Procurement"},
     {"key": "procurement", "label": "Purchase Requests", "group": "Procurement"},
     {"key": "network", "label": "Network", "group": "Infrastructure"},
@@ -67,7 +68,7 @@ def _grant(perms, module, actions):
 # refine in the UI.
 def _viewer():
     p = blank_permissions()
-    for m in ["dashboard", "assets", "licenses", "kb", "helpdesk", "reports",
+    for m in ["dashboard", "assets", "licenses", "subscriptions", "kb", "helpdesk", "reports",
               "users", "departments", "vendors", "network", "seating"]:
         _grant(p, m, ["view"])
     return p
@@ -75,7 +76,7 @@ def _viewer():
 
 def _manager():
     p = _viewer()
-    for m in ["assets", "licenses", "vendors", "procurement", "network", "kb",
+    for m in ["assets", "licenses", "subscriptions", "vendors", "procurement", "network", "kb",
               "helpdesk", "onboarding", "seating", "vault", "finance"]:
         _grant(p, m, ["view", "add", "edit"])
     return p
@@ -102,7 +103,7 @@ def _hr():
 def _accounts():
     p = blank_permissions()
     _grant(p, "dashboard", ["view"])
-    for m in ["finance", "vendors", "procurement", "reports"]:
+    for m in ["finance", "subscriptions", "vendors", "procurement", "reports"]:
         _grant(p, m, ["view", "add", "edit"])
     _grant(p, "assets", ["view"])
     return p

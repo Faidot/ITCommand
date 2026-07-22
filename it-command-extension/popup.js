@@ -86,10 +86,16 @@ function startTimer() {
   timerInterval = setInterval(tick, 1000);
 }
 
+function updateVaultExpiry(result) {
+  if (!result?.vaultExpiresAt) return;
+  vaultExpiresAt = result.vaultExpiresAt;
+  startTimer();
+}
+
 async function loadMatches() {
   $("domainLabel").textContent = currentDomain || "this site";
   const list = $("matchesList");
-  list.innerHTML = "";
+  list.replaceChildren();
   $("emptyMatches").classList.add("hidden");
 
   if (!currentDomain) {
@@ -105,6 +111,7 @@ async function loadMatches() {
     $("emptyMatches").textContent = "Couldn't load matches.";
     return;
   }
+  updateVaultExpiry(res);
   if (!res.matches.length) {
     $("emptyMatches").classList.remove("hidden");
     $("emptyMatches").textContent = "No saved credentials for this site.";
@@ -150,15 +157,20 @@ async function fillCredential(m, btn) {
     setTimeout(() => { btn.textContent = "Fill"; btn.disabled = false; }, 1500);
     return;
   }
+  updateVaultExpiry(r);
   if (activeTab?.id != null) {
     chrome.tabs.sendMessage(
       activeTab.id,
       { type: "FILL", username: m.username, password: r.password },
-      () => {
-        void chrome.runtime.lastError;
+      (result) => {
+        const sendError = chrome.runtime.lastError;
+        if (sendError || !result?.ok) {
+          btn.textContent = result?.error === "no_password_field" ? "No form" : "Failed";
+          setTimeout(() => { btn.textContent = "Fill"; btn.disabled = false; }, 1500);
+          return;
+        }
         btn.textContent = "Filled";
-        setTimeout(() => { btn.textContent = "Fill"; btn.disabled = false; }, 1200);
-        window.close();
+        setTimeout(() => window.close(), 350);
       }
     );
   } else {
@@ -170,6 +182,7 @@ async function fillCredential(m, btn) {
 async function copyPassword(m, btn) {
   const r = await sendBg("REVEAL", { id: m.id });
   if (!r?.ok) return;
+  updateVaultExpiry(r);
   try {
     await navigator.clipboard.writeText(r.password);
     btn.textContent = "Copied";
@@ -195,7 +208,7 @@ async function loadNetworkDevice() {
 
   if (!res?.ok) {
     $("noDevice").classList.remove("hidden");
-    $("noDevice").innerHTML = res?.error === "no_permission"
+    $("noDevice").textContent = res?.error === "no_permission"
       ? "You don't have access to the Network module."
       : "Couldn't reach the server.";
     return;
@@ -203,8 +216,13 @@ async function loadNetworkDevice() {
 
   currentDevice = res.device;
   if (!currentDevice) {
-    $("noDevice").classList.remove("hidden");
-    $("noDeviceHost").textContent = currentDomain || "this site";
+    const host = document.createElement("b");
+    host.textContent = currentDomain || "this site";
+    $("noDevice").replaceChildren(
+      document.createTextNode("No network device matches "),
+      host,
+      document.createTextNode("."),
+    );
     $("noDevice").classList.remove("hidden");
     return;
   }
@@ -225,9 +243,17 @@ function renderDeviceCard(d) {
     ["Uptime", d.uptime_percent != null ? `${d.uptime_percent}%` : null],
     ["Warranty", d.warranty_expiry],
   ].filter(([, v]) => v);
-  $("devRows").innerHTML = rows
-    .map(([k, v]) => `<div class="drow"><span>${k}</span><b>${v}</b></div>`)
-    .join("");
+  const rowNodes = rows.map(([key, value]) => {
+    const row = document.createElement("div");
+    row.className = "drow";
+    const label = document.createElement("span");
+    label.textContent = key;
+    const detail = document.createElement("b");
+    detail.textContent = String(value);
+    row.append(label, detail);
+    return row;
+  });
+  $("devRows").replaceChildren(...rowNodes);
 
   // Disable the button matching the current status.
   document.querySelectorAll(".status-actions .mini").forEach((b) => {

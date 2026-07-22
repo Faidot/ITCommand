@@ -134,7 +134,8 @@ class OnboardingTaskViewSet(viewsets.ModelViewSet):
                 record.save()
 
 class OnboardingDashboardView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'onboarding'
 
     def get(self, request):
         today = timezone.now().date()

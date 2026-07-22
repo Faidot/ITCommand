@@ -7,6 +7,11 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
+# Network reachability automation uses the system `ping` executable.
+RUN apt-get update \
+    && apt-get install --no-install-recommends -y iputils-ping \
+    && rm -rf /var/lib/apt/lists/*
+
 # Python deps first so this layer is cached unless requirements change.
 # psycopg2-binary / Pillow / cryptography all ship prebuilt wheels, so no
 # system build toolchain is required here.

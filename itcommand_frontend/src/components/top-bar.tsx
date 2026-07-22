@@ -35,6 +35,27 @@ import {
 import api from "@/lib/api"
 import { toast } from "sonner"
 
+interface AppNotification {
+  id: number
+  message: string
+  notification_type: string
+  is_read: boolean
+  link?: string | null
+  created_at: string
+}
+
+function isAppNotification(value: unknown): value is AppNotification {
+  if (!value || typeof value !== "object") return false
+  const item = value as Record<string, unknown>
+  return (
+    typeof item.id === "number"
+    && typeof item.message === "string"
+    && typeof item.notification_type === "string"
+    && typeof item.is_read === "boolean"
+    && typeof item.created_at === "string"
+  )
+}
+
 export function TopBar() {
   const pathname = usePathname()
   const router = useRouter()
@@ -47,7 +68,8 @@ export function TopBar() {
   const [searchResults, setSearchResults] = React.useState<any[]>([])
 
   // Notifications State
-  const [notifications, setNotifications] = React.useState<any[]>([])
+  const [notifications, setNotifications] = React.useState<AppNotification[]>([])
+  const desktopNotifiedIds = React.useRef<Set<number> | null>(null)
   
   React.useEffect(() => {
     const down = (e: KeyboardEvent) => {
@@ -84,25 +106,74 @@ export function TopBar() {
     return () => clearTimeout(delayDebounceFn)
   }, [searchQuery])
 
-  const fetchNotifications = async () => {
+  const fetchNotifications = React.useCallback(async () => {
     if (!user) return;
     try {
-      const res = await api.get('/notifications/')
-      setNotifications(res.data)
+      const generateLegacyAlerts = desktopNotifiedIds.current === null
+      const res = await api.get(
+        generateLegacyAlerts ? '/notifications/' : '/notifications/?generate=false'
+      )
+      const nextNotifications = Array.isArray(res.data)
+        ? res.data.filter(isAppNotification).filter((item) => !item.is_read)
+        : []
+      setNotifications(nextNotifications)
+
+      const seen = desktopNotifiedIds.current
+      if (seen === null) {
+        desktopNotifiedIds.current = new Set(nextNotifications.map((item) => item.id))
+        return
+      }
+
+      if (typeof window !== "undefined" && "Notification" in window && window.Notification.permission === "granted") {
+        nextNotifications
+          .filter((item) => (
+            !item.is_read
+            && item.notification_type === "SUBSCRIPTION"
+            && !seen.has(item.id)
+          ))
+          .forEach((item) => {
+            const desktopNotification = new window.Notification("Subscription reminder", {
+              body: item.message,
+              icon: "/icon.svg",
+              tag: `it-command-subscription-${item.id}`,
+            })
+            desktopNotification.onclick = () => {
+              window.focus()
+              if (item.link) window.location.assign(item.link)
+              desktopNotification.close()
+            }
+          })
+      }
+      nextNotifications.forEach((item) => seen.add(item.id))
     } catch (error) {
       console.error("Failed to load notifications", error)
     }
-  }
-
-  React.useEffect(() => {
-    fetchNotifications()
-    // Could set up polling here
   }, [user])
 
-  const markAsRead = async (id: number, link?: string) => {
+  React.useEffect(() => {
+    if (!user) {
+      setNotifications([])
+      desktopNotifiedIds.current = null
+      return
+    }
+
+    desktopNotifiedIds.current = null
+    void fetchNotifications()
+    const intervalId = window.setInterval(() => void fetchNotifications(), 60_000)
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void fetchNotifications()
+    }
+    document.addEventListener("visibilitychange", refreshWhenVisible)
+    return () => {
+      window.clearInterval(intervalId)
+      document.removeEventListener("visibilitychange", refreshWhenVisible)
+    }
+  }, [fetchNotifications, user])
+
+  const markAsRead = async (id: number, link?: string | null) => {
     try {
       await api.post(`/notifications/${id}/read/`)
-      setNotifications(notifications.filter(n => n.id !== id))
+      setNotifications((current) => current.filter((notification) => notification.id !== id))
       if (link) {
         router.push(link)
       }

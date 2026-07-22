@@ -206,7 +206,8 @@ class IPAddressPoolViewSet(viewsets.ModelViewSet):
 
 
 class NetworkDashboardView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'network'
 
     def get(self, request):
         now = timezone.now()
@@ -304,7 +305,8 @@ class NetworkDashboardView(APIView):
 
 class NetworkTopologyView(APIView):
     """Nodes (devices) + edges (port interconnections) for the topology map."""
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'network'
 
     def get(self, request):
         devices = NetworkDevice.objects.exclude(status='DECOMMISSIONED')

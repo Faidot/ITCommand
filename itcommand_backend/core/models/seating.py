@@ -93,6 +93,24 @@ class SeatAssignment(models.Model):
         related_name='pending_move_outs',
     )
 
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=['seat'],
+                condition=models.Q(is_active=True, status='ACTIVE'),
+                name='unique_active_seat_occupant',
+            ),
+            models.UniqueConstraint(
+                fields=['user'],
+                condition=models.Q(
+                    is_active=True,
+                    status='ACTIVE',
+                    user__isnull=False,
+                ),
+                name='unique_active_seat_per_user',
+            ),
+        ]
+
     def __str__(self):
         who = self.user.full_name if self.user else 'Unknown'
         return f"{who} -> {self.seat.seat_code} [{self.status}]"

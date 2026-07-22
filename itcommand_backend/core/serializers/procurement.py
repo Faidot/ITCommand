@@ -68,7 +68,8 @@ class PurchaseRequestDetailSerializer(serializers.ModelSerializer):
         fields = '__all__'
         read_only_fields = [
             'pr_number', 'total_estimated_cost', 'total_actual_cost',
-            'approved_by', 'approved_at', 'created_at', 'updated_at'
+            'requested_by', 'status', 'approved_by', 'approved_at',
+            'rejection_reason', 'created_at', 'updated_at'
         ]
 
 

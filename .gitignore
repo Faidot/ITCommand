@@ -1,8 +1,45 @@
+# Operating-system/editor artifacts
 .DS_Store
-.npm_cache/
-*.log
+**/.DS_Store
+.idea/
+.vscode/
 
-# Local environment (secrets) — keep .env.example, ignore real .env
+# Logs and local caches
+*.log
+.npm_cache/
+**/.npm_cache/
+*.tsbuildinfo
+
+# Local environment files and secrets. The committed template is explicitly kept.
 .env
-.env.local
-.env.*.local
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
+
+# Python runtime/build artifacts
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.venv/
+venv/
+**/.venv/
+**/venv/
+*.sqlite3
+itcommand_backend/media/
+itcommand_backend/staticfiles/
+
+# JavaScript runtime/build artifacts
+node_modules/
+**/node_modules/
+.next/
+**/.next/
+out/
+coverage/
+
+# Local exports/backups can contain production data.
+*.sql
+*.sqlite
+datadump.json
+*_backup.tar.gz

@@ -35,6 +35,7 @@ import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/componen
 import { Badge } from "@/components/ui/badge";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
+import { useMoney, useCurrencyCode } from "@/lib/currency";
 import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter,
 } from "@/components/ui/sheet";
@@ -117,6 +118,8 @@ const PLATFORM_OPTIONS = [
 // ───────────── Page ─────────────
 
 export default function WorkspacesPage() {
+  const money = useMoney();
+  const currencyCode = useCurrencyCode();
   const { user } = useAuthStore();
   const isAdmin = user?.role === "ADMIN" || user?.role === "SUPERADMIN";
 
@@ -348,8 +351,8 @@ export default function WorkspacesPage() {
           <Tile label="Workspaces" value={String(stats.total)} icon={<Building2 className="w-4 h-4 text-blue-500" />} />
           <Tile label="Active" value={String(stats.active)} icon={<CheckCircle2 className="w-4 h-4 text-emerald-500" />} />
           <Tile label="Trials" value={String(stats.trial)} icon={<FlaskConical className="w-4 h-4 text-blue-500" />} />
-          <Tile label="Monthly" value={`$${stats.monthly_total.toFixed(2)}`} icon={<DollarSign className="w-4 h-4 text-emerald-500" />} />
-          <Tile label="Annual est." value={`$${stats.annual_total.toFixed(0)}`} icon={<DollarSign className="w-4 h-4 text-emerald-500" />} />
+          <Tile label="Monthly" value={money(stats.monthly_total)} icon={<DollarSign className="w-4 h-4 text-emerald-500" />} />
+          <Tile label="Annual est." value={money(stats.annual_total, { decimals: 0 })} icon={<DollarSign className="w-4 h-4 text-emerald-500" />} />
           <Tile label="Renew ≤30d" value={String(stats.renewing_soon)} icon={<Calendar className="w-4 h-4 text-amber-500" />} tone={stats.renewing_soon > 0 ? "warn" : undefined} />
         </div>
       )}
@@ -474,7 +477,7 @@ export default function WorkspacesPage() {
                 <TableHead>Login</TableHead>
                 <TableHead>Owner</TableHead>
                 <TableHead>Plan / Cycle</TableHead>
-                <TableHead className="text-right">$/mo</TableHead>
+                <TableHead className="text-right">{currencyCode}/mo</TableHead>
                 <TableHead>Renewal</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
@@ -513,7 +516,7 @@ export default function WorkspacesPage() {
                     </div>
                   </TableCell>
                   <TableCell className="text-right tabular-nums">
-                    {ws.monthly_cost ? `$${ws.monthly_cost}` : "—"}
+                    {ws.monthly_cost ? money(ws.monthly_cost) : "—"}
                   </TableCell>
                   <TableCell>{renderRenewalBadge(ws.renewal_date)}</TableCell>
                   <TableCell className="text-right">
@@ -689,7 +692,7 @@ export default function WorkspacesPage() {
                   name="monthly_cost"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Cost / Period ($)</FormLabel>
+                      <FormLabel>Cost / Period ({currencyCode})</FormLabel>
                       <FormControl><Input type="number" step="0.01" placeholder="49.99" {...field} /></FormControl>
                       <FormMessage />
                     </FormItem>
@@ -810,6 +813,7 @@ function WorkspaceCard({
   onMarkRenewed: () => void;
   onCopyEmail: () => void;
 }) {
+  const money = useMoney();
   return (
     <Card className="relative overflow-hidden group hover:shadow-md transition-all">
       <CardHeader className="pb-2">
@@ -877,9 +881,9 @@ function WorkspaceCard({
         <div className="flex items-center justify-between border-t pt-2 mt-2">
           <div className="text-xs">
             <span className="text-neutral-500">{ws.billing_cycle.toLowerCase()}: </span>
-            <span className="font-medium">{ws.monthly_cost ? `$${ws.monthly_cost}` : "—"}</span>
+            <span className="font-medium">{ws.monthly_cost ? money(ws.monthly_cost) : "—"}</span>
             {ws.annual_cost != null && (
-              <span className="text-neutral-500 ml-1">(${ws.annual_cost.toFixed(0)}/yr)</span>
+              <span className="text-neutral-500 ml-1">({money(ws.annual_cost, { decimals: 0 })}/yr)</span>
             )}
           </div>
           <div>{renderRenewalBadge(ws.renewal_date)}</div>
@@ -915,6 +919,7 @@ function WorkspaceDetailDrawer({
   onCopy: (text: string, label: string) => void;
   statusBadge: (s: AccountWorkspace["status"]) => React.ReactNode;
 }) {
+  const money = useMoney();
   const [creds, setCreds] = useState<LinkedCredential[]>([]);
   const [loadingCreds, setLoadingCreds] = useState(false);
 
@@ -952,8 +957,8 @@ function WorkspaceDetailDrawer({
             <DetailRow label="Plan" value={ws.subscription_plan || "—"} />
             <DetailRow label="Seats" value={ws.seats != null ? String(ws.seats) : "—"} />
             <DetailRow label="Billing cycle" value={ws.billing_cycle.toLowerCase()} />
-            <DetailRow label={`Cost / ${ws.billing_cycle.toLowerCase()}`} value={ws.monthly_cost ? `$${ws.monthly_cost}` : "—"} />
-            <DetailRow label="Annual est." value={ws.annual_cost != null ? `$${ws.annual_cost.toFixed(2)}` : "—"} />
+            <DetailRow label={`Cost / ${ws.billing_cycle.toLowerCase()}`} value={ws.monthly_cost ? money(ws.monthly_cost) : "—"} />
+            <DetailRow label="Annual est." value={ws.annual_cost != null ? money(ws.annual_cost) : "—"} />
             <DetailRow label="Renewal" value={ws.renewal_date || "—"} />
             <DetailRow label="Last renewed" value={ws.last_renewed_at || "—"} />
           </div>

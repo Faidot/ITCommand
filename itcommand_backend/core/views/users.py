@@ -16,7 +16,7 @@ from core.encryption import decrypt_value
 from core.mixins import AuditLogMixin
 from core.permissions import IsSuperadmin, IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher, VaultAccessPermission, UserManagementPermission, HasModulePermission
 from rest_framework.pagination import PageNumberPagination
-from rest_framework.pagination import PageNumberPagination
+from rest_framework.throttling import ScopedRateThrottle
 
 def get_tokens_for_user(user):
     refresh = RefreshToken.for_user(user)
@@ -28,6 +28,8 @@ def get_tokens_for_user(user):
 
 class LoginView(APIView):
     permission_classes = [permissions.AllowAny]
+    throttle_classes = [ScopedRateThrottle]
+    throttle_scope = 'login'
 
     def post(self, request):
         serializer = LoginSerializer(data=request.data)
@@ -162,6 +164,24 @@ class UserViewSet(AuditLogMixin, viewsets.ModelViewSet):
             response.data['temp_password'] = self._temp_password
         return response
 
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        if instance.pk == request.user.pk:
+            return Response(
+                {'detail': 'You cannot deactivate your own account.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+        if (
+            instance.role == 'SUPERADMIN'
+            and instance.is_active
+            and User.objects.filter(role='SUPERADMIN', is_active=True).count() <= 1
+        ):
+            return Response(
+                {'detail': 'The last active Superadmin cannot be deactivated.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+        return super().destroy(request, *args, **kwargs)
+
     def perform_destroy(self, instance):
         # Soft delete: keep history, just deactivate.
         instance.is_active = False
@@ -212,6 +232,11 @@ class UserViewSet(AuditLogMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=['post'], permission_classes=[IsAdminOrSuperadmin])
     def reset_password(self, request, pk=None):
         user = self.get_object()
+        if request.user.role == 'ADMIN' and user.role in ['ADMIN', 'SUPERADMIN']:
+            return Response(
+                {'detail': 'Only a Superadmin can reset this account password.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         temp_password = self.generate_temp_password()
         user.set_password(temp_password)
         user.save()

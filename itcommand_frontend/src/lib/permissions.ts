@@ -14,15 +14,10 @@ export interface PermUser {
 /** Can this user perform `action` on `module`? */
 export function can(user: PermUser | null | undefined, module: string, action: ActionKey = "view"): boolean {
   if (!user) return false;
-  // The dashboard is a harmless landing page — always viewable so a freshly
-  // created role with no grants never lands on a dead end.
-  if (module === "dashboard" && action === "view") return true;
   // Superadmin is always all-access, regardless of what's stored.
   if (user.role === "SUPERADMIN") return true;
-  // Defensive: if a stale session has no permission map yet, fall back to the
-  // legacy behaviour (allow) rather than locking the user out of everything.
-  // The backend still enforces, so this is UI-only.
-  if (!user.permissions) return true;
+  // Unknown/stale sessions fail closed until /auth/me returns a permission map.
+  if (!user.permissions) return false;
   return !!user.permissions?.[module]?.[action];
 }
 
@@ -36,6 +31,7 @@ const ROUTE_MODULES: Array<[string, string]> = [
   ["/asset-notes", "assets"],
   ["/assets", "assets"],
   ["/licenses", "licenses"],
+  ["/subscriptions", "subscriptions"],
   ["/vendors", "vendors"],
   ["/procurement", "procurement"],
   ["/network", "network"],

@@ -12,3 +12,6 @@ from .vendors import *
 from .procurement import *
 from .network import *
 from .kb import *
+from .subscriptions import *
+from .calendar import *
+from .discovery import *

@@ -11,6 +11,7 @@ import {
 
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { useMoney } from "@/lib/currency";
 
 export const COLORS = [
   "#6366f1", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6",
@@ -109,10 +110,10 @@ export function ChartCard({ title, icon, children, className }: { title: string;
   );
 }
 
-const money = (v: any) => `$${Number(v || 0).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
 
 /** Donut chart for {name,value} arrays. */
 export function Donut({ data, isMoney = false, height = 300 }: { data: any[]; isMoney?: boolean; height?: number }) {
+  const money = useMoney();
   if (!data || data.length === 0 || data.every((d) => !d.value))
     return <div className="flex items-center justify-center text-neutral-400" style={{ height }}>No data</div>;
   return (
@@ -131,6 +132,7 @@ export function Donut({ data, isMoney = false, height = 300 }: { data: any[]; is
 /** Vertical or horizontal single-series bar chart. */
 export function Bars({ data, dataKey = "value", xKey = "name", color = "#6366f1", isMoney = false, horizontal = false, height = 300 }:
   { data: any[]; dataKey?: string; xKey?: string; color?: string; isMoney?: boolean; horizontal?: boolean; height?: number }) {
+  const money = useMoney();
   if (!data || data.length === 0)
     return <div className="flex items-center justify-center text-neutral-400" style={{ height }}>No data</div>;
   return (
@@ -159,6 +161,7 @@ export function Bars({ data, dataKey = "value", xKey = "name", color = "#6366f1"
 /** Multi-series line/area trend chart. `series` = [{key,color,label}]. */
 export function Trend({ data, xKey = "month", series, isMoney = false, height = 300 }:
   { data: any[]; xKey?: string; series: { key: string; color: string; label: string }[]; isMoney?: boolean; height?: number }) {
+  const money = useMoney();
   if (!data || data.length === 0)
     return <div className="flex items-center justify-center text-neutral-400" style={{ height }}>No data</div>;
   return (
@@ -177,4 +180,3 @@ export function Trend({ data, xKey = "month", series, isMoney = false, height = 
   );
 }
 
-export { money };

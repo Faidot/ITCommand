@@ -7,7 +7,7 @@ from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
 from django.utils import timezone
-from django.db.models import Sum
+from django.db.models import Sum, Q
 from django.http import HttpResponse
 from datetime import timedelta, date
 import csv
@@ -126,7 +126,7 @@ class BudgetViewSet(AuditLogMixin, viewsets.ModelViewSet):
     def perform_create(self, serializer):
         serializer.save(created_by=self.request.user)
 
-    @action(detail=False, methods=['post'], url_path='clone', permission_classes=[IsManagerOrHigher])
+    @action(detail=False, methods=['post'], url_path='clone', permission_classes=[HasModulePermission])
     def clone(self, request):
         """Copy budget allocations from one financial year to another so they
         don't have to be re-entered. `rollover` adds each category's remaining
@@ -204,9 +204,14 @@ class ExpenseViewSet(AuditLogMixin, viewsets.ModelViewSet):
             _log_expense(exp, 'SUBMITTED', self.request.user)
             _notify_managers(f"Expense '{exp.title}' (${exp.amount}) needs approval.", '/finance/expenses')
 
-    @action(detail=True, methods=['post'], url_path='approve', permission_classes=[IsManagerOrHigher])
+    @action(detail=True, methods=['post'], url_path='approve', permission_classes=[HasModulePermission])
     def approve(self, request, pk=None):
         exp = self.get_object()
+        if exp.status != 'PENDING':
+            return Response(
+                {'detail': 'Only pending expenses can be approved.'},
+                status=status.HTTP_409_CONFLICT,
+            )
         if _would_exceed_budget(exp.category, exp.financial_year, exp.amount):
             return Response({'detail': f"Blocked: '{exp.category.name}' has a hard budget limit and this expense exceeds the remaining budget."},
                             status=status.HTTP_400_BAD_REQUEST)
@@ -219,10 +224,20 @@ class ExpenseViewSet(AuditLogMixin, viewsets.ModelViewSet):
         _notify_user(exp.created_by, f"Your expense '{exp.title}' was approved.", '/finance/expenses')
         return Response(self.get_serializer(exp).data)
 
-    @action(detail=True, methods=['post'], url_path='reject', permission_classes=[IsManagerOrHigher])
+    @action(detail=True, methods=['post'], url_path='reject', permission_classes=[HasModulePermission])
     def reject(self, request, pk=None):
         exp = self.get_object()
-        reason = request.data.get('reason', '')
+        if exp.status != 'PENDING':
+            return Response(
+                {'detail': 'Only pending expenses can be rejected.'},
+                status=status.HTTP_409_CONFLICT,
+            )
+        reason = request.data.get('reason', '').strip()
+        if not reason:
+            return Response(
+                {'detail': 'A rejection reason is required.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         exp.status = 'REJECTED'
         exp.approved_by = request.user
         exp.approved_at = timezone.now()
@@ -316,6 +331,7 @@ class ExpenseViewSet(AuditLogMixin, viewsets.ModelViewSet):
                 linked_asset_id=e.get('linked_asset') or None,
                 linked_license_id=e.get('linked_license') or None,
                 linked_purchase_request_id=e.get('linked_purchase_request') or None,
+                linked_subscription_id=e.get('linked_subscription') or None,
                 receipt_number=bill_number or e.get('receipt_number', ''),
                 description=e.get('description', ''),
                 bill=bill,
@@ -585,6 +601,23 @@ class CostOverviewView(APIView):
         procurement_actual = total(PurchaseRequest.objects.all(), 'total_actual_cost')
         procurement_estimated = total(PurchaseRequest.objects.all(), 'total_estimated_cost')
 
+        # Avoid counting the same purchase once as a booked Expense and again
+        # as its Asset/License/PR source. Assets created from a PR are represented
+        # by that PR until the PR itself is converted to a booked expense.
+        unbooked_assets = Asset.objects.exclude(
+            Q(expenses__status='APPROVED')
+            | Q(source_purchase_request_item__isnull=False)
+        ).distinct()
+        unbooked_licenses = SoftwareLicense.objects.exclude(
+            expenses__status='APPROVED'
+        ).distinct()
+        unbooked_prs = PurchaseRequest.objects.exclude(
+            expenses__status='APPROVED'
+        ).distinct()
+        unbooked_asset_cost = total(unbooked_assets, 'purchase_price')
+        unbooked_license_cost = total(unbooked_licenses, 'cost')
+        unbooked_procurement_actual = total(unbooked_prs, 'total_actual_cost')
+
         # Annualized asset depreciation (Asset.monthly_depreciation is computed)
         asset_depreciation_annual = 0.0
         for a in Asset.objects.all():
@@ -602,12 +635,17 @@ class CostOverviewView(APIView):
 
         modules = [
             {'module': 'Expenses (booked)', 'amount': total_expenses},
-            {'module': 'Assets (purchase)', 'amount': asset_cost},
-            {'module': 'Licenses', 'amount': license_cost},
-            {'module': 'Procurement (actual)', 'amount': procurement_actual},
+            {'module': 'Assets (not yet booked)', 'amount': unbooked_asset_cost},
+            {'module': 'Licenses (not yet booked)', 'amount': unbooked_license_cost},
+            {'module': 'Procurement (not yet booked)', 'amount': unbooked_procurement_actual},
             {'module': 'Asset depreciation (yr)', 'amount': round(asset_depreciation_annual, 2)},
         ]
-        grand_total = total_expenses + asset_cost + license_cost + procurement_actual
+        grand_total = (
+            total_expenses
+            + unbooked_asset_cost
+            + unbooked_license_cost
+            + unbooked_procurement_actual
+        )
 
         return Response({
             'financial_year': active_fy.name if active_fy else None,
@@ -621,6 +659,9 @@ class CostOverviewView(APIView):
             'license_cost': license_cost,
             'procurement_actual': procurement_actual,
             'procurement_estimated': procurement_estimated,
+            'unbooked_asset_cost': unbooked_asset_cost,
+            'unbooked_license_cost': unbooked_license_cost,
+            'unbooked_procurement_actual': unbooked_procurement_actual,
             'asset_depreciation_annual': round(asset_depreciation_annual, 2),
             'grand_total_cost': grand_total,
             'modules': modules,

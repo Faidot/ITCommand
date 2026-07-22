@@ -16,7 +16,7 @@ export function ExtensionInstallGuide() {
     return (
       <div className="space-y-3">
         <p className="text-sm text-muted-foreground">
-          Add the IT Command extension to auto-fill your vault passwords in the browser.
+          Add IT Command to fill vault logins, inspect matched network devices, and report issues from the browser.
         </p>
         <a href={STORE_URL} target="_blank" rel="noreferrer">
           <Button>
@@ -30,7 +30,7 @@ export function ExtensionInstallGuide() {
   return (
     <div className="space-y-4">
       <p className="text-sm text-muted-foreground">
-        The extension isn&apos;t on the Chrome Web Store yet — install it as an unpacked extension.
+        The extension isn&apos;t on the Chrome Web Store yet — download it and install it as an unpacked extension.
         It takes about a minute.
       </p>
 

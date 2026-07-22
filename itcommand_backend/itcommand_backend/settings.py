@@ -141,7 +141,7 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
+TIME_ZONE = config('TIME_ZONE', default='UTC')
 
 USE_I18N = True
 
@@ -159,9 +159,39 @@ STATIC_ROOT = BASE_DIR / 'staticfiles'
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
+# FileField/ImageField URLs are signed API links instead of predictable public
+# /media paths. In Docker, Django authorizes the signature and delegates the
+# actual bytes to nginx through an internal X-Accel-Redirect location.
+STORAGES = {
+    'default': {
+        'BACKEND': 'core.storage.ProtectedMediaStorage',
+    },
+    'staticfiles': {
+        'BACKEND': 'django.contrib.staticfiles.storage.StaticFilesStorage',
+    },
+}
+PROTECTED_MEDIA_URL_TTL = max(
+    60, config('PROTECTED_MEDIA_URL_TTL', default=3600, cast=int)
+)
+PROTECTED_MEDIA_USE_X_ACCEL = config(
+    'PROTECTED_MEDIA_USE_X_ACCEL', default=not DEBUG, cast=bool
+)
+
 # Behind a TLS-terminating reverse proxy (e.g. nginx), trust the forwarded
 # protocol header so Django knows the original request was HTTPS.
 SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+
+# Production transport/cookie hardening. These remain disabled by default so
+# plain-HTTP local development continues to work. Enable them only after HTTPS
+# termination and trusted forwarding are configured.
+SECURE_SSL_REDIRECT = config('SECURE_SSL_REDIRECT', default=False, cast=bool)
+SESSION_COOKIE_SECURE = config('SESSION_COOKIE_SECURE', default=False, cast=bool)
+CSRF_COOKIE_SECURE = config('CSRF_COOKIE_SECURE', default=False, cast=bool)
+SECURE_HSTS_SECONDS = config('SECURE_HSTS_SECONDS', default=0, cast=int)
+SECURE_HSTS_INCLUDE_SUBDOMAINS = config(
+    'SECURE_HSTS_INCLUDE_SUBDOMAINS', default=False, cast=bool
+)
+SECURE_HSTS_PRELOAD = config('SECURE_HSTS_PRELOAD', default=False, cast=bool)
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
@@ -177,6 +207,11 @@ REST_FRAMEWORK = {
     'DEFAULT_PERMISSION_CLASSES': (
         'rest_framework.permissions.IsAuthenticated',
     ),
+    'DEFAULT_THROTTLE_RATES': {
+        'login': '10/min',
+        'vault_unlock': '5/min',
+        'vault_reveal': '30/min',
+    },
 }
 
 # Simple JWT
@@ -207,3 +242,59 @@ from corsheaders.defaults import default_headers
 CORS_ALLOW_HEADERS = list(default_headers) + [
     'x-vault-token',
 ]
+
+
+# Email. Local development prints messages to the console; production uses
+# SMTP unless EMAIL_BACKEND explicitly selects another Django backend.
+EMAIL_BACKEND = config(
+    'EMAIL_BACKEND',
+    default=(
+        'django.core.mail.backends.console.EmailBackend'
+        if DEBUG else 'django.core.mail.backends.smtp.EmailBackend'
+    ),
+)
+EMAIL_HOST = config('EMAIL_HOST', default='localhost')
+EMAIL_PORT = config('EMAIL_PORT', default=25, cast=int)
+EMAIL_HOST_USER = config('EMAIL_HOST_USER', default='')
+EMAIL_HOST_PASSWORD = config('EMAIL_HOST_PASSWORD', default='')
+EMAIL_USE_TLS = config('EMAIL_USE_TLS', default=False, cast=bool)
+EMAIL_USE_SSL = config('EMAIL_USE_SSL', default=False, cast=bool)
+DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='itcommand@localhost')
+
+
+# Long-lived automation runner settings (used by the Docker automation service).
+AUTOMATION_DAILY_COMMANDS = config(
+    'AUTOMATION_DAILY_COMMANDS',
+    default=(
+        'finance_autopost,auto_renew_licenses,auto_renew_subscriptions,'
+        'fetch_exchange_rates,sync_brex,'
+        'check_license_alerts,check_contract_alerts'
+    ),
+    cast=_csv,
+)
+AUTOMATION_INTERVAL_COMMANDS = config(
+    'AUTOMATION_INTERVAL_COMMANDS',
+    default='check_subscription_alerts',
+    cast=_csv,
+)
+AUTOMATION_INTERVAL_SECONDS = max(
+    30, config('AUTOMATION_INTERVAL_SECONDS', default=300, cast=int)
+)
+AUTOMATION_POLL_SECONDS = max(
+    10, config('AUTOMATION_POLL_SECONDS', default=60, cast=int)
+)
+AUTOMATION_RETRY_SECONDS = max(
+    30, config('AUTOMATION_RETRY_SECONDS', default=300, cast=int)
+)
+AUTOMATION_PING_ENABLED = config(
+    'AUTOMATION_PING_ENABLED', default=True, cast=bool
+)
+PING_CHECK_INTERVAL_SECONDS = max(
+    30, config('PING_CHECK_INTERVAL_SECONDS', default=300, cast=int)
+)
+AUTOMATION_EMAIL_REPORT_ENABLED = config(
+    'AUTOMATION_EMAIL_REPORT_ENABLED', default=False, cast=bool
+)
+FINANCE_REPORT_DAY = min(
+    28, max(1, config('FINANCE_REPORT_DAY', default=1, cast=int))
+)

@@ -1,12 +1,13 @@
 # IT Command
 
-IT Command is an enterprise-grade full-stack IT Department Management platform. It features comprehensive modules to track Assets, manage IT Budgets & Expenses, store Credentials securely (Vault), and manage Employees & Departments.
+IT Command is an enterprise-grade full-stack IT Department Management platform. It tracks assets, software subscriptions, IT budgets and expenses, secure credentials, employees, and departments in one place.
 
 ## 🚀 Features
 
 > 📖 **Full module-by-module feature reference:** see [FEATURES.md](FEATURES.md) for a detailed breakdown of every module (data model → API → UI → automation), with the Finance module documented in depth.
 
 - **Asset Management**: Track inventory, assignments, notes, and lifecycle history.
+- **Software Subscriptions**: Manage cloud, AI, and SaaS services with ownership, spend dashboards, renewal/cancellation reminders, budget alerts, and PDF/Excel reports.
 - **Finance Module**: Manage budgets, track expenses, log petty cash, and schedule recurring bills.
 - **Secure Vault**: Encrypted credential and workspace management.
 - **Dashboard & Reporting**: Interactive charts and data exports (Excel) for deep insights.
@@ -26,7 +27,7 @@ IT Command is an enterprise-grade full-stack IT Department Management platform. 
 
 ## 🐳 Quick Start with Docker (recommended)
 
-The whole stack (PostgreSQL + Django/Gunicorn + Next.js + nginx) is
+The whole stack (PostgreSQL + Django/Gunicorn + scheduled automation + Next.js + nginx) is
 containerized. From the repository root:
 
 ```bash
@@ -36,7 +37,13 @@ docker compose exec backend python manage.py createsuperuser
 ```
 
 Open **http://localhost/** (admin at **/admin/**). Migrations and static-file
-collection run automatically on startup.
+collection run automatically on startup. The `automation` service runs finance
+posting, subscription/license renewals and alerts, contract checks, and network reachability checks; inspect it with
+`docker compose logs -f automation`.
+
+Never commit `.env`, SQLite databases, uploaded media, virtual environments, or
+database exports. If one was ever tracked, adding it to `.gitignore` is not
+enough: remove it from the index/history as appropriate and rotate exposed keys.
 
 > 📖 **Deploying to another server (e.g. Ubuntu)?** Follow the full step-by-step
 > guide in **[DEPLOYMENT.md](DEPLOYMENT.md)** — prerequisites, environment
@@ -62,8 +69,7 @@ SECRET_KEY=your_django_secret_key
 DEBUG=True
 VAULT_ENCRYPTION_KEY=your_32_urlsafe_base64_encoded_fernet_key # Generate via: python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
 
-# Run Migrations
-python3 manage.py makemigrations
+# Apply the repository's reviewed migrations
 python3 manage.py migrate
 
 # Create Superuser

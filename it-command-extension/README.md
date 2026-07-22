@@ -1,11 +1,8 @@
 # IT Command — Browser Extension
 
-Auto-fills passwords from your IT Command vault. When you open a site, if the
-vault holds a credential whose saved URL matches the site, the extension can fill
-the username and password for you.
-
-> Scope: **passwords only** for now. The architecture (background worker + message
-> router) is set up so more modules can be added later without reworking auth.
+Brings IT Command into Chromium-based browsers. It can fill matching credentials
+from the password vault, look up the current site in Network inventory, update a
+matched device's status, and file a helpdesk ticket without leaving the tab.
 
 ## How it works
 
@@ -13,15 +10,16 @@ the username and password for you.
   JWT access/refresh tokens and the vault session token. Page contexts never see them.
 - **Content script** (`content.js`) finds the login fields on a page, auto-fills a
   single matching credential on load (never auto-submits), and fills on demand.
-- **Popup** (`popup.html/js`) is the control panel: sign in, unlock the vault, and
-  pick which credential to fill for the current tab.
+- **Popup** (`popup.html/js`) is the control panel: sign in, unlock the vault, pick
+  a credential to fill, inspect a matched network device, update its status, or
+  report an issue.
 
 Two unlock layers mirror the web app:
 1. **Sign in** with your IT Command account (email + password) → JWT.
 2. **Unlock the vault** with the org master password → a time-limited session.
 
-The vault session slides its expiry on use and auto-locks when it runs out, just
-like the web app.
+The server slides the vault session on protected use. The extension reconciles
+its countdown with the authoritative server expiry and auto-locks when it runs out.
 
 ## Install (Chrome / Edge, unpacked)
 
@@ -45,10 +43,20 @@ permission for all http/https hosts).
 2. Browse to a site you have a credential for. With one match and auto-fill on,
    the fields fill automatically (the password box flashes green).
 3. For multiple matches, or to choose manually, open the popup and click **Fill**
-   (or **Copy** to copy the password to the clipboard).
+   (or **Copy** to copy the password to the clipboard). The button only reports
+   **Filled** after the content script confirms a password field was updated; it
+   reports **No form** or **Failed** when the page cannot be filled.
 
 Toggle **Auto-fill on page load** off in settings if you prefer to fill only from
 the popup.
+
+### Network and helpdesk
+
+Open the **Network** tab in the popup. The extension looks up the current hostname
+against IT Command's device inventory. For a match you can inspect its basic
+details, mark it online/offline/in maintenance (subject to your permissions), or
+open its full device page. The issue form creates a normal IT Command helpdesk
+ticket and uses the current site/device as context.
 
 ## Matching
 
@@ -62,8 +70,10 @@ your personal vault password, which this version doesn't prompt for.
 
 ## Security notes
 
-- Tokens live in `chrome.storage.local`, scoped to the extension. Signing out or
-  locking clears them.
+- Tokens live in `chrome.storage.local`, scoped to the extension. Signing out
+  clears authentication and vault tokens; **Lock** clears the vault token only.
+- Rotated JWT refresh tokens replace their predecessors, so later background
+  refreshes do not reuse a blacklisted token.
 - The content script requests a password only at the moment of filling; it isn't
   cached in the page.
 - Calls go through the background worker so the page never holds your tokens.

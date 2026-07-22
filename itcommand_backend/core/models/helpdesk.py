@@ -3,6 +3,7 @@ from .assets import Asset
 from django.db import models
 from django.utils import timezone
 from datetime import timedelta
+import uuid
 
 
 class TicketCategory(models.Model):
@@ -76,16 +77,9 @@ class Ticket(models.Model):
         ordering = ['-created_at']
 
     def save(self, *args, **kwargs):
-        if not self.ticket_number:
-            last_ticket = Ticket.objects.order_by('-id').first()
-            if last_ticket and last_ticket.ticket_number and last_ticket.ticket_number.startswith('TKT-'):
-                try:
-                    last_num = int(last_ticket.ticket_number.split('-')[1])
-                    self.ticket_number = f"TKT-{last_num + 1:04d}"
-                except ValueError:
-                    self.ticket_number = f"TKT-{Ticket.objects.count() + 1:04d}"
-            else:
-                self.ticket_number = "TKT-0001"
+        generate_number = self.pk is None and not self.ticket_number
+        if generate_number:
+            self.ticket_number = f"TMP-{uuid.uuid4().hex[:16]}"
 
         # Auto-calculate due_date from SLA policy if not already set
         if not self.due_date:
@@ -96,6 +90,9 @@ class Ticket(models.Model):
                 pass
 
         super().save(*args, **kwargs)
+        if generate_number:
+            self.ticket_number = f"TKT-{self.pk:04d}"
+            Ticket.objects.filter(pk=self.pk).update(ticket_number=self.ticket_number)
 
     @property
     def is_overdue(self):

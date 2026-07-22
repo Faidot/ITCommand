@@ -33,10 +33,13 @@ VAULT_ENCRYPTION_KEY=your_32_urlsafe_base64_encoded_fernet_key
 ```
 *Note: To generate a Vault key, run `python3 -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`*
 
+The `.env`, local SQLite database, `media/`, and virtual environment are runtime
+artifacts and must never be committed. Ignore rules do not untrack files that
+were already added to Git.
+
 ### 3. Database Migration
 
 ```bash
-python3 manage.py makemigrations
 python3 manage.py migrate
 ```
 
@@ -49,3 +52,8 @@ python3 manage.py createsuperuser
 # Start the development server
 python3 manage.py runserver 8000
 ```
+
+For Docker deployments, the separate `automation` service runs recurring
+finance, license, contract, email, and ping commands via
+`python manage.py run_automation`. See the root `DEPLOYMENT.md` for its schedule
+and environment settings.

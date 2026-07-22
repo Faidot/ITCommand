@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Textarea } from "@/components/ui/textarea";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { useAuthStore } from "@/store/authStore";
+import { useMoney, useCurrencyCode } from "@/lib/currency";
 
 interface PRItem {
   id?: number;
@@ -25,6 +26,7 @@ interface PRItem {
 }
 
 export default function NewPurchaseRequestPage() {
+  const money = useMoney();
   const router = useRouter();
   const { user } = useAuthStore();
   const [loading, setLoading] = useState(false);
@@ -89,8 +91,7 @@ export default function NewPurchaseRequestPage() {
 
   const totalEstimated = items.reduce((sum, item) => sum + item.quantity * item.estimated_unit_price, 0);
 
-  const formatCurrency = (amount: number) =>
-    new Intl.NumberFormat("en-PK", { style: "currency", currency: "PKR", maximumFractionDigits: 0 }).format(amount);
+  const formatCurrency = (amount: number) => money(amount, { decimals: 0 });
 
   const handleSave = async (submitAfter: boolean) => {
     if (!formData.title.trim()) {

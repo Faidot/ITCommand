@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "IT Command",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Autofill vault passwords and link the page you're on to its IT Command network device — check status, flip it online/offline, or file a ticket.",
   "permissions": ["storage", "tabs"],
   "host_permissions": [

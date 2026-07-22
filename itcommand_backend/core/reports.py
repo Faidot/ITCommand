@@ -4,6 +4,7 @@ from openpyxl.styles import Font, PatternFill, Alignment
 from django.db.models import Sum, Count, Q, Avg, F, DurationField, ExpressionWrapper
 from django.utils import timezone
 from datetime import timedelta, datetime
+from decimal import Decimal
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from django.http import HttpResponse
@@ -18,8 +19,10 @@ from .models import (
     NetworkDevice, NetworkLocation, IPAddressPool,
     OnboardingRecord, OnboardingTask,
     KBArticle, KBCategory, KBFeedback,
+    Subscription,
 )
-from .permissions import IsAdminOrSuperadmin
+from .permissions import HasModulePermission, has_role_permission
+from .fx import convert_many, rate_as_of
 
 
 # ---------------------------------------------------------------------------
@@ -133,14 +136,17 @@ def make_xlsx(filename, sheets):
     return response
 
 class FinancialSummaryView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         start, end = _resolve_period(request)
         active_fy = FinancialYear.objects.filter(is_active=True).first()
 
         # Expenses falling inside the selected period.
-        period_expenses = Expense.objects.filter(expense_date__gte=start, expense_date__lte=end)
+        period_expenses = Expense.objects.filter(
+            status='APPROVED', expense_date__gte=start, expense_date__lte=end
+        )
 
         # Budget utilization per category — allocation is the full-year figure,
         # "spent" reflects the selected period.
@@ -161,6 +167,7 @@ class FinancialSummaryView(APIView):
         monthly_expenses = []
         for label, seg_start, seg_end in _months_between(start, end):
             amount = Expense.objects.filter(
+                status='APPROVED',
                 expense_date__gte=seg_start, expense_date__lt=seg_end
             ).aggregate(s=Sum('amount'))['s'] or 0
             monthly_expenses.append({'month': label, 'amount': float(amount)})
@@ -210,7 +217,7 @@ class FinancialSummaryView(APIView):
         (debit), ordered by date with an opening/running/closing balance."""
         opening = (
             (Income.objects.filter(income_date__lt=start).aggregate(s=Sum('amount'))['s'] or 0)
-            - (Expense.objects.filter(expense_date__lt=start).aggregate(s=Sum('amount'))['s'] or 0)
+            - (Expense.objects.filter(status='APPROVED', expense_date__lt=start).aggregate(s=Sum('amount'))['s'] or 0)
             - (DirectPayment.objects.filter(payment_date__lt=start).aggregate(s=Sum('amount'))['s'] or 0)
         )
 
@@ -219,7 +226,9 @@ class FinancialSummaryView(APIView):
             rows.append((inc.income_date, 'INCOME', inc.title,
                          inc.source.name if inc.source else '', inc.payment_method,
                          0.0, float(inc.amount)))
-        for exp in Expense.objects.filter(expense_date__gte=start, expense_date__lte=end).select_related('category'):
+        for exp in Expense.objects.filter(
+            status='APPROVED', expense_date__gte=start, expense_date__lte=end
+        ).select_related('category'):
             rows.append((exp.expense_date, 'EXPENSE', exp.title,
                          exp.paid_to, exp.payment_method,
                          float(exp.amount), 0.0))
@@ -260,7 +269,8 @@ class FinancialSummaryView(APIView):
         return ledger, summary
 
 class AssetSummaryView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         today = timezone.now().date()
@@ -314,7 +324,8 @@ class AssetSummaryView(APIView):
         })
 
 class ExportFinancialView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         start, end = _resolve_period(request)
@@ -328,6 +339,7 @@ class ExportFinancialView(APIView):
             e.financial_year.name if e.financial_year else '',
             e.payment_method, e.paid_to, e.receipt_number or '', float(e.amount),
         ] for e in Expense.objects.filter(
+            status='APPROVED',
             expense_date__gte=start, expense_date__lte=end
         ).select_related('category', 'financial_year').order_by('-expense_date')]
 
@@ -348,7 +360,8 @@ class ExportFinancialView(APIView):
         ])
 
 class ExportAssetsView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         assets = Asset.objects.all().order_by('asset_tag')
@@ -382,7 +395,8 @@ class ExportAssetsView(APIView):
         return response
 
 class MainDashboardView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'dashboard'
 
     def get(self, request):
         now = timezone.now()
@@ -392,29 +406,46 @@ class MainDashboardView(APIView):
         soon_90 = today + timedelta(days=90)
         seven_days = today + timedelta(days=7)
 
+        can_view = lambda module: has_role_permission(request.user, module, 'view')
+        users = User.objects.all() if can_view('users') else User.objects.none()
+        assets = Asset.objects.all() if can_view('assets') else Asset.objects.none()
+        expenses = (
+            Expense.objects.filter(status='APPROVED')
+            if can_view('finance') else Expense.objects.none()
+        )
+        incomes = Income.objects.all() if can_view('finance') else Income.objects.none()
+        budgets = Budget.objects.all() if can_view('finance') else Budget.objects.none()
+        recurring_bills = (
+            RecurringBill.objects.all()
+            if can_view('finance') else RecurringBill.objects.none()
+        )
+
         # ---- People & Assets ----
-        total_users = User.objects.count()
-        active_users = User.objects.filter(is_active=True).count()
-        total_assets = Asset.objects.count()
-        asset_value = Asset.objects.aggregate(s=Sum('purchase_price'))['s'] or 0
-        assets_assigned = Asset.objects.filter(status='ASSIGNED').count()
+        total_users = users.count()
+        active_users = users.filter(is_active=True).count()
+        total_assets = assets.count()
+        asset_value = assets.aggregate(s=Sum('purchase_price'))['s'] or 0
+        assets_assigned = assets.filter(status='ASSIGNED').count()
         assets_by_status = [{'name': s['status'], 'value': s['count']}
-                            for s in Asset.objects.values('status').annotate(count=Count('id'))]
+                            for s in assets.values('status').annotate(count=Count('id'))]
         warranties_expiring = [{
             'name': a.name, 'tag': a.asset_tag,
             'date': a.warranty_expiry.strftime('%Y-%m-%d'),
             'days': (a.warranty_expiry - today).days,
-        } for a in Asset.objects.filter(warranty_expiry__gte=today, warranty_expiry__lte=soon_60).order_by('warranty_expiry')[:8]]
+        } for a in assets.filter(warranty_expiry__gte=today, warranty_expiry__lte=soon_60).order_by('warranty_expiry')[:8]]
 
         # ---- Finance ----
-        active_fy = FinancialYear.objects.filter(is_active=True).first()
+        active_fy = (
+            FinancialYear.objects.filter(is_active=True).first()
+            if can_view('finance') else None
+        )
         total_budget = total_spent = 0
         if active_fy:
-            total_budget = Budget.objects.filter(financial_year=active_fy).aggregate(s=Sum('allocated_amount'))['s'] or 0
-            total_spent = Expense.objects.filter(financial_year=active_fy).aggregate(s=Sum('amount'))['s'] or 0
+            total_budget = budgets.filter(financial_year=active_fy).aggregate(s=Sum('allocated_amount'))['s'] or 0
+            total_spent = expenses.filter(financial_year=active_fy).aggregate(s=Sum('amount'))['s'] or 0
         budget_used_pct = (total_spent / total_budget * 100) if total_budget else 0
 
-        upcoming_bills = RecurringBill.objects.filter(is_active=True, next_due_date__gte=today, next_due_date__lte=seven_days)
+        upcoming_bills = recurring_bills.filter(is_active=True, next_due_date__gte=today, next_due_date__lte=seven_days)
         upcoming_bills_count = upcoming_bills.count()
         upcoming_bills_amount = upcoming_bills.aggregate(s=Sum('amount'))['s'] or 0
 
@@ -422,8 +453,8 @@ class MainDashboardView(APIView):
         income_vs_expense = []
         monthly_expenses = []
         for label, start, end in _last_n_months(6):
-            inc = Income.objects.filter(income_date__gte=start, income_date__lt=end).aggregate(s=Sum('amount'))['s'] or 0
-            exp = Expense.objects.filter(expense_date__gte=start, expense_date__lt=end).aggregate(s=Sum('amount'))['s'] or 0
+            inc = incomes.filter(income_date__gte=start, income_date__lt=end).aggregate(s=Sum('amount'))['s'] or 0
+            exp = expenses.filter(expense_date__gte=start, expense_date__lt=end).aggregate(s=Sum('amount'))['s'] or 0
             short = label.split(' ')[0]
             income_vs_expense.append({'month': short, 'income': float(inc), 'expense': float(exp)})
             monthly_expenses.append({'month': short, 'amount': float(exp)})
@@ -431,7 +462,12 @@ class MainDashboardView(APIView):
         # ---- Helpdesk ----
         open_statuses = ['OPEN', 'IN_PROGRESS', 'PENDING']
         closed_statuses = ['RESOLVED', 'CLOSED']
-        tickets = Ticket.objects.all()
+        tickets = Ticket.objects.all() if can_view('helpdesk') else Ticket.objects.none()
+        if can_view('helpdesk') and not (
+            has_role_permission(request.user, 'helpdesk', 'edit')
+            or has_role_permission(request.user, 'helpdesk', 'delete')
+        ):
+            tickets = tickets.filter(requester=request.user)
         helpdesk = {
             'total': tickets.count(),
             'open': tickets.filter(status__in=open_statuses).count(),
@@ -443,7 +479,10 @@ class MainDashboardView(APIView):
                              for s in tickets.values('status').annotate(count=Count('id'))]
 
         # ---- Licenses ----
-        licenses = SoftwareLicense.objects.all()
+        licenses = (
+            SoftwareLicense.objects.all()
+            if can_view('licenses') else SoftwareLicense.objects.none()
+        )
         lic_expiring = licenses.filter(expiry_date__gte=today, expiry_date__lte=soon_60).count()
         lic_annual = sum(l.annual_cost for l in licenses.filter(is_active=True))
         license_block = {
@@ -453,8 +492,52 @@ class MainDashboardView(APIView):
             'annual_cost': round(lic_annual, 2),
         }
 
+        # ---- Subscriptions ----
+        subscriptions = (
+            Subscription.objects.all()
+            if can_view('subscriptions') else Subscription.objects.none()
+        )
+        sub_active = [s for s in subscriptions if s.effective_status == 'ACTIVE']
+        # Cost is per-row currency, so annual spend is reported per currency
+        # rather than summed into a single meaningless number.
+        annual_by_currency = {}
+        for s in sub_active:
+            annual_by_currency[s.currency] = (
+                annual_by_currency.get(s.currency, Decimal('0')) + s.annual_cost_unrounded
+            )
+        # A single converted headline plus the honest per-currency breakdown.
+        converted_annual, report_ccy, unconvertible = convert_many(
+            [(s.annual_cost_unrounded, s.currency) for s in sub_active]
+        )
+        subscription_block = {
+            'total': subscriptions.count(),
+            'active': len(sub_active),
+            'expiring_soon': subscriptions.filter(
+                status='ACTIVE', expiry_date__gte=today, expiry_date__lte=soon_60
+            ).count(),
+            'annual_cost_by_currency': [
+                {'currency': currency, 'annual_cost': float(round(amount, 2))}
+                for currency, amount in sorted(annual_by_currency.items())
+            ],
+            'converted': {
+                'currency': report_ccy,
+                'annual_cost': float(converted_annual),
+                'rates_as_of': rate_as_of(report_ccy),
+                'unconvertible': unconvertible,
+                'is_complete': not unconvertible,
+            },
+        }
+
         # ---- Procurement ----
-        prs = PurchaseRequest.objects.all()
+        prs = (
+            PurchaseRequest.objects.all()
+            if can_view('procurement') else PurchaseRequest.objects.none()
+        )
+        if can_view('procurement') and not (
+            has_role_permission(request.user, 'procurement', 'edit')
+            or has_role_permission(request.user, 'procurement', 'delete')
+        ):
+            prs = prs.filter(requested_by=request.user)
         procurement = {
             'total': prs.count(),
             'pending': prs.filter(status__in=['SUBMITTED', 'UNDER_REVIEW']).count(),
@@ -467,17 +550,20 @@ class MainDashboardView(APIView):
             'vendor': c.vendor.name, 'title': c.title,
             'date': c.end_date.strftime('%Y-%m-%d'),
             'days': (c.end_date - today).days,
-        } for c in VendorContract.objects.select_related('vendor').filter(
+        } for c in (VendorContract.objects.select_related('vendor') if can_view('vendors') else VendorContract.objects.none()).filter(
             end_date__gte=today, end_date__lte=soon_90
         ).exclude(status__in=['TERMINATED', 'EXPIRED']).order_by('end_date')[:8]]
         vendors_block = {
-            'total': Vendor.objects.count(),
-            'active': Vendor.objects.filter(is_active=True).count(),
+            'total': Vendor.objects.count() if can_view('vendors') else 0,
+            'active': Vendor.objects.filter(is_active=True).count() if can_view('vendors') else 0,
             'contracts_expiring': len(contracts_expiring),
         }
 
         # ---- Network ----
-        devices = NetworkDevice.objects.all()
+        devices = (
+            NetworkDevice.objects.all()
+            if can_view('network') else NetworkDevice.objects.none()
+        )
         network = {
             'total': devices.count(),
             'online': devices.filter(status='ONLINE').count(),
@@ -486,7 +572,10 @@ class MainDashboardView(APIView):
         }
 
         # ---- Onboarding ----
-        records = OnboardingRecord.objects.all()
+        records = (
+            OnboardingRecord.objects.all()
+            if can_view('onboarding') else OnboardingRecord.objects.none()
+        )
         onboarding = {
             'in_progress': records.filter(status='IN_PROGRESS').count(),
             'not_started': records.filter(status='NOT_STARTED').count(),
@@ -494,34 +583,49 @@ class MainDashboardView(APIView):
         }
 
         # ---- Seating ----
-        total_seats = Seat.objects.count()
-        occupied = Seat.objects.filter(assignments__is_active=True).distinct().count()
+        seats = Seat.objects.all() if can_view('seating') else Seat.objects.none()
+        total_seats = seats.count()
+        occupied = seats.filter(assignments__is_active=True).distinct().count()
         seating = {
             'total': total_seats, 'occupied': occupied,
             'pct': round(occupied / total_seats * 100, 1) if total_seats else 0,
         }
 
         # ---- Knowledge Base ----
+        kb_articles = KBArticle.objects.none()
+        if can_view('kb'):
+            kb_articles = KBArticle.objects.all()
+            if not any(
+                has_role_permission(request.user, 'kb', action)
+                for action in ('add', 'edit', 'delete')
+            ):
+                kb_articles = kb_articles.filter(
+                    status='PUBLISHED', visibility='ALL_STAFF'
+                )
         kb = {
-            'published': KBArticle.objects.filter(status='PUBLISHED').count(),
-            'total': KBArticle.objects.count(),
-            'views': KBArticle.objects.aggregate(s=Sum('view_count'))['s'] or 0,
+            'published': kb_articles.filter(status='PUBLISHED').count(),
+            'total': kb_articles.count(),
+            'views': kb_articles.aggregate(s=Sum('view_count'))['s'] or 0,
         }
 
         # ---- Cross-module recent activity ----
         recent_activity = []
-        for e in Expense.objects.select_related('category').order_by('-created_at')[:6]:
+        for e in expenses.select_related('category').order_by('-created_at')[:6]:
             recent_activity.append({'type': 'EXPENSE', 'title': f"Expense: {e.title}",
                                     'amount': float(e.amount), 'date': e.created_at})
-        for a in AssetHistory.objects.filter(action='ASSIGNED').select_related('asset', 'to_user').order_by('-timestamp')[:5]:
+        asset_activity = (
+            AssetHistory.objects.filter(action='ASSIGNED')
+            if can_view('assets') else AssetHistory.objects.none()
+        )
+        for a in asset_activity.select_related('asset', 'to_user').order_by('-timestamp')[:5]:
             recent_activity.append({'type': 'ASSET',
                                     'title': f"Asset assigned: {a.asset.name} → {a.to_user.get_full_name() if a.to_user else 'Unknown'}",
                                     'amount': None, 'date': a.timestamp})
-        for t in Ticket.objects.select_related('requester').order_by('-created_at')[:5]:
+        for t in tickets.select_related('requester').order_by('-created_at')[:5]:
             recent_activity.append({'type': 'TICKET',
                                     'title': f"Ticket {t.ticket_number}: {t.title}",
                                     'amount': None, 'date': t.created_at})
-        for pr in PurchaseRequest.objects.order_by('-created_at')[:4]:
+        for pr in prs.order_by('-created_at')[:4]:
             recent_activity.append({'type': 'PROCUREMENT',
                                     'title': f"PR {pr.pr_number}: {pr.title}",
                                     'amount': float(pr.total_estimated_cost), 'date': pr.created_at})
@@ -538,6 +642,7 @@ class MainDashboardView(APIView):
                 'total_budget': float(total_budget), 'total_spent': float(total_spent),
                 'open_tickets': helpdesk['open'], 'overdue_tickets': helpdesk['overdue'],
                 'active_licenses': license_block['active'],
+                'active_subscriptions': subscription_block['active'],
                 'pending_pos': procurement['pending'],
                 'total_vendors': vendors_block['total'],
                 'devices_total': network['total'], 'devices_online': network['online'],
@@ -551,6 +656,7 @@ class MainDashboardView(APIView):
             'tickets_by_status': tickets_by_status,
             'helpdesk': helpdesk,
             'licenses': license_block,
+            'subscriptions': subscription_block,
             'procurement': procurement,
             'vendors': vendors_block,
             'network': network,
@@ -569,7 +675,8 @@ class MainDashboardView(APIView):
 # HELPDESK REPORT
 # ===========================================================================
 class HelpdeskSummaryView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         now = timezone.now()
@@ -645,7 +752,8 @@ class HelpdeskSummaryView(APIView):
 # LICENSE REPORT
 # ===========================================================================
 class LicenseSummaryView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         today = timezone.now().date()
@@ -709,7 +817,8 @@ class LicenseSummaryView(APIView):
 # PROCUREMENT REPORT
 # ===========================================================================
 class ProcurementSummaryView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         qs = PurchaseRequest.objects.all()
@@ -787,7 +896,8 @@ class ProcurementSummaryView(APIView):
 # VENDOR REPORT
 # ===========================================================================
 class VendorSummaryView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         today = timezone.now().date()
@@ -854,7 +964,8 @@ class VendorSummaryView(APIView):
 # SEATING REPORT
 # ===========================================================================
 class SeatingSummaryView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         seats = Seat.objects.all()
@@ -900,7 +1011,8 @@ class SeatingSummaryView(APIView):
 # NETWORK REPORT
 # ===========================================================================
 class NetworkSummaryView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         today = timezone.now().date()
@@ -969,7 +1081,8 @@ class NetworkSummaryView(APIView):
 # ONBOARDING REPORT
 # ===========================================================================
 class OnboardingSummaryView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         today = timezone.now().date()
@@ -1033,7 +1146,8 @@ class OnboardingSummaryView(APIView):
 # KNOWLEDGE BASE REPORT
 # ===========================================================================
 class KBSummaryView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         articles = KBArticle.objects.all()
@@ -1085,7 +1199,8 @@ class KBSummaryView(APIView):
 # USERS / PEOPLE REPORT
 # ===========================================================================
 class UserSummaryView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         today = timezone.now().date()
@@ -1135,6 +1250,8 @@ def _master_users_queryset():
         'assigned_assets__category',
         'asset_unit_assignments__asset__category',
         'license_assignments__license__product',
+        'license_assignments__license__linked_subscriptions',
+        'subscription_assignments__subscription',
         'seat_assignments__seat__floor__office',
         'submitted_tickets',
         'assigned_tickets',
@@ -1176,16 +1293,39 @@ def _master_user_rows(users):
                 'kind': 'Unit',
             })
 
-        # ---- Licenses / subscriptions (active assignments only) ----
+        # ---- Subscriptions (active seats only) ----
+        # Filtered in Python: the queryset is prefetched, so a .filter() here
+        # would re-query per user and defeat that.
+        subscriptions = []
+        for sa in u.subscription_assignments.all():
+            if not sa.is_active or not sa.subscription:
+                continue
+            sub = sa.subscription
+            subscriptions.append({
+                'name': sub.name,
+                'platform': sub.platform,
+                'plan': sub.plan_type,
+                'cost': str(sub.cost),
+                'currency': sub.currency,
+                'billing_cycle': sub.billing_cycle,
+                'expiry': sub.expiry_date.strftime('%Y-%m-%d') if sub.expiry_date else '',
+                'expired': bool(sub.expiry_date and sub.expiry_date < today),
+                'status': sub.status,
+            })
+
+        # ---- Licenses (active assignments only) ----
         licenses = []
-        subscription_count = 0
+        legacy_subscription_licenses = 0
         for la in u.license_assignments.all():
             if not la.is_active:
                 continue
             lic = la.license
+            # A SUBSCRIPTION-type licence only counts as a subscription when no
+            # real Subscription row already represents it, otherwise the same
+            # service would be counted twice.
             is_sub = lic.license_type == 'SUBSCRIPTION'
-            if is_sub:
-                subscription_count += 1
+            if is_sub and not lic.linked_subscriptions.all():
+                legacy_subscription_licenses += 1
             licenses.append({
                 'product': lic.product.name if lic.product else '—',
                 'type': lic.license_type,
@@ -1245,7 +1385,7 @@ def _master_user_rows(users):
             'counts': {
                 'assets': len(assets),
                 'licenses': len(licenses),
-                'subscriptions': subscription_count,
+                'subscriptions': len(subscriptions) + legacy_subscription_licenses,
                 'seat': 1 if seat else 0,
                 'tickets_open': tickets['submitted_open'] + tickets['assigned_open'],
                 'onboarding': len(onboarding),
@@ -1253,6 +1393,7 @@ def _master_user_rows(users):
             },
             'assets': assets,
             'licenses': licenses,
+            'subscriptions': subscriptions,
             'seat': seat,
             'tickets': tickets,
             'onboarding': onboarding,
@@ -1264,7 +1405,8 @@ def _master_user_rows(users):
 
 class MasterUserReportView(APIView):
     """User-wise master report: every user with all the data linked to them."""
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         rows = _master_user_rows(_master_users_queryset())
@@ -1287,7 +1429,8 @@ class MasterUserReportView(APIView):
 # EXPORTS
 # ===========================================================================
 class ExportHelpdeskView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         headers = ['Ticket #', 'Title', 'Category', 'Priority', 'Status', 'Requester',
@@ -1309,7 +1452,8 @@ class ExportHelpdeskView(APIView):
 
 
 class ExportLicensesView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         headers = ['Product', 'Category', 'Type', 'Seats Total', 'Seats Used', 'Cost',
@@ -1329,7 +1473,8 @@ class ExportLicensesView(APIView):
 
 
 class ExportProcurementView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         headers = ['PR #', 'Title', 'Requested By', 'Department', 'Priority', 'Status',
@@ -1351,7 +1496,8 @@ class ExportProcurementView(APIView):
 
 
 class ExportVendorsView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         v_headers = ['Code', 'Name', 'Category', 'Email', 'Phone', 'Country', 'Rating', 'Active']
@@ -1382,7 +1528,8 @@ class ExportVendorsView(APIView):
 
 
 class ExportNetworkView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         headers = ['Code', 'Name', 'Type', 'Status', 'Brand', 'Model', 'IP Address',
@@ -1399,7 +1546,8 @@ class ExportNetworkView(APIView):
 
 
 class ExportSeatingView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         headers = ['Seat Code', 'Type', 'Office', 'Floor', 'Occupied By', 'Status']
@@ -1417,7 +1565,8 @@ class ExportSeatingView(APIView):
 
 
 class ExportOnboardingView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         headers = ['Employee', 'Process', 'Status', 'Progress %', 'Start Date',
@@ -1436,7 +1585,8 @@ class ExportOnboardingView(APIView):
 
 
 class ExportKBView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         headers = ['Title', 'Category', 'Status', 'Visibility', 'Author', 'Views', 'Updated']
@@ -1454,7 +1604,8 @@ class ExportKBView(APIView):
 
 
 class ExportUsersView(APIView):
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         headers = ['Name', 'Email', 'Role', 'Department', 'Designation', 'Active', 'Joined']
@@ -1472,7 +1623,8 @@ class ExportUsersView(APIView):
 class ExportMasterUserView(APIView):
     """Excel workbook of the master user report: a summary sheet (one row per
     user with counts) plus detail sheets for assets, licenses and seating."""
-    permission_classes = [IsAdminOrSuperadmin]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'reports'
 
     def get(self, request):
         rows = _master_user_rows(_master_users_queryset())
@@ -1493,12 +1645,21 @@ class ExportMasterUserView(APIView):
             r['name'], r['email'], a['tag'], a['name'], a['category'], a['status'], a['kind'],
         ] for r in rows for a in r['assets']]
 
-        license_headers = ['User', 'Email', 'Product', 'Type', 'Subscription', 'Expiry', 'Expired']
+        # 'Subscription-type' here means a legacy SUBSCRIPTION-type licence.
+        # Real subscriptions have their own sheet below.
+        license_headers = ['User', 'Email', 'Product', 'Type', 'Subscription-type', 'Expiry', 'Expired']
         license_rows = [[
             r['name'], r['email'], l['product'], l['type'],
             'Yes' if l['is_subscription'] else 'No', l['expiry'],
             'Yes' if l['expired'] else 'No',
         ] for r in rows for l in r['licenses']]
+
+        subscription_headers = ['User', 'Email', 'Subscription', 'Platform', 'Plan',
+                                'Cost', 'Currency', 'Billing', 'Expiry', 'Status']
+        subscription_rows = [[
+            r['name'], r['email'], s['name'], s['platform'], s['plan'],
+            s['cost'], s['currency'], s['billing_cycle'], s['expiry'], s['status'],
+        ] for r in rows for s in r['subscriptions']]
 
         seat_headers = ['User', 'Email', 'Seat Code', 'Floor', 'Office']
         seat_rows = [[
@@ -1509,5 +1670,6 @@ class ExportMasterUserView(APIView):
             ('User Summary', summary_headers, summary_rows),
             ('Assets', asset_headers, asset_rows),
             ('Licenses', license_headers, license_rows),
+            ('Subscriptions', subscription_headers, subscription_rows),
             ('Seating', seat_headers, seat_rows),
         ])

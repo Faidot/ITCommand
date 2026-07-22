@@ -9,11 +9,12 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip,
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useMoney } from "@/lib/currency";
 
 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884d8'];
-const fmt = (v: number) => `$${Number(v || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
 export default function FinancialReportsPage() {
+  const fmt = useMoney();
   const [data, setData] = useState<any>(null);
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
@@ -120,7 +121,7 @@ export default function FinancialReportsPage() {
                 <CartesianGrid strokeDasharray="3 3" vertical={false} />
                 <XAxis dataKey="month" />
                 <YAxis />
-                <RechartsTooltip formatter={(value) => `$${value}`} />
+                <RechartsTooltip formatter={(value) => fmt(Number(value))} />
                 <Bar dataKey="amount" fill="#3b82f6" radius={[4, 4, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
@@ -138,7 +139,7 @@ export default function FinancialReportsPage() {
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}
                   </Pie>
-                  <RechartsTooltip formatter={(value) => `$${value}`} />
+                  <RechartsTooltip formatter={(value) => fmt(Number(value))} />
                 </PieChart>
               </ResponsiveContainer>
             ) : (
@@ -165,8 +166,8 @@ export default function FinancialReportsPage() {
                 {data.budget_utilization.map((b: any, i: number) => (
                   <TableRow key={i}>
                     <TableCell className="font-medium">{b.category}</TableCell>
-                    <TableCell className="text-right">${b.allocated.toFixed(0)}</TableCell>
-                    <TableCell className="text-right">${b.spent.toFixed(0)}</TableCell>
+                    <TableCell className="text-right">{fmt(b.allocated)}</TableCell>
+                    <TableCell className="text-right">{fmt(b.spent)}</TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
                         <div className="flex-1 h-2 bg-neutral-100 rounded-full overflow-hidden">

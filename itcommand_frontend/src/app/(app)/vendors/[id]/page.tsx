@@ -15,8 +15,10 @@ import { AddContractDialog } from "./add-contract-dialog";
 import { AddVendorDialog } from "../add-vendor-dialog";
 import { useAuthStore } from "@/store/authStore";
 import { format, differenceInDays } from "date-fns";
+import { formatMoney, useMoney } from "@/lib/currency";
 
 export default function VendorDetailPage() {
+  const money = useMoney();
   const params = useParams();
   const router = useRouter();
   const vendorId = params.id as string;
@@ -93,9 +95,12 @@ export default function VendorDetailPage() {
     }
   };
 
-  const formatCurrency = (amount: number, currency: string = 'PKR') => {
-    return new Intl.NumberFormat('en-PK', { style: 'currency', currency, maximumFractionDigits: 0 }).format(amount);
-  };
+  // A contract carries its own currency; everything else follows the
+  // company-wide setting.
+  const formatCurrency = (amount: number, currency?: string) =>
+    currency
+      ? formatMoney(amount, currency, { decimals: 0 })
+      : money(amount, { decimals: 0 });
 
   if (loading) return <div className="p-8 text-center text-neutral-500">Loading vendor details...</div>;
   if (!vendor) return <div className="p-8 text-center text-red-500">Vendor not found</div>;

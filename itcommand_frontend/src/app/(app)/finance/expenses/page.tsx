@@ -18,6 +18,7 @@ import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdow
 import { RowActions } from "@/components/finance/row-actions";
 import { DetailDialog } from "@/components/finance/detail-dialog";
 import { SourceSelect } from "@/components/finance/source-select";
+import { useMoney, useCurrencyCode } from "@/lib/currency";
 
 type Entry = { title: string; amount: string; category: string };
 
@@ -39,6 +40,8 @@ const statusBadge = (s: string) => {
 };
 
 export default function ExpensesPage() {
+  const money = useMoney();
+  const currencyCode = useCurrencyCode();
   const { user } = useAuthStore();
   const canModify = user?.role !== "VIEWER";
   const canApprove = ["MANAGER", "ADMIN", "SUPERADMIN"].includes(user?.role || "");
@@ -49,6 +52,7 @@ export default function ExpensesPage() {
   const [sources, setSources] = useState<any[]>([]);
   const [assets, setAssets] = useState<any[]>([]);
   const [licenses, setLicenses] = useState<any[]>([]);
+  const [subscriptions, setSubscriptions] = useState<any[]>([]);
   const [prs, setPrs] = useState<any[]>([]);
   const [budgetByCat, setBudgetByCat] = useState<Record<string, any>>({});
 
@@ -74,7 +78,7 @@ export default function ExpensesPage() {
 
   const fetchData = async () => {
     try {
-      const [expRes, catRes, yrRes, srcRes, astRes, licRes, prRes, dashRes] = await Promise.all([
+      const [expRes, catRes, yrRes, srcRes, astRes, licRes, prRes, subRes, dashRes] = await Promise.all([
         api.get("/finance/expenses/"),
         api.get("/finance/categories/"),
         api.get("/finance/years/"),
@@ -82,6 +86,7 @@ export default function ExpensesPage() {
         api.get("/assets/").catch(() => ({ data: [] })),
         api.get("/licenses/").catch(() => ({ data: [] })),
         api.get("/procurement/requests/").catch(() => ({ data: [] })),
+        api.get("/subscriptions/").catch(() => ({ data: [] })),
         api.get("/finance/dashboard/").catch(() => ({ data: { spent_by_category: [] } })),
       ]);
       setExpenses(expRes.data);
@@ -91,6 +96,7 @@ export default function ExpensesPage() {
       setAssets(Array.isArray(astRes.data) ? astRes.data : astRes.data.results || []);
       setLicenses(Array.isArray(licRes.data) ? licRes.data : licRes.data.results || []);
       setPrs(Array.isArray(prRes.data) ? prRes.data : prRes.data.results || []);
+      setSubscriptions(Array.isArray(subRes.data) ? subRes.data : subRes.data.results || []);
       const map: Record<string, any> = {};
       (dashRes.data.spent_by_category || []).forEach((c: any) => { map[String(c.category_id)] = c; });
       setBudgetByCat(map);
@@ -126,7 +132,7 @@ export default function ExpensesPage() {
       const b = budgetByCat[cat];
       if (b && amt > b.remaining) {
         const catName = categories.find((c) => String(c.id) === cat)?.name || "category";
-        warns.push(`${catName}: $${amt.toFixed(2)} exceeds remaining budget of $${b.remaining.toFixed(2)}`);
+        warns.push(`${catName}: ${money(amt)} exceeds remaining budget of ${money(b.remaining)}`);
       }
     });
     return warns;
@@ -175,6 +181,7 @@ export default function ExpensesPage() {
       source: e.source ? String(e.source) : "",
       linked_asset: e.linked_asset ? String(e.linked_asset) : "",
       linked_license: e.linked_license ? String(e.linked_license) : "",
+      linked_subscription: e.linked_subscription ? String(e.linked_subscription) : "",
       linked_purchase_request: e.linked_purchase_request ? String(e.linked_purchase_request) : "",
       receipt_number: e.receipt_number ?? "", description: e.description ?? "",
     });
@@ -191,6 +198,7 @@ export default function ExpensesPage() {
       source: editForm.source ? parseInt(editForm.source) : null,
       linked_asset: editForm.linked_asset ? parseInt(editForm.linked_asset) : null,
       linked_license: editForm.linked_license ? parseInt(editForm.linked_license) : null,
+      linked_subscription: editForm.linked_subscription ? parseInt(editForm.linked_subscription) : null,
       linked_purchase_request: editForm.linked_purchase_request ? parseInt(editForm.linked_purchase_request) : null,
       receipt_number: editForm.receipt_number, description: editForm.description,
     };
@@ -203,7 +211,12 @@ export default function ExpensesPage() {
 
   const deleteOne = async (id: number) => { if (!confirm("Delete this expense?")) return; try { await api.delete(`/finance/expenses/${id}/`); toast.success("Deleted"); fetchData(); } catch { toast.error("Delete failed"); } };
   const deleteSelected = async () => { if (!confirm(`Delete ${selected.size} selected expense(s)?`)) return; try { await Promise.all(Array.from(selected).map((id) => api.delete(`/finance/expenses/${id}/`))); toast.success("Deleted selected"); fetchData(); } catch { toast.error("Bulk delete failed"); } };
-  const toggle = (id: number) => { const n = new Set(selected); n.has(id) ? n.delete(id) : n.add(id); setSelected(n); };
+  const toggle = (id: number) => {
+    const n = new Set(selected);
+    if (n.has(id)) n.delete(id);
+    else n.add(id);
+    setSelected(n);
+  };
   const toggleAll = () => setSelected(selected.size === filtered.length ? new Set() : new Set(filtered.map((e) => e.id)));
 
   const exportData = async (fmt: "csv" | "xlsx") => {
@@ -230,8 +243,8 @@ export default function ExpensesPage() {
       </div>
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Total (filtered)</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold text-rose-600">${total.toFixed(2)}</div></CardContent></Card>
-        <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Approved This Month</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold">${thisMonth.toFixed(2)}</div></CardContent></Card>
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Total (filtered)</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold text-rose-600">{money(total)}</div></CardContent></Card>
+        <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Approved This Month</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold">{money(thisMonth)}</div></CardContent></Card>
         <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500 flex items-center gap-1"><AlertTriangle className="w-4 h-4 text-amber-500" /> Pending</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold text-amber-600">{pendingCount}</div></CardContent></Card>
         <Card><CardHeader className="pb-2"><CardTitle className="text-sm text-neutral-500">Entries</CardTitle></CardHeader><CardContent><div className="text-3xl font-bold">{filtered.length}</div></CardContent></Card>
       </div>
@@ -286,7 +299,7 @@ export default function ExpensesPage() {
                     <a href={e.bill_document_url} target="_blank" rel="noopener noreferrer" className="text-blue-500 inline-flex items-center gap-1 text-sm"><FileText className="w-3.5 h-3.5" /> {e.bill_number || "View"}</a>
                   ) : (<span className="text-neutral-400 text-sm">{e.bill_number || "—"}</span>)}
                 </TableCell>
-                <TableCell className="text-right font-bold">${e.amount}</TableCell>
+                <TableCell className="text-right font-bold">{money(e.amount)}</TableCell>
                 <TableCell>
                   <RowActions
                     canModify={canModify}
@@ -394,6 +407,9 @@ export default function ExpensesPage() {
             <div className="space-y-1"><label className="text-sm font-medium">License</label>
               <Select value={editForm.linked_license || ""} onValueChange={(v) => setEditForm({ ...editForm, linked_license: v })}><SelectTrigger><SelectValue placeholder="None" /></SelectTrigger><SelectContent>{licenses.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.product_name || `License #${l.id}`}</SelectItem>)}</SelectContent></Select>
             </div>
+            <div className="space-y-1"><label className="text-sm font-medium">Subscription</label>
+              <Select value={editForm.linked_subscription || ""} onValueChange={(v) => setEditForm({ ...editForm, linked_subscription: v })}><SelectTrigger><SelectValue placeholder="None" /></SelectTrigger><SelectContent>{subscriptions.map((s: any) => <SelectItem key={s.id} value={String(s.id)}>{s.name || `Subscription #${s.id}`}</SelectItem>)}</SelectContent></Select>
+            </div>
             <div className="space-y-1 col-span-2"><label className="text-sm font-medium">Purchase Request</label>
               <Select value={editForm.linked_purchase_request || ""} onValueChange={(v) => setEditForm({ ...editForm, linked_purchase_request: v })}><SelectTrigger><SelectValue placeholder="None" /></SelectTrigger><SelectContent>{prs.map((p) => <SelectItem key={p.id} value={String(p.id)}>{p.pr_number || p.title || `PR #${p.id}`}</SelectItem>)}</SelectContent></Select>
             </div>
@@ -411,7 +427,7 @@ export default function ExpensesPage() {
           title={viewing.title}
           subtitle={viewing.category_name}
           fields={[
-            { label: "Amount", value: `$${viewing.amount}` },
+            { label: "Amount", value: money(viewing.amount) },
             { label: "Status", value: statusBadge(viewing.status) },
             { label: "Date", value: viewing.expense_date },
             { label: "Paid To", value: viewing.paid_to },
@@ -423,6 +439,7 @@ export default function ExpensesPage() {
             { label: "Bill", value: viewing.bill_document_url ? <a href={viewing.bill_document_url} target="_blank" rel="noopener noreferrer" className="text-blue-500">Open document</a> : viewing.bill_number },
             { label: "Linked Asset", value: viewing.linked_asset_name },
             { label: "Linked License", value: viewing.linked_license_name },
+            { label: "Linked Subscription", value: viewing.linked_subscription_name },
             { label: "Linked PR", value: viewing.linked_pr_number },
             { label: "Rejection Reason", value: viewing.rejection_reason, full: true },
             { label: "Description", value: viewing.description, full: true },

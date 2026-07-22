@@ -4,6 +4,8 @@ from core.models.assets import (
     Asset, AssetCategory, AssetHistory, AssetMaintenance, AssetNote,
     AssetUnitAssignment,
 )
+from core.asset_specs import validate_asset_specs
+from django.core.exceptions import ValidationError as DjangoValidationError
 
 
 class AssetCategorySerializer(serializers.ModelSerializer):
@@ -139,6 +141,7 @@ class AssetSerializer(serializers.ModelSerializer):
             'location', 'location_ref', 'location_ref_name', 'notes',
             'specs',
             'created_by', 'created_at', 'updated_at',
+            'source_purchase_request_item',
             # Computed
             'monthly_depreciation', 'accumulated_depreciation',
             'current_book_value', 'months_in_service', 'is_fully_depreciated',
@@ -147,6 +150,7 @@ class AssetSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = [
             'id', 'asset_tag', 'created_by', 'created_at', 'updated_at',
+            'source_purchase_request_item',
         ]
 
     def validate_quantity_total(self, value):
@@ -159,6 +163,18 @@ class AssetSerializer(serializers.ModelSerializer):
                 f'({self.instance.quantity_assigned}). Return some units first.'
             )
         return value
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        category = attrs.get(
+            'category', self.instance.category if self.instance else None
+        )
+        specs = attrs.get('specs', self.instance.specs if self.instance else {})
+        try:
+            validate_asset_specs(category, specs)
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.message_dict)
+        return attrs
 
 
 class AssetNoteSerializer(serializers.ModelSerializer):

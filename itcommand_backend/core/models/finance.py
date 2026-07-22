@@ -87,6 +87,7 @@ class Expense(models.Model):
     linked_asset = models.ForeignKey('Asset', on_delete=models.SET_NULL, null=True, blank=True, related_name='expenses')
     linked_license = models.ForeignKey('SoftwareLicense', on_delete=models.SET_NULL, null=True, blank=True, related_name='expenses')
     linked_purchase_request = models.ForeignKey('PurchaseRequest', on_delete=models.SET_NULL, null=True, blank=True, related_name='expenses')
+    linked_subscription = models.ForeignKey('Subscription', on_delete=models.SET_NULL, null=True, blank=True, related_name='expenses')
     # Approval workflow — only APPROVED expenses count against the IT budget
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='PENDING')
     approved_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_expenses')

@@ -17,7 +17,10 @@ from .views import (
     IncomeSourceViewSet, CostOverviewView, RecurringIncomeViewSet,
     PettyCashTransactionViewSet, DirectPaymentViewSet, RecurringBillViewSet, BillPaymentViewSet,
     BillViewSet,
-    FinanceDashboardView, SettingsView, AuditLogViewSet, LocationViewSet,
+    FinanceDashboardView, SettingsView, ListOfValuesView, IntegrationsView, IntegrationTestView, AuditLogViewSet, LocationViewSet,
+    CalendarFeedView, MyCalendarFeedView,
+    NetworkIntegrationViewSet, DiscoveredHostViewSet, NetworkScanViewSet,
+    RunNetworkScanView, DiscoveryOptionsView,
     TicketCategoryViewSet, SLAPolicyViewSet, TicketViewSet, HelpdeskDashboardView,
     SoftwareProductViewSet, SoftwareLicenseViewSet, UserLicensesView, LicenseDashboardView,
     ChecklistTemplateViewSet, ChecklistTemplateItemViewSet, OnboardingRecordViewSet, OnboardingTaskViewSet, OnboardingDashboardView,
@@ -26,7 +29,8 @@ from .views import (
     PurchaseRequestViewSet, ProcurementDashboardView,
     NetworkLocationViewSet, NetworkDeviceViewSet, IPAddressPoolViewSet, NetworkDashboardView,
     NetworkTopologyView, NetworkExportView, NetworkDeviceLookupView,
-    KBCategoryViewSet, KBTagViewSet, KBArticleViewSet, KBDashboardView, KBSuggestView
+    KBCategoryViewSet, KBTagViewSet, KBArticleViewSet, KBDashboardView, KBSuggestView,
+    SubscriptionViewSet,
 )
 from .reports import (
     FinancialSummaryView, AssetSummaryView, ExportFinancialView, ExportAssetsView, MainDashboardView,
@@ -89,11 +93,16 @@ router.register(r'procurement/requests', PurchaseRequestViewSet, basename='procu
 # Network
 router.register(r'network/locations', NetworkLocationViewSet, basename='network-location')
 router.register(r'network/devices', NetworkDeviceViewSet, basename='network-device')
+router.register(r'network/integrations', NetworkIntegrationViewSet, basename='network-integration')
+router.register(r'network/discovered', DiscoveredHostViewSet, basename='discovered-host')
+router.register(r'network/scans', NetworkScanViewSet, basename='network-scan')
 router.register(r'network/ip-pools', IPAddressPoolViewSet, basename='network-ip-pool')
 # KB
 router.register(r'kb/categories', KBCategoryViewSet, basename='kb-category')
 router.register(r'kb/tags', KBTagViewSet, basename='kb-tag')
 router.register(r'kb/articles', KBArticleViewSet, basename='kb-article')
+# Software subscriptions
+router.register(r'subscriptions', SubscriptionViewSet, basename='subscription')
 
 urlpatterns = [
     path('auth/login/', LoginView.as_view(), name='auth_login'),
@@ -131,6 +140,11 @@ urlpatterns = [
     path('reports/export/master-user/', ExportMasterUserView.as_view(), name='reports_export_master_user'),
     path('dashboard/', MainDashboardView.as_view(), name='main_dashboard'),
     path('settings/', SettingsView.as_view(), name='app_settings'),
+    path('lov/', ListOfValuesView.as_view(), name='list_of_values'),
+    path('integrations/', IntegrationsView.as_view(), name='integrations'),
+    path('integrations/test/', IntegrationTestView.as_view(), name='integration_test'),
+    path('calendar/me/', MyCalendarFeedView.as_view(), name='my_calendar_feed'),
+    path('calendar/<str:token>.ics', CalendarFeedView.as_view(), name='calendar_feed'),
     # Helpdesk
     path('helpdesk/dashboard/', HelpdeskDashboardView.as_view(), name='helpdesk_dashboard'),
     # Licenses
@@ -143,6 +157,8 @@ urlpatterns = [
     # Procurement
     path('procurement/dashboard/', ProcurementDashboardView.as_view(), name='procurement_dashboard'),
     # Network
+    path('network/scan/', RunNetworkScanView.as_view(), name='network_scan'),
+    path('network/discovery-options/', DiscoveryOptionsView.as_view(), name='discovery_options'),
     path('network/dashboard/', NetworkDashboardView.as_view(), name='network_dashboard'),
     path('network/topology/', NetworkTopologyView.as_view(), name='network_topology'),
     path('network/lookup/', NetworkDeviceLookupView.as_view(), name='network_lookup'),

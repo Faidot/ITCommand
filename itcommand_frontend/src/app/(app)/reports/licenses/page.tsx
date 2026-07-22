@@ -4,10 +4,12 @@ import { KeyRound, AlertTriangle } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import {
-  ReportShell, KpiGrid, Kpi, ChartCard, Donut, Bars, useReport, money,
+  ReportShell, KpiGrid, Kpi, ChartCard, Donut, Bars, useReport,
 } from "@/components/reports/report-ui";
+import { useMoney } from "@/lib/currency";
 
 export default function LicenseReportPage() {
+  const money = useMoney();
   const data = useReport<any>("/reports/license-summary/");
   if (!data) return null;
   const t = data.totals;

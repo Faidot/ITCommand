@@ -45,7 +45,7 @@
   // ── filling (React/Vue-friendly) ────────────────────────────────
 
   function setValue(el, value) {
-    if (!el) return;
+    if (!el) return false;
     const proto = el.tagName === "TEXTAREA" ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
     const setter = Object.getOwnPropertyDescriptor(proto, "value")?.set;
     el.focus();
@@ -54,14 +54,22 @@
     el.dispatchEvent(new Event("input", { bubbles: true }));
     el.dispatchEvent(new Event("change", { bubbles: true }));
     el.blur();
+    return el.value === value;
   }
 
   function fill(username, password) {
     const pw = findPasswordField();
     const user = findUsernameField(pw);
-    if (user && username) setValue(user, username);
-    if (pw && password) setValue(pw, password);
-    return !!(pw || user);
+    const filledUsername = !!(user && username && setValue(user, username));
+    const filledPassword = !!(pw && password && setValue(pw, password));
+    return {
+      // A password fill is the meaningful success condition. A nearby text
+      // field by itself must not make the popup claim the login was filled.
+      ok: filledPassword,
+      filledUsername,
+      filledPassword,
+      error: filledPassword ? null : "no_password_field",
+    };
   }
 
   function flash(ok) {
@@ -89,17 +97,17 @@
     const m = res.matches[0];
     const r = await sendBg("REVEAL", { id: m.id });
     if (!r?.ok) return;
-    const filled = fill(m.username, r.password);
-    flash(filled);
+    const result = fill(m.username, r.password);
+    flash(result.ok);
   }
 
   // ── popup-driven fill ───────────────────────────────────────────
 
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg?.type === "FILL") {
-      const ok = fill(msg.username, msg.password);
-      flash(ok);
-      sendResponse({ ok });
+      const result = fill(msg.username, msg.password);
+      flash(result.ok);
+      sendResponse(result);
       return false;
     }
     if (msg?.type === "HAS_LOGIN_FORM") {

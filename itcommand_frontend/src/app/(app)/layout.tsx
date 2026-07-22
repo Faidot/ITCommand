@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useAuthStore } from "@/store/authStore";
+import { useSettingsStore } from "@/store/settingsStore";
 import { Loader2 } from "lucide-react";
 import { SidebarProvider } from "@/components/ui/sidebar";
 import { AppSidebar } from "@/components/app-sidebar";
@@ -23,6 +24,7 @@ export default function ProtectedLayout({
 }) {
   const router = useRouter();
   const { isAuthenticated, isLoading, loadFromStorage } = useAuthStore();
+  const loadSettings = useSettingsStore((state) => state.load);
   const [isMounted, setIsMounted] = useState(false);
   const isBare = typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("layout") === "bare" : false;
 
@@ -36,6 +38,11 @@ export default function ProtectedLayout({
       router.push("/login");
     }
   }, [isLoading, isAuthenticated, router, isMounted]);
+
+  // Company-wide display settings (currency, company name) drive every page.
+  useEffect(() => {
+    if (isAuthenticated) void loadSettings();
+  }, [isAuthenticated, loadSettings]);
 
   if (isLoading || !isMounted) {
     return (

@@ -39,6 +39,7 @@ file holds all configuration.
 |------------|----------------------------|--------------------------------------------------|-----------|
 | `db`       | `postgres:16-alpine`       | PostgreSQL database (data in a named volume)      | no        |
 | `backend`  | `itcommand_backend/`       | Django REST API + admin, served by Gunicorn       | no        |
+| `automation` | backend image            | Persistent runner for finance, alerts, renewals, email, and ping checks | no |
 | `frontend` | `itcommand_frontend/`      | Next.js app (production standalone build)          | no        |
 | `nginx`    | `nginx:1.27-alpine`        | Reverse proxy / single entry point + static files | **yes**   |
 
@@ -129,7 +130,8 @@ docker compose up -d --build
 
 This builds the backend and frontend images, starts PostgreSQL, runs database
 **migrations and collectstatic automatically** (via the backend entrypoint),
-then starts Gunicorn, Next.js, and nginx.
+then starts Gunicorn, the automation runner, Next.js, and nginx. The automation
+service waits until the backend is healthy, so migrations finish first.
 
 Check status and logs:
 
@@ -137,6 +139,7 @@ Check status and logs:
 docker compose ps
 docker compose logs -f          # all services; Ctrl-C to stop following
 docker compose logs -f backend  # just one service
+docker compose logs -f automation
 ```
 
 ### 3.4 Create your first admin user
@@ -165,7 +168,8 @@ If port 80 is taken, set `HTTP_PORT=8080` in `.env`, re-run
 | Restart one service          | `docker compose restart backend`                                  |
 | Rebuild after code changes   | `docker compose up -d --build`                                     |
 | Run a management command     | `docker compose exec backend python manage.py <cmd>`              |
-| Open a DB shell              | `docker compose exec db psql -U $DB_USER -d $DB_NAME`              |
+| Open a DB shell              | `docker compose exec db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'` |
+| Run due automation once      | `docker compose exec backend python manage.py run_automation --once` |
 | Stop **and delete data**     | `docker compose down -v`  ⚠️ removes the database & media volumes |
 
 ### Updating to a new version
@@ -178,14 +182,32 @@ docker compose up -d --build  # rebuilds changed images, re-runs migrations
 Migrations run automatically on every backend start, so a rebuild is all you
 need.
 
+### Automation runner
+
+The `automation` service stays running and executes the configured daily tasks
+once per local calendar day. Subscription reminders run on their own shorter
+interval so same-day subscription changes are picked up without rerunning
+finance or other daily work. Successful daily/monthly runs are recorded in
+`AppSettings`, so restarting the container does not repeat them. Network pings
+run on their configured interval and record status transitions in device
+history. View its output with `docker compose logs -f automation`.
+
+The monthly finance email is disabled until SMTP is configured. Set
+`AUTOMATION_EMAIL_REPORT_ENABLED=True` only after filling the `EMAIL_*` values.
+For an immediate diagnostic run:
+
+```bash
+docker compose exec backend python manage.py run_automation --once
+```
+
 ### Database backup & restore
 
 ```bash
 # Backup to a file on the host
-docker compose exec -T db pg_dump -U $DB_USER $DB_NAME > backup_$(date +%F).sql
+docker compose exec -T db sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > backup_$(date +%F).sql
 
 # Restore from a backup file
-cat backup_2026-06-30.sql | docker compose exec -T db psql -U $DB_USER -d $DB_NAME
+cat backup_2026-06-30.sql | docker compose exec -T db sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"'
 ```
 
 Media uploads live in the `media_volume` Docker volume. To back those up:
@@ -200,19 +222,27 @@ docker run --rm -v it_media_volume:/data -v "$PWD":/backup alpine \
 
 ---
 
-## 5. HTTPS (optional but recommended for production)
+## 5. HTTPS (required for production)
 
-The stack serves plain HTTP on the chosen port. To add TLS you can either:
+The stack serves plain HTTP on the chosen port for local development. Because
+logins, JWTs, vault unlock passwords, and revealed secrets cross this connection,
+put every production deployment behind TLS. You can either:
 
 1. **Put it behind a reverse proxy you already run** (Caddy, Traefik, or an
-   nginx on the host) that terminates TLS and forwards to `HTTP_PORT`. Add your
-   `https://domain` to `ALLOWED_HOSTS` (host only) and `CSRF_TRUSTED_ORIGINS`
-   (with scheme). The backend already trusts the `X-Forwarded-Proto` header.
+   nginx on the host) that terminates TLS and forwards to `HTTP_PORT`. Add the
+   bare domain to `ALLOWED_HOSTS` and `https://domain` to
+   `CSRF_TRUSTED_ORIGINS`. nginx preserves the trusted proxy's
+   `X-Forwarded-Proto` header for Django.
 
 2. **Use a cloud load balancer** that terminates TLS in front of the server.
 
 For a single-box setup, **Caddy** in front is the simplest: it gets and renews
 Let's Encrypt certificates automatically and proxies to `localhost:${HTTP_PORT}`.
+
+After HTTPS works end-to-end, enable `SECURE_SSL_REDIRECT`,
+`SESSION_COOKIE_SECURE`, and `CSRF_COOKIE_SECURE`. Start HSTS with a short
+`SECURE_HSTS_SECONDS`, verify it carefully, then increase it. Keep nginx's host
+port firewalled from the public when another proxy is the trusted entry point.
 
 ---
 
@@ -225,6 +255,7 @@ All variables live in the root `.env` (see [`.env.example`](.env.example)).
 | `HTTP_PORT`            | no       | `80`                               | Host port nginx publishes.                                     |
 | `SECRET_KEY`           | **yes**  | _(random 50+ chars)_               | Django cryptographic signing key.                              |
 | `DEBUG`                | **yes**  | `False`                            | Must be `False` in production.                                 |
+| `TIME_ZONE`            | no       | `UTC`                              | IANA timezone used by scheduled daily/monthly work.            |
 | `ALLOWED_HOSTS`        | **yes**  | `1.2.3.4,itcommand.example.com`    | Hosts/domains Django will serve (comma-separated).             |
 | `CSRF_TRUSTED_ORIGINS` | prod     | `https://itcommand.example.com`    | Origins (with scheme) trusted for admin/CSRF.                  |
 | `CORS_ALLOWED_ORIGINS` | no       | `http://localhost:3000`            | Only needed if the frontend runs on a different origin.        |
@@ -233,7 +264,36 @@ All variables live in the root `.env` (see [`.env.example`](.env.example)).
 | `DB_USER`              | **yes**  | `itcommand`                        | PostgreSQL user.                                               |
 | `DB_PASSWORD`          | **yes**  | _(strong password)_                | PostgreSQL password.                                           |
 | `GUNICORN_WORKERS`     | no       | `3`                                | Backend worker processes — roughly `(2 × CPU cores) + 1`.      |
+| `GUNICORN_TIMEOUT`     | no       | `120`                              | Maximum request duration in seconds.                           |
 | `NEXT_PUBLIC_API_URL`  | no       | `/api`                             | API base baked into the frontend. Keep `/api` for same-origin. |
+
+Security variables default to local-development-safe values:
+
+| Variable | Production value | Purpose |
+|----------|------------------|---------|
+| `SECURE_SSL_REDIRECT` | `True` after TLS works | Redirect application requests to HTTPS. |
+| `SESSION_COOKIE_SECURE` | `True` | Never send admin session cookies over HTTP. |
+| `CSRF_COOKIE_SECURE` | `True` | Never send CSRF cookies over HTTP. |
+| `SECURE_HSTS_SECONDS` | increase carefully from a short value | Tell browsers to require HTTPS. |
+| `SECURE_HSTS_INCLUDE_SUBDOMAINS` / `SECURE_HSTS_PRELOAD` | opt in only after review | Extend HSTS scope/preload. |
+
+Automation variables:
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `AUTOMATION_DAILY_COMMANDS` | finance/license/subscription/contract commands | Comma-separated management commands run once per day. If you pin this in `.env`, newly added commands (e.g. `auto_renew_subscriptions`) are **not** picked up automatically — add them by hand. |
+| `AUTOMATION_INTERVAL_COMMANDS` | `check_subscription_alerts` | Idempotent commands run independently on the short interval. |
+| `AUTOMATION_INTERVAL_SECONDS` | `300` | Seconds between interval-command runs. |
+| `AUTOMATION_POLL_SECONDS` | `60` | Runner wake-up interval. |
+| `AUTOMATION_RETRY_SECONDS` | `300` | Backoff after a failed command. |
+| `AUTOMATION_PING_ENABLED` | `True` | Enable network reachability checks. |
+| `PING_CHECK_INTERVAL_SECONDS` | `300` | Seconds between ping sweeps. |
+| `AUTOMATION_EMAIL_REPORT_ENABLED` | `False` | Enable the monthly finance email after SMTP setup. |
+| `FINANCE_REPORT_DAY` | `1` | Local day of month (1–28); missed days catch up after restart. |
+
+Email delivery uses `EMAIL_BACKEND`, `EMAIL_HOST`, `EMAIL_PORT`,
+`EMAIL_HOST_USER`, `EMAIL_HOST_PASSWORD`, `EMAIL_USE_TLS`, `EMAIL_USE_SSL`, and
+`DEFAULT_FROM_EMAIL`. See `.env.example` for a complete template.
 
 > `DB_HOST` and `DB_PORT` are **not** needed in `.env` — Compose sets them to the
 > internal `db` service automatically.
@@ -245,7 +305,7 @@ All variables live in the root `.env` (see [`.env.example`](.env.example)).
 The same setup runs locally. From the repo root:
 
 ```bash
-cp .env.example .env       # the committed .env already has generated dev keys
+cp .env.example .env       # generate fresh local SECRET_KEY and vault key
 # (ensure ALLOWED_HOSTS includes localhost,127.0.0.1)
 docker compose up -d --build
 docker compose exec backend python manage.py createsuperuser
@@ -256,6 +316,20 @@ Open `http://localhost/`.
 > Prefer running without Docker for active development? See the non-Docker
 > instructions in [README.md](README.md) (separate `venv` backend on `:8000`
 > and `npm run dev` frontend on `:3000`).
+
+### Keep secrets and runtime data out of Git
+
+The ignore rules cover `.env`, virtual environments, SQLite databases, media,
+logs, exports, and build caches. Ignore rules do not remove files that were
+already tracked. Audit before every release:
+
+```bash
+git ls-files | grep -E '(^|/)(\.env|db\.sqlite3|media/|venv/)|\.sql$'
+```
+
+If that lists runtime data, remove it from the index with `git rm --cached`
+(not plain `rm` if you need the local copy), rotate any exposed secrets, and
+follow your incident process for repository-history cleanup.
 
 ---
 
@@ -302,9 +376,8 @@ python manage.py dumpdata --natural-foreign --natural-primary \
   -e contenttypes -e auth.permission -e admin.logentry \
   -e sessions.session > datadump.json
 
-# Copy datadump.json into the repo, then load it into the running Postgres stack:
-docker compose exec -T backend python manage.py loaddata /app/datadump.json
+# Copy the dump into the already-built container, load it, then remove the copy:
+docker compose cp datadump.json backend:/tmp/datadump.json
+docker compose exec -T backend python manage.py loaddata /tmp/datadump.json
+docker compose exec -T backend rm /tmp/datadump.json
 ```
-
-(Place `datadump.json` in `itcommand_backend/` so it's available at `/app/` in
-the container.)

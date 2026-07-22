@@ -4,9 +4,10 @@ from django.contrib.auth.models import AbstractUser, BaseUserManager
 from django.contrib.auth.hashers import make_password, check_password
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
-from django.utils.crypto import get_random_string
 from datetime import timedelta
 from core.encryption import encrypt_value, decrypt_value
+import hashlib
+import secrets
 
 
 class VaultMasterPassword(models.Model):
@@ -51,15 +52,22 @@ class VaultUnlockSession(models.Model):
     revoked = models.BooleanField(default=False)
     ip_address = models.GenericIPAddressField(blank=True, null=True)
 
+    @staticmethod
+    def digest_token(raw_token: str) -> str:
+        return hashlib.sha256(raw_token.encode('utf-8')).hexdigest()
+
     @classmethod
     def issue(cls, user, ttl_minutes: int = 30, ip: str | None = None):
-        token = get_random_string(48)
-        return cls.objects.create(
+        raw_token = secrets.token_urlsafe(36)
+        session = cls.objects.create(
             user=user,
-            token=token,
+            token=cls.digest_token(raw_token),
             expires_at=timezone.now() + timedelta(minutes=ttl_minutes),
             ip_address=ip or None,
         )
+        # Return the secret once without ever persisting it in plaintext.
+        session.token = raw_token
+        return session
 
     def is_valid(self) -> bool:
         return (not self.revoked) and self.expires_at > timezone.now()

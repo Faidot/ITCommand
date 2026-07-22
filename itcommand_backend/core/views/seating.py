@@ -3,6 +3,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.utils import timezone
+from django.db import transaction
 from core.models import Office, Floor, Seat, SeatAssignment, User, FloorMapObject
 from core.serializers.seating import (
     OfficeSerializer,
@@ -11,7 +12,7 @@ from core.serializers.seating import (
     SeatAssignmentSerializer,
     FloorMapObjectSerializer,
 )
-from core.permissions import IsAdminOrSuperadmin, HasModulePermission
+from core.permissions import IsAdminOrSuperadmin, HasModulePermission, has_role_permission
 
 
 # ───────────────────────── Layout helpers ─────────────────────────
@@ -161,8 +162,9 @@ class SeatViewSet(viewsets.ModelViewSet):
         return qs
 
     @action(detail=True, methods=['post'])
+    @transaction.atomic
     def assign(self, request, pk=None):
-        seat = self.get_object()
+        seat = Seat.objects.select_for_update().get(pk=self.get_object().pk)
         user_id = request.data.get('user_id')
         notes = request.data.get('notes', '')
 
@@ -170,7 +172,7 @@ class SeatViewSet(viewsets.ModelViewSet):
             return Response({'detail': 'user_id is required'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            target_user = User.objects.get(id=user_id)
+            target_user = User.objects.select_for_update().get(id=user_id)
         except User.DoesNotExist:
             return Response({'detail': 'User not found'}, status=status.HTTP_404_NOT_FOUND)
 
@@ -317,8 +319,11 @@ class SeatAssignmentViewSet(viewsets.ModelViewSet):
         return qs
 
     @action(detail=True, methods=['post'])
+    @transaction.atomic
     def approve(self, request, pk=None):
-        pending = self.get_object()
+        pending = SeatAssignment.objects.select_for_update().get(
+            pk=self.get_object().pk
+        )
         if pending.status != 'PENDING':
             return Response({'detail': 'Not pending.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -377,7 +382,8 @@ class FloorMapObjectViewSet(viewsets.ModelViewSet):
         return qs
 
 class SeatingStatsView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = [HasModulePermission]
+    rbac_module = 'seating'
 
     def get(self, request):
         total_seats = Seat.objects.count()
@@ -397,6 +403,14 @@ class UserSeatView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request, user_id):
+        if (
+            str(request.user.id) != str(user_id)
+            and not has_role_permission(request.user, 'seating', 'view')
+        ):
+            return Response(
+                {'detail': 'Permission denied.'},
+                status=status.HTTP_403_FORBIDDEN,
+            )
         assignment = SeatAssignment.objects.filter(user_id=user_id, is_active=True).first()
         if assignment:
             return Response(SeatAssignmentSerializer(assignment).data)

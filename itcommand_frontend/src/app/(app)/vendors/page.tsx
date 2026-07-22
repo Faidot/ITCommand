@@ -16,8 +16,10 @@ import { AddVendorDialog } from "./add-vendor-dialog";
 import { ContractCalendarWidget } from "./calendar-widget";
 import { useAuthStore } from "@/store/authStore";
 import { useBulkSelection, summarizeBulkDelete } from "@/hooks/use-bulk-selection";
+import { useMoney, useCurrencyCode } from "@/lib/currency";
 
 export default function VendorsPage() {
+  const money = useMoney();
   const router = useRouter();
   const { user } = useAuthStore();
   const isAdmin = user?.role === "ADMIN" || user?.role === "SUPERADMIN";
@@ -98,7 +100,7 @@ export default function VendorsPage() {
   };
 
   const formatCurrency = (amount: number) => {
-    return new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 }).format(amount);
+    return money(amount, { decimals: 0 });
   };
 
   const renderStars = (rating: number) => {

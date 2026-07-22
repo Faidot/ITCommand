@@ -102,6 +102,12 @@ class UserSerializer(serializers.ModelSerializer):
         value = (value or "").strip().upper()
         if not Role.objects.filter(slug=value).exists():
             raise serializers.ValidationError("Unknown role.")
+        request = self.context.get('request')
+        if request and request.user.is_authenticated:
+            if request.user.role == 'ADMIN' and value == 'SUPERADMIN':
+                raise serializers.ValidationError(
+                    "Only a Superadmin can assign the Superadmin role."
+                )
         return value
 
 class LoginSerializer(serializers.Serializer):

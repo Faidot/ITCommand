@@ -16,9 +16,9 @@ export function RouteGuard({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { user } = useAuthStore();
 
-  const module = moduleForPath(pathname || "");
+  const routeModule = moduleForPath(pathname || "");
 
-  if (module && user && !can(user, module, "view")) {
+  if (routeModule && user && !can(user, routeModule, "view")) {
     return (
       <div className="p-8 max-w-2xl mx-auto">
         <Alert variant="destructive">
