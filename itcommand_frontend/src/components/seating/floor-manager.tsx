@@ -15,7 +15,7 @@ import { CELL } from "@/lib/seating-types";
 interface Office { id: number; name: string; address?: string; }
 interface Floor {
   id: number; office: number; floor_name: string; floor_number: number;
-  width_units: number; height_units: number;
+  width_units: number; height_units: number; wall_height_units: number;
 }
 
 /**
@@ -38,6 +38,7 @@ export function FloorManagerPanel({
   const [newOffice, setNewOffice] = useState({ name: "", address: "" });
   const [newFloor, setNewFloor] = useState({
     floor_name: "", floor_number: "1", width_units: "20", height_units: "15",
+    wall_height_units: "3",
   });
 
   const loadOffices = useCallback(async () => {
@@ -105,11 +106,12 @@ export function FloorManagerPanel({
         floor_number: parseInt(newFloor.floor_number) || 1,
         width_units: Math.max(6, parseInt(newFloor.width_units) || 20),
         height_units: Math.max(6, parseInt(newFloor.height_units) || 15),
+        wall_height_units: Math.max(0, parseInt(newFloor.wall_height_units) || 3),
       });
       toast.success("Floor added");
       setNewFloor({
         floor_name: "", floor_number: String(floors.length + 2),
-        width_units: "20", height_units: "15",
+        width_units: "20", height_units: "15", wall_height_units: "3",
       });
       await loadFloors(officeId);
       onChanged?.(officeId, r.data.id);
@@ -229,6 +231,15 @@ export function FloorManagerPanel({
                       if (v !== f.height_units) updateFloorDims(f, { height_units: v });
                     }}
                   />
+                  <label className="text-[11px] text-neutral-400" title="Wall / room height (grid units) shown in 3D">Z</label>
+                  <Input
+                    type="number" min={0} defaultValue={f.wall_height_units ?? 3} className="h-7 w-16 text-xs"
+                    title="Wall / room height (grid units) shown in 3D — 0 for an open floor"
+                    onBlur={(e) => {
+                      const v = Math.max(0, parseInt(e.target.value) || 0);
+                      if (v !== (f.wall_height_units ?? 3)) updateFloorDims(f, { wall_height_units: v });
+                    }}
+                  />
                   <Button size="icon" variant="ghost" className="h-6 w-6 text-red-500" onClick={() => deleteFloor(f.id)}>
                     <Trash2 className="w-3.5 h-3.5" />
                   </Button>
@@ -236,7 +247,7 @@ export function FloorManagerPanel({
               ))}
               {floors.length === 0 && <p className="text-xs text-neutral-400">No floors yet.</p>}
             </div>
-            <div className="grid grid-cols-[1.4fr_.7fr_.7fr_.7fr_auto] gap-2 items-center">
+            <div className="grid grid-cols-[1.4fr_.6fr_.6fr_.6fr_.6fr_auto] gap-2 items-center">
               <Input
                 placeholder="Floor name" value={newFloor.floor_name}
                 onChange={(e) => setNewFloor({ ...newFloor, floor_name: e.target.value })}
@@ -257,12 +268,18 @@ export function FloorManagerPanel({
                 onChange={(e) => setNewFloor({ ...newFloor, height_units: e.target.value })}
                 className="h-8 text-sm"
               />
+              <Input
+                placeholder="Z" type="number" min={0} value={newFloor.wall_height_units}
+                title="Wall / room height (grid units) shown in 3D"
+                onChange={(e) => setNewFloor({ ...newFloor, wall_height_units: e.target.value })}
+                className="h-8 text-sm"
+              />
               <Button size="sm" className="h-8" onClick={createFloor}>
                 <Plus className="w-3.5 h-3.5 mr-1" /> Add
               </Button>
             </div>
             <p className="text-[11px] text-neutral-400 mt-1.5">
-              W &amp; H are grid units ({CELL}px each). A 20×15 floor is {20 * CELL}×{15 * CELL}px.
+              W &amp; H are grid units ({CELL}px each); Z is the wall / room height shown in 3D (0 = open floor).
             </p>
           </>
         )}

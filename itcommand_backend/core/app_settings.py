@@ -32,6 +32,12 @@ def company_name(default=""):
     return str(get_setting("company_name") or default)
 
 
+def company_short_code(default="IT"):
+    """Short company prefix for generated codes/tags (e.g. 'TF'). Uppercased."""
+    code = str(get_setting("company_short_code") or "").strip().upper()
+    return code or default
+
+
 def fiscal_year_start_month():
     """Month (1-12) the financial year starts on. Defaults to January."""
     try:

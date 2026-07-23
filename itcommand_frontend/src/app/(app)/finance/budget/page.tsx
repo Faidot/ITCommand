@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { Plus, Wallet } from "lucide-react";
+import { Plus, Wallet, BellRing } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
@@ -15,6 +15,7 @@ import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RTooltip, Respon
 import { RowActions } from "@/components/finance/row-actions";
 import { DetailDialog } from "@/components/finance/detail-dialog";
 import { useMoney, useCurrencyCode } from "@/lib/currency";
+import { SubscriptionSettingsDialog } from "../../subscriptions/subscription-settings-dialog";
 
 export default function BudgetPage() {
   const money = useMoney();
@@ -40,6 +41,7 @@ export default function BudgetPage() {
   const [cloneOpen, setCloneOpen] = useState(false);
   const [cloneSource, setCloneSource] = useState("");
   const [cloneRollover, setCloneRollover] = useState(false);
+  const [alertsOpen, setAlertsOpen] = useState(false);
 
   const fetchDependencies = async () => {
     try {
@@ -119,10 +121,17 @@ export default function BudgetPage() {
             <SelectTrigger className="w-[180px] bg-white dark:bg-neutral-900"><SelectValue placeholder="Financial Year" /></SelectTrigger>
             <SelectContent>{years.map((y) => <SelectItem key={y.id} value={y.id.toString()}>{y.name}</SelectItem>)}</SelectContent>
           </Select>
+          {isAdmin && (
+            <Button variant="outline" onClick={() => setAlertsOpen(true)}>
+              <BellRing className="w-4 h-4 mr-2" /> Alerts &amp; budget thresholds
+            </Button>
+          )}
           <Button variant="outline" onClick={() => { setCloneSource(""); setCloneRollover(false); setCloneOpen(true); }}>Clone from year</Button>
           <Button onClick={openAdd}><Plus className="w-4 h-4 mr-2" /> Add Allocation</Button>
         </div>
       </div>
+
+      <SubscriptionSettingsDialog open={alertsOpen} onOpenChange={setAlertsOpen} />
 
       {dashboardData && (
         <>

@@ -95,6 +95,29 @@ class AssetSerializer(serializers.ModelSerializer):
     category_name = serializers.CharField(source='category.name', read_only=True)
     vendor_name = serializers.CharField(source='vendor.name', read_only=True)
 
+    # Type & condition are admin-managed via the LOV groups "asset_type" /
+    # "asset_condition", so accept any value defined there rather than the
+    # model's static choices. Status stays a fixed system list (logic branches
+    # on its codes), so it keeps the model's ChoiceField.
+    asset_type = serializers.CharField(required=False)
+    condition = serializers.CharField(required=False)
+
+    def _validate_lov(self, group, value):
+        from core.lov import is_valid
+
+        code = (value or '').strip().upper()
+        # active_only=False so hiding a value in the admin never blocks saving an
+        # asset that already uses it.
+        if not is_valid(group, code, active_only=False):
+            raise serializers.ValidationError("Not a recognised value. Add it under List of Values first.")
+        return code
+
+    def validate_asset_type(self, value):
+        return self._validate_lov('asset_type', value)
+
+    def validate_condition(self, value):
+        return self._validate_lov('asset_condition', value)
+
     # Computed depreciation
     monthly_depreciation = serializers.DecimalField(
         max_digits=14, decimal_places=2, read_only=True

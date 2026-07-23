@@ -198,19 +198,45 @@ class Asset(models.Model):
             qty = self.quantity_total or 1
             self.purchase_price = (Decimal(self.unit_price) * Decimal(qty)).quantize(Decimal('0.01'))
 
-        # Race-safe asset_tag: derive from the primary key (which the DB allocates
-        # atomically). On first insert we save once to get an id, then patch the
-        # tag. Updates pass through normally.
+        # Race-safe asset_tag: derive after the DB allocates the primary key.
+        # On first insert we save once to get an id, then patch the tag.
+        # Format: <COMPANY>-<CATEGORY>-<NNN>, e.g. TF-LP-001. Updates pass through.
         if not self.asset_tag and self.pk is None:
             with transaction.atomic():
                 super().save(*args, **kwargs)
-                # Only assign id-derived tag if user didn't set one mid-save.
-                if not self.asset_tag:
-                    self.asset_tag = f"IT-{self.pk:04d}"
-                    # Re-save just the tag.
+                if not self.asset_tag:  # user didn't set one mid-save
+                    self.asset_tag = self._generate_asset_tag()
                     Asset.objects.filter(pk=self.pk).update(asset_tag=self.asset_tag)
             return
         super().save(*args, **kwargs)
+
+    def _category_code(self):
+        """Short code for the tag's category segment (e.g. 'LP')."""
+        cat = self.category
+        if cat and (cat.code or '').strip():
+            return cat.code.strip().upper()
+        if cat and cat.name:
+            base = ''.join(ch for ch in cat.name if ch.isalnum()).upper()
+            return base[:3] or 'GEN'
+        return 'GEN'
+
+    def _generate_asset_tag(self):
+        """<COMPANY>-<CATEGORY>-<NNN>, numbered sequentially within the prefix."""
+        from core.app_settings import company_short_code
+
+        prefix = f"{company_short_code()}-{self._category_code()}-"
+        max_n = 0
+        for tag in Asset.objects.filter(asset_tag__startswith=prefix).values_list('asset_tag', flat=True):
+            suffix = tag[len(prefix):]
+            if suffix.isdigit():
+                max_n = max(max_n, int(suffix))
+        n = max_n + 1
+        tag = f"{prefix}{n:03d}"
+        # Guard against a concurrent insert claiming the same number.
+        while Asset.objects.filter(asset_tag=tag).exclude(pk=self.pk).exists():
+            n += 1
+            tag = f"{prefix}{n:03d}"
+        return tag
 
     def __str__(self):
         return f"[{self.asset_tag}] {self.name}"

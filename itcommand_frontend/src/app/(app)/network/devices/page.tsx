@@ -32,7 +32,7 @@ export default function NetworkDevicesPage() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [bulkStatus, setBulkStatus] = useState("");
   const [bulkLocation, setBulkLocation] = useState("");
-  const [form, setForm] = useState<any>({ device_name:"",device_type:"SERVER",brand:"",model:"",serial_number:"",ip_address:"",mac_address:"",hostname:"",subnet_mask:"",gateway:"",vlan_id:"",dns_primary:"",dns_secondary:"",location:"",rack_unit_start:"",rack_unit_size:"1",os_name:"",os_version:"",firmware_version:"",cpu_info:"",ram_gb:"",storage_info:"",purchase_date:"",warranty_expiry:"",vendor:"",status:"OFFLINE",notes:"" });
+  const [form, setForm] = useState<any>({ device_name:"",device_type:"SERVER",brand:"",model:"",serial_number:"",ip_address:"",mac_address:"",hostname:"",subnet_mask:"",gateway:"",vlan_id:"",dns_primary:"",dns_secondary:"",location:"",rack_unit_start:"",rack_unit_size:"1",os_name:"",os_version:"",firmware_version:"",cpu_info:"",ram_gb:"",storage_info:"",purchase_date:"",warranty_expiry:"",vendor:"",status:"OFFLINE",notes:"",port_count:"" });
 
   useEffect(() => {
     api.get("/network/locations/").then(r=>setLocations(r.data.results||r.data)).catch(()=>{});
@@ -172,6 +172,7 @@ export default function NetworkDevicesPage() {
                 <SelectItem value="SERVER">Server</SelectItem><SelectItem value="SWITCH">Switch</SelectItem><SelectItem value="ROUTER">Router</SelectItem><SelectItem value="FIREWALL">Firewall</SelectItem><SelectItem value="ACCESS_POINT">Access Point</SelectItem><SelectItem value="NAS">NAS</SelectItem><SelectItem value="UPS">UPS</SelectItem><SelectItem value="PATCH_PANEL">Patch Panel</SelectItem><SelectItem value="VM">VM</SelectItem><SelectItem value="OTHER">Other</SelectItem>
               </SelectContent></Select></div><div className="space-y-2"><Label>Brand</Label><Input value={form.brand} onChange={e=>setForm({...form,brand:e.target.value})} placeholder="Cisco"/></div></div>
               <div className="grid grid-cols-2 gap-4"><div className="space-y-2"><Label>Model</Label><Input value={form.model} onChange={e=>setForm({...form,model:e.target.value})}/></div><div className="space-y-2"><Label>Serial Number</Label><Input value={form.serial_number} onChange={e=>setForm({...form,serial_number:e.target.value})}/></div></div>
+              <div className="space-y-2"><Label>Interfaces / Ports</Label><Input type="number" min="0" value={form.port_count} onChange={e=>setForm({...form,port_count:e.target.value})} placeholder="e.g. 24"/><p className="text-xs text-neutral-500">Creates numbered interfaces (Port 1…N) you can wire in the topology map.</p></div>
             </TabsContent>
             <TabsContent value="network" className="space-y-3 mt-0">
               <div className="grid grid-cols-2 gap-4"><div className="space-y-2"><Label>IP Address</Label><Input value={form.ip_address} onChange={e=>setForm({...form,ip_address:e.target.value})} placeholder="192.168.1.1"/></div><div className="space-y-2"><Label>MAC Address</Label><Input value={form.mac_address} onChange={e=>setForm({...form,mac_address:e.target.value})} placeholder="AA:BB:CC:DD:EE:FF"/></div></div>

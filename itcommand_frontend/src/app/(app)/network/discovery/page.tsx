@@ -38,6 +38,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
+import { Textarea } from "@/components/ui/textarea";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Table,
   TableBody,
@@ -137,8 +139,18 @@ export default function NetworkDiscoveryPage() {
   const [search, setSearch] = useState("");
 
   const [promoting, setPromoting] = useState<DiscoveredHost | null>(null);
-  const [promoteName, setPromoteName] = useState("");
-  const [promoteType, setPromoteType] = useState("OTHER");
+  const emptyPromote = {
+    device_name: "", device_type: "OTHER", brand: "", model: "", serial_number: "",
+    ip_address: "", mac_address: "", hostname: "", subnet_mask: "", gateway: "",
+    vlan_id: "", dns_primary: "", dns_secondary: "", location: "", vendor: "",
+    rack_unit_start: "", rack_unit_size: "1", os_name: "", os_version: "",
+    firmware_version: "", cpu_info: "", ram_gb: "", storage_info: "",
+    purchase_date: "", warranty_expiry: "", status: "ONLINE", notes: "", port_count: "",
+  };
+  const [promoteForm, setPromoteForm] = useState<Record<string, string>>(emptyPromote);
+  const [locations, setLocations] = useState<{ id: number; name: string }[]>([]);
+  const [vendors, setVendors] = useState<{ id: number; name: string }[]>([]);
+  const setPF = (patch: Record<string, string>) => setPromoteForm((f) => ({ ...f, ...patch }));
 
   const load = useCallback(async () => {
     try {
@@ -160,6 +172,11 @@ export default function NetworkDiscoveryPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    api.get("/network/locations/").then((r) => setLocations(listOf<{ id: number; name: string }>(r.data))).catch(() => {});
+    api.get("/vendors/?is_active=true").then((r) => setVendors(listOf<{ id: number; name: string }>(r.data))).catch(() => {});
+  }, []);
 
   const runScan = async () => {
     const body: Record<string, unknown> = { probe_ports: probePorts };
@@ -202,12 +219,10 @@ export default function NetworkDiscoveryPage() {
 
   const submitPromote = async () => {
     if (!promoting) return;
+    if (!promoteForm.device_name.trim()) return toast.error("Device name required");
     setBusyId(promoting.id);
     try {
-      const res = await api.post(`/network/discovered/${promoting.id}/promote/`, {
-        device_name: promoteName,
-        device_type: promoteType,
-      });
+      const res = await api.post(`/network/discovered/${promoting.id}/promote/`, promoteForm);
       toast.success(res.data?.detail || "Added to inventory");
       setPromoting(null);
       await load();
@@ -220,8 +235,14 @@ export default function NetworkDiscoveryPage() {
 
   const openPromote = (host: DiscoveredHost) => {
     setPromoting(host);
-    setPromoteName(host.hostname || `${host.vendor_guess || "Device"} ${host.ip_address}`);
-    setPromoteType("OTHER");
+    setPromoteForm({
+      ...emptyPromote,
+      device_name: host.hostname || `${host.vendor_guess || "Device"} ${host.ip_address}`,
+      brand: host.vendor_guess || "",
+      ip_address: host.ip_address || "",
+      mac_address: host.mac_address || "",
+      hostname: host.hostname || "",
+    });
   };
 
   if (loading) {
@@ -518,41 +539,112 @@ export default function NetworkDiscoveryPage() {
       </Card>
 
       <Dialog open={!!promoting} onOpenChange={(open) => !open && setPromoting(null)}>
-        <DialogContent>
+        <DialogContent className="sm:max-w-[650px] max-h-[90vh] flex flex-col">
           <DialogHeader>
             <DialogTitle>Add to inventory</DialogTitle>
             <DialogDescription>
-              Creates a network device record for {promoting?.ip_address}.
+              Creates a network device record for {promoting?.ip_address}. Fields are
+              pre-filled from the scan — complete the rest as needed.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="promote-name">Device name</Label>
-              <Input
-                id="promote-name"
-                value={promoteName}
-                onChange={(e) => setPromoteName(e.target.value)}
-              />
+          <Tabs defaultValue="identity" className="w-full flex-col">
+            <TabsList className="grid w-full grid-cols-5 mb-4">
+              <TabsTrigger value="identity">Identity</TabsTrigger>
+              <TabsTrigger value="network">Network</TabsTrigger>
+              <TabsTrigger value="location">Location</TabsTrigger>
+              <TabsTrigger value="system">System</TabsTrigger>
+              <TabsTrigger value="lifecycle">Lifecycle</TabsTrigger>
+            </TabsList>
+            <div className="overflow-y-auto pr-2" style={{ maxHeight: "55vh" }}>
+              <TabsContent value="identity" className="space-y-3 mt-0">
+                <div className="space-y-2"><Label>Device Name *</Label><Input value={promoteForm.device_name} onChange={(e) => setPF({ device_name: e.target.value })} /></div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2"><Label>Type</Label>
+                    <Select value={promoteForm.device_type} onValueChange={(v) => setPF({ device_type: v })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>{options?.device_types.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2"><Label>Brand</Label><Input value={promoteForm.brand} onChange={(e) => setPF({ brand: e.target.value })} /></div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2"><Label>Model</Label><Input value={promoteForm.model} onChange={(e) => setPF({ model: e.target.value })} /></div>
+                  <div className="space-y-2"><Label>Serial Number</Label><Input value={promoteForm.serial_number} onChange={(e) => setPF({ serial_number: e.target.value })} /></div>
+                </div>
+                <div className="space-y-2"><Label>Interfaces / Ports</Label><Input type="number" min="0" value={promoteForm.port_count} onChange={(e) => setPF({ port_count: e.target.value })} placeholder="e.g. 24" /><p className="text-xs text-muted-foreground">Creates numbered interfaces you can wire in the topology map.</p></div>
+              </TabsContent>
+              <TabsContent value="network" className="space-y-3 mt-0">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2"><Label>IP Address</Label><Input value={promoteForm.ip_address} onChange={(e) => setPF({ ip_address: e.target.value })} /></div>
+                  <div className="space-y-2"><Label>MAC Address</Label><Input value={promoteForm.mac_address} onChange={(e) => setPF({ mac_address: e.target.value })} /></div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2"><Label>Hostname</Label><Input value={promoteForm.hostname} onChange={(e) => setPF({ hostname: e.target.value })} /></div>
+                  <div className="space-y-2"><Label>VLAN ID</Label><Input type="number" value={promoteForm.vlan_id} onChange={(e) => setPF({ vlan_id: e.target.value })} /></div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2"><Label>Subnet Mask</Label><Input value={promoteForm.subnet_mask} onChange={(e) => setPF({ subnet_mask: e.target.value })} placeholder="255.255.255.0" /></div>
+                  <div className="space-y-2"><Label>Gateway</Label><Input value={promoteForm.gateway} onChange={(e) => setPF({ gateway: e.target.value })} /></div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2"><Label>DNS Primary</Label><Input value={promoteForm.dns_primary} onChange={(e) => setPF({ dns_primary: e.target.value })} /></div>
+                  <div className="space-y-2"><Label>DNS Secondary</Label><Input value={promoteForm.dns_secondary} onChange={(e) => setPF({ dns_secondary: e.target.value })} /></div>
+                </div>
+                {promoting?.open_ports && promoting.open_ports.length > 0 && (
+                  <p className="text-xs text-muted-foreground">Open ports seen: {promoting.open_ports.join(", ")}</p>
+                )}
+              </TabsContent>
+              <TabsContent value="location" className="space-y-3 mt-0">
+                <div className="space-y-2"><Label>Location</Label>
+                  <Select value={promoteForm.location} onValueChange={(v) => setPF({ location: v })}>
+                    <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                    <SelectContent>{locations.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>)}</SelectContent>
+                  </Select>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2"><Label>Rack Unit Start</Label><Input type="number" value={promoteForm.rack_unit_start} onChange={(e) => setPF({ rack_unit_start: e.target.value })} /></div>
+                  <div className="space-y-2"><Label>Rack Unit Size (U)</Label><Input type="number" value={promoteForm.rack_unit_size} onChange={(e) => setPF({ rack_unit_size: e.target.value })} /></div>
+                </div>
+              </TabsContent>
+              <TabsContent value="system" className="space-y-3 mt-0">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2"><Label>OS Name</Label><Input value={promoteForm.os_name} onChange={(e) => setPF({ os_name: e.target.value })} /></div>
+                  <div className="space-y-2"><Label>OS Version</Label><Input value={promoteForm.os_version} onChange={(e) => setPF({ os_version: e.target.value })} /></div>
+                </div>
+                <div className="space-y-2"><Label>Firmware Version</Label><Input value={promoteForm.firmware_version} onChange={(e) => setPF({ firmware_version: e.target.value })} /></div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2"><Label>CPU Info</Label><Input value={promoteForm.cpu_info} onChange={(e) => setPF({ cpu_info: e.target.value })} /></div>
+                  <div className="space-y-2"><Label>RAM (GB)</Label><Input type="number" value={promoteForm.ram_gb} onChange={(e) => setPF({ ram_gb: e.target.value })} /></div>
+                </div>
+                <div className="space-y-2"><Label>Storage Info</Label><Textarea value={promoteForm.storage_info} onChange={(e) => setPF({ storage_info: e.target.value })} placeholder="e.g. 4x 1TB SSD RAID 10" /></div>
+              </TabsContent>
+              <TabsContent value="lifecycle" className="space-y-3 mt-0">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2"><Label>Status</Label>
+                    <Select value={promoteForm.status} onValueChange={(v) => setPF({ status: v })}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="ONLINE">Online</SelectItem><SelectItem value="OFFLINE">Offline</SelectItem>
+                        <SelectItem value="MAINTENANCE">Maintenance</SelectItem><SelectItem value="DECOMMISSIONED">Decommissioned</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2"><Label>Vendor</Label>
+                    <Select value={promoteForm.vendor} onValueChange={(v) => setPF({ vendor: v })}>
+                      <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                      <SelectContent>{vendors.map((v) => <SelectItem key={v.id} value={String(v.id)}>{v.name}</SelectItem>)}</SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2"><Label>Purchase Date</Label><Input type="date" value={promoteForm.purchase_date} onChange={(e) => setPF({ purchase_date: e.target.value })} /></div>
+                  <div className="space-y-2"><Label>Warranty Expiry</Label><Input type="date" value={promoteForm.warranty_expiry} onChange={(e) => setPF({ warranty_expiry: e.target.value })} /></div>
+                </div>
+                <div className="space-y-2"><Label>Notes</Label><Textarea value={promoteForm.notes} onChange={(e) => setPF({ notes: e.target.value })} /></div>
+              </TabsContent>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="promote-type">Device type</Label>
-              <Select value={promoteType} onValueChange={setPromoteType}>
-                <SelectTrigger id="promote-type"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {options?.device_types.map((t) => (
-                    <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            {promoting?.mac_address && (
-              <p className="text-xs text-muted-foreground">
-                MAC {promoting.mac_address}
-                {promoting.vendor_guess ? ` · looks like ${promoting.vendor_guess}` : ""}
-              </p>
-            )}
-          </div>
-          <DialogFooter>
+          </Tabs>
+          <DialogFooter className="pt-4 border-t mt-4">
             <Button variant="outline" onClick={() => setPromoting(null)}>Cancel</Button>
             <Button onClick={() => void submitPromote()} disabled={busyId === promoting?.id}>
               Add device

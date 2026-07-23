@@ -24,6 +24,8 @@ import {
   Wrench,
   DollarSign,
   Trash2,
+  GitCompare,
+  Printer,
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
@@ -73,10 +75,11 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { InlineCombobox, ComboboxOption } from "@/components/inline-combobox";
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import { useBulkSelection, summarizeBulkDelete } from "@/hooks/use-bulk-selection";
+import { AssetCompareDialog } from "./asset-compare-dialog";
+import { AssetLabelSheet, type LabelAsset } from "./asset-label-sheet";
 import {
   Sheet,
   SheetContent,
@@ -219,6 +222,10 @@ export default function AssetsPage() {
   const [categories, setCategories] = useState<AssetCategory[]>([]);
   const [vendors, setVendors] = useState<VendorOption[]>([]);
   const [locations, setLocations] = useState<LocationOption[]>([]);
+  // Admin-managed dropdown values (List of Values).
+  const [typeOptions, setTypeOptions] = useState<{ value: string; label: string }[]>([]);
+  const [statusOptions, setStatusOptions] = useState<{ value: string; label: string }[]>([]);
+  const [conditionOptions, setConditionOptions] = useState<{ value: string; label: string }[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const sel = useBulkSelection<number>();
   const [bulkDeleting, setBulkDeleting] = useState(false);
@@ -245,6 +252,17 @@ export default function AssetsPage() {
   const [assignNote, setAssignNote] = useState("");
 
   const [isReturnDialogOpen, setIsReturnDialogOpen] = useState(false);
+
+  // Compare (available to everyone — read-only). Opens straight to a picker;
+  // seed ids just pre-tick a row you started from.
+  const [isCompareOpen, setIsCompareOpen] = useState(false);
+  const [compareSeedIds, setCompareSeedIds] = useState<number[]>([]);
+  const openCompare = (seed: number[] = []) => { setCompareSeedIds(seed); setIsCompareOpen(true); };
+
+  // Print tags — single or bulk.
+  const [printAssets, setPrintAssets] = useState<LabelAsset[] | null>(null);
+  const toLabel = (a: Asset): LabelAsset => ({ id: a.id, asset_tag: a.asset_tag, name: a.name, category_name: a.category_name });
+  const printTags = (list: Asset[]) => { if (list.length) setPrintAssets(list.map(toLabel)); };
 
   // Drawer
   const [selectedAsset, setSelectedAsset] = useState<Asset | null>(null);
@@ -288,33 +306,24 @@ export default function AssetsPage() {
 
   const fetchDependencies = async () => {
     try {
-      const [usersRes, catRes, venRes, locRes] = await Promise.all([
+      const [usersRes, catRes, venRes, locRes, lovRes] = await Promise.all([
         api.get("/users/"),
         api.get("/asset-categories/"),
         api.get("/vendors/"),
         api.get("/locations/"),
+        api.get("/lov/"),
       ]);
       setUsers(usersRes.data.results || usersRes.data);
       setCategories(catRes.data.results || catRes.data);
       setVendors(venRes.data.results || venRes.data);
       setLocations(locRes.data.results || locRes.data);
+      const lov = lovRes.data || {};
+      setTypeOptions(lov.asset_type || []);
+      setStatusOptions(lov.asset_status || []);
+      setConditionOptions(lov.asset_condition || []);
     } catch {
       toast.error("Failed to load reference data.");
     }
-  };
-
-  const createVendorInline = async (name: string): Promise<ComboboxOption> => {
-    const res = await api.post("/vendors/", { name, is_active: true });
-    const v = res.data;
-    setVendors((prev) => [...prev, { id: v.id, name: v.name, vendor_code: v.vendor_code }]);
-    return { id: v.id, label: v.name, hint: v.vendor_code };
-  };
-
-  const createLocationInline = async (name: string): Promise<ComboboxOption> => {
-    const res = await api.post("/locations/", { name, is_active: true });
-    const l = res.data;
-    setLocations((prev) => [...prev, { id: l.id, name: l.name }]);
-    return { id: l.id, label: l.name };
   };
 
   const fetchAssets = async () => {
@@ -717,11 +726,16 @@ export default function AssetsPage() {
           <h1 className="text-2xl font-bold tracking-tight">Asset Inventory</h1>
           <p className="text-neutral-500">Track and manage hardware fleet and system licenses.</p>
         </div>
-        {isAdmin && (
-          <Button onClick={openAddDialog}>
-            <Plus className="mr-2 h-4 w-4" /> Add Asset
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => openCompare([])} disabled={assets.length < 2}>
+            <GitCompare className="mr-2 h-4 w-4" /> Compare
           </Button>
-        )}
+          {isAdmin && (
+            <Button onClick={openAddDialog}>
+              <Plus className="mr-2 h-4 w-4" /> Add Asset
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -816,6 +830,13 @@ export default function AssetsPage() {
           </div>
           <div className="flex items-center gap-2">
             <Button variant="ghost" size="sm" onClick={sel.clear}>Clear</Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => printTags(assets.filter((a) => sel.isSelected(a.id)))}
+            >
+              <Printer className="mr-1.5 h-3.5 w-3.5" /> Print tags
+            </Button>
             <Button variant="destructive" size="sm" onClick={bulkDeleteAssets} disabled={bulkDeleting}>
               {bulkDeleting ? "Deleting…" : `Delete ${sel.count}`}
             </Button>
@@ -930,6 +951,12 @@ export default function AssetsPage() {
                         <DropdownMenuItem onSelect={() => setTimeout(() => loadAssetDetails(a), 100)}>
                           View Details
                         </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => setTimeout(() => openCompare([a.id]), 100)}>
+                          Compare…
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onSelect={() => setTimeout(() => printTags([a]), 100)}>
+                          Print tag
+                        </DropdownMenuItem>
                         {isAdmin && (
                           <>
                             <DropdownMenuItem onSelect={() => setTimeout(() => openEditDialog(a), 100)}>
@@ -968,6 +995,20 @@ export default function AssetsPage() {
           </TableBody>
         </Table>
       </Card>
+
+      <AssetCompareDialog
+        open={isCompareOpen}
+        onOpenChange={setIsCompareOpen}
+        allAssets={assets}
+        initialIds={compareSeedIds}
+        categories={categories}
+      />
+
+      <AssetLabelSheet
+        open={!!printAssets}
+        onOpenChange={(o) => !o && setPrintAssets(null)}
+        assets={printAssets || []}
+      />
 
       {/* CREATE/EDIT ASSET DIALOG */}
       <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
@@ -1071,11 +1112,9 @@ export default function AssetsPage() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          <SelectItem value="HARDWARE">Hardware</SelectItem>
-                          <SelectItem value="SOFTWARE">Software</SelectItem>
-                          <SelectItem value="LICENSE">License</SelectItem>
-                          <SelectItem value="PERIPHERAL">Peripheral</SelectItem>
-                          <SelectItem value="OTHER">Other</SelectItem>
+                          {typeOptions.map((o) => (
+                            <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                       <FormMessage />
@@ -1095,11 +1134,9 @@ export default function AssetsPage() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          <SelectItem value="AVAILABLE">Available</SelectItem>
-                          <SelectItem value="ASSIGNED">Assigned</SelectItem>
-                          <SelectItem value="UNDER_REPAIR">Under Repair</SelectItem>
-                          <SelectItem value="RETIRED">Retired</SelectItem>
-                          <SelectItem value="LOST">Lost</SelectItem>
+                          {statusOptions.map((o) => (
+                            <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                       <FormMessage />
@@ -1119,10 +1156,9 @@ export default function AssetsPage() {
                           </SelectTrigger>
                         </FormControl>
                         <SelectContent>
-                          <SelectItem value="NEW">New</SelectItem>
-                          <SelectItem value="GOOD">Good</SelectItem>
-                          <SelectItem value="FAIR">Fair</SelectItem>
-                          <SelectItem value="POOR">Poor</SelectItem>
+                          {conditionOptions.map((o) => (
+                            <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                          ))}
                         </SelectContent>
                       </Select>
                       <FormMessage />
@@ -1274,18 +1310,21 @@ export default function AssetsPage() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Vendor</FormLabel>
-                      <FormControl>
-                        <InlineCombobox
-                          value={field.value || null}
-                          onChange={(id) => field.onChange(id == null ? "" : String(id))}
-                          options={vendors.map((v) => ({ id: v.id, label: v.name, hint: v.vendor_code }))}
-                          placeholder="Select vendor…"
-                          searchPlaceholder="Search vendors or type to add…"
-                          emptyText="No vendors found."
-                          onCreate={createVendorInline}
-                          createLabel="Add vendor"
-                        />
-                      </FormControl>
+                      <Select value={field.value || "none"} onValueChange={(v) => field.onChange(v === "none" ? "" : v)}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select vendor…" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="none">— None —</SelectItem>
+                          {vendors.map((v) => (
+                            <SelectItem key={v.id} value={String(v.id)}>
+                              {v.name}{v.vendor_code ? ` · ${v.vendor_code}` : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -1296,18 +1335,19 @@ export default function AssetsPage() {
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Location</FormLabel>
-                      <FormControl>
-                        <InlineCombobox
-                          value={field.value || null}
-                          onChange={(id) => field.onChange(id == null ? "" : String(id))}
-                          options={locations.map((l) => ({ id: l.id, label: l.name }))}
-                          placeholder="Select location…"
-                          searchPlaceholder="Search locations or type to add…"
-                          emptyText="No locations found."
-                          onCreate={createLocationInline}
-                          createLabel="Add location"
-                        />
-                      </FormControl>
+                      <Select value={field.value || "none"} onValueChange={(v) => field.onChange(v === "none" ? "" : v)}>
+                        <FormControl>
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select location…" />
+                          </SelectTrigger>
+                        </FormControl>
+                        <SelectContent>
+                          <SelectItem value="none">— None —</SelectItem>
+                          {locations.map((l) => (
+                            <SelectItem key={l.id} value={String(l.id)}>{l.name}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                       <FormMessage />
                     </FormItem>
                   )}
@@ -1423,6 +1463,25 @@ export default function AssetsPage() {
             <SheetTitle>Asset Details: {selectedAsset?.asset_tag}</SheetTitle>
             <SheetDescription>{selectedAsset?.name}</SheetDescription>
           </SheetHeader>
+
+          {selectedAsset && (
+            <div className="mt-3 grid grid-cols-2 gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => openCompare([selectedAsset.id])}
+              >
+                <GitCompare className="mr-2 h-4 w-4" /> Compare with…
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => printTags([selectedAsset])}
+              >
+                <Printer className="mr-2 h-4 w-4" /> Print tag
+              </Button>
+            </div>
+          )}
 
           {selectedAsset && isAdmin && (
             <div className="mt-4 flex flex-wrap gap-2 pb-2 border-b">

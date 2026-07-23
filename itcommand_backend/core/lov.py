@@ -69,6 +69,19 @@ def _model_choices(dotted_path: str, attribute: str):
     return loader
 
 
+def _field_choices(dotted_path: str, field_name: str):
+    """Read a model field's `choices` lazily (works with TextChoices enums)."""
+
+    def loader():
+        from django.apps import apps
+
+        app_label, model_name = dotted_path.split(".")
+        model = apps.get_model(app_label, model_name)
+        return tuple(model._meta.get_field(field_name).choices or ())
+
+    return loader
+
+
 #: Lazily-loaded seeds for system groups, so the registry mirrors the models
 #: rather than duplicating their choice tuples.
 SYSTEM_SEEDS = {
@@ -79,6 +92,16 @@ SYSTEM_SEEDS = {
     "expense_payment_method": _model_choices("core.Expense", "PAYMENT_METHOD_CHOICES"),
     "license_type": _model_choices("core.SoftwareLicense", "LICENSE_TYPE_CHOICES"),
     "vault_category": _model_choices("core.VaultCredential", "CATEGORY_CHOICES"),
+    "onboarding_category": _model_choices("core.ChecklistTemplateItem", "CATEGORIES"),
+    "asset_type": _model_choices("core.Asset", "ASSET_TYPE_CHOICES"),
+    "asset_status": _model_choices("core.Asset", "STATUS_CHOICES"),
+    "asset_condition": _model_choices("core.Asset", "CONDITION_CHOICES"),
+    "asset_event_type": _model_choices("core.AssetMaintenance", "EVENT_TYPE_CHOICES"),
+    "ticket_priority": _model_choices("core.Ticket", "PRIORITY_CHOICES"),
+    "ticket_status": _model_choices("core.Ticket", "STATUS_CHOICES"),
+    "procurement_status": _field_choices("core.PurchaseRequest", "status"),
+    "procurement_priority": _field_choices("core.PurchaseRequest", "priority"),
+    "onboarding_role": _model_choices("core.ChecklistTemplateItem", "ROLES"),
 }
 
 
@@ -144,6 +167,73 @@ _GROUP_LIST = [
         label="Vault categories",
         extendable=True,
         help_text="Safe to extend — vault categories are labels only.",
+    ),
+    GroupSpec(
+        key="onboarding_category",
+        label="Onboarding checklist categories",
+        extendable=True,
+        help_text=(
+            "Categories offered for onboarding / offboarding checklist tasks. "
+            "Safe to extend — categories group tasks for display, nothing branches "
+            "on the individual codes."
+        ),
+    ),
+    GroupSpec(
+        key="asset_type",
+        label="Asset types",
+        extendable=True,
+        help_text="Types offered when adding an asset. Safe to extend.",
+    ),
+    GroupSpec(
+        key="asset_status",
+        label="Asset statuses",
+        extendable=False,
+        help_text=(
+            "System list. Assignment, availability and dashboards branch on these "
+            "codes, so new statuses would not be understood. Relabel, reorder or hide only."
+        ),
+    ),
+    GroupSpec(
+        key="asset_condition",
+        label="Asset conditions",
+        extendable=True,
+        help_text="Condition grades offered when adding an asset. Safe to extend.",
+    ),
+    GroupSpec(
+        key="asset_event_type",
+        label="Asset maintenance event types",
+        extendable=True,
+        help_text="Event types for the asset maintenance log. Safe to extend.",
+    ),
+    GroupSpec(
+        key="ticket_priority",
+        label="Helpdesk ticket priorities",
+        extendable=False,
+        help_text="System list. SLA and sorting branch on these codes. Relabel, reorder or hide only.",
+    ),
+    GroupSpec(
+        key="ticket_status",
+        label="Helpdesk ticket statuses",
+        extendable=False,
+        help_text="System list. Ticket workflow branches on these codes. Relabel, reorder or hide only.",
+    ),
+    GroupSpec(
+        key="procurement_status",
+        label="Purchase request statuses",
+        extendable=False,
+        help_text="System list. Approval workflow branches on these codes. Relabel, reorder or hide only.",
+    ),
+    GroupSpec(
+        key="procurement_priority",
+        label="Purchase request priorities",
+        extendable=False,
+        help_text="System list. Relabel, reorder or hide only.",
+    ),
+    GroupSpec(
+        key="onboarding_role",
+        label="Onboarding assigned roles",
+        extendable=True,
+        help_text="Roles a checklist task can be assigned to. Safe to extend.",
     ),
 ]
 

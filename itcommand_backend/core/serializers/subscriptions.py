@@ -4,6 +4,7 @@ from core.currencies import ISO_4217_CODES
 from core.models import (
     Subscription,
     SubscriptionAssignment,
+    SubscriptionCategoryBudget,
     SubscriptionRenewal,
     SubscriptionSettings,
 )
@@ -344,3 +345,12 @@ class SubscriptionSettingsSerializer(serializers.ModelSerializer):
             instance_value=getattr(self.instance, "budget_currency", None),
             label="Budget currency",
         )
+
+
+class SubscriptionCategoryBudgetSerializer(serializers.ModelSerializer):
+    category_label = serializers.CharField(source="get_category_display", read_only=True)
+
+    class Meta:
+        model = SubscriptionCategoryBudget
+        fields = ["id", "category", "category_label", "monthly_threshold", "yearly_threshold"]
+        read_only_fields = ["id", "category_label"]

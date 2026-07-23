@@ -77,7 +77,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plug, CalendarDays, Copy } from "lucide-react";
+import { Plug, CalendarDays, Copy, ListChecks } from "lucide-react";
 import { useSettingsStore } from "@/store/settingsStore";
 import { Textarea } from "@/components/ui/textarea";
 import { FloorManagerPanel } from "@/components/seating/floor-manager";
@@ -199,6 +199,9 @@ export default function SettingsPage() {
           <TabsTrigger value="integrations">
             <Plug className="h-4 w-4 mr-2" /> Integrations
           </TabsTrigger>
+          <TabsTrigger value="lov">
+            <ListChecks className="h-4 w-4 mr-2" /> List of Values
+          </TabsTrigger>
           <TabsTrigger value="extension">
             <Puzzle className="h-4 w-4 mr-2" /> Browser Extension
           </TabsTrigger>
@@ -217,6 +220,7 @@ export default function SettingsPage() {
         <TabsContent value="network"><NetworkSettingsTab /></TabsContent>
         <TabsContent value="roles"><RolesTab role={user?.role} /></TabsContent>
         <TabsContent value="vault"><VaultSecurityTab role={user?.role} /></TabsContent>
+        <TabsContent value="lov"><ListOfValuesTab role={user?.role} /></TabsContent>
         <TabsContent value="extension"><BrowserExtensionTab /></TabsContent>
       </Tabs>
     </div>
@@ -866,6 +870,7 @@ function RuleList({ checks }: { checks: ReturnType<typeof passwordChecks> }) {
 
 const companySchema = z.object({
   company_name: z.string().min(2, "Required"),
+  company_short_code: z.string().max(8, "Keep it short").optional(),
   default_currency: z.string().min(1, "Required"),
   fiscal_year_start_month: z.string().min(1, "Required"),
 });
@@ -891,7 +896,7 @@ function CompanyTab({ role }: { role?: string }) {
 
   const form = useForm<z.infer<typeof companySchema>>({
     resolver: zodResolver(companySchema),
-    defaultValues: { company_name: "", default_currency: "USD", fiscal_year_start_month: "1" },
+    defaultValues: { company_name: "", company_short_code: "", default_currency: "USD", fiscal_year_start_month: "1" },
   });
 
   useEffect(() => {
@@ -900,6 +905,7 @@ function CompanyTab({ role }: { role?: string }) {
       const d = res.data;
       form.reset({
         company_name: d.company_name || "",
+        company_short_code: d.company_short_code || "",
         default_currency: d.default_currency || "USD",
         fiscal_year_start_month: d.fiscal_year_start_month || "1",
       });
@@ -952,6 +958,22 @@ function CompanyTab({ role }: { role?: string }) {
                 <FormItem>
                   <FormLabel>Company Name</FormLabel>
                   <FormControl><Input {...field} /></FormControl>
+                  <FormMessage />
+                </FormItem>
+              )} />
+              <FormField control={form.control} name="company_short_code" render={({ field }) => (
+                <FormItem>
+                  <FormLabel>Asset Tag Prefix</FormLabel>
+                  <FormControl>
+                    <Input
+                      {...field}
+                      value={field.value ?? ""}
+                      onChange={(e) => field.onChange(e.target.value.toUpperCase())}
+                      placeholder="e.g. TF"
+                      maxLength={8}
+                    />
+                  </FormControl>
+                  <p className="text-xs text-muted-foreground">Short company code used in asset tags, e.g. <span className="font-mono">TF</span>-LP-001.</p>
                   <FormMessage />
                 </FormItem>
               )} />
@@ -1173,8 +1195,9 @@ function CategoryDialog({
               <Input value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Laptop" />
             </div>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium">Code (optional)</label>
-              <Input value={draft.code || ""} onChange={(e) => setDraft({ ...draft, code: e.target.value })} placeholder="LAPTOP" className="font-mono" />
+              <label className="text-sm font-medium">Tag code (optional)</label>
+              <Input value={draft.code || ""} onChange={(e) => setDraft({ ...draft, code: e.target.value })} placeholder="LP" className="font-mono" />
+              <p className="text-[11px] text-muted-foreground">Used in asset tags, e.g. TF-<span className="font-mono">LP</span>-001. Defaults to the first letters of the name.</p>
             </div>
           </div>
 
@@ -2106,6 +2129,171 @@ function CalendarTab() {
               : "Not fetched yet"}
           </span>
         </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ───────────────────────── List of Values Tab ─────────────────────────
+
+interface LovGroup { key: string; label: string; extendable: boolean; help_text: string; }
+interface LovRow { id: number; code: string; label: string; sort_order: number; is_active: boolean; is_system: boolean; }
+
+function ListOfValuesTab({ role }: { role?: string }) {
+  const [groups, setGroups] = useState<LovGroup[]>([]);
+  const [groupKey, setGroupKey] = useState("");
+  const [meta, setMeta] = useState<{ label: string; extendable: boolean; help_text: string } | null>(null);
+  const [rows, setRows] = useState<LovRow[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [newCode, setNewCode] = useState("");
+  const [newLabel, setNewLabel] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (role !== "SUPERADMIN") return;
+    api.get("/lov/?manage=1")
+      .then((r) => {
+        const gs: LovGroup[] = r.data.groups || [];
+        setGroups(gs);
+        if (gs.length && !groupKey) setGroupKey(gs[0].key);
+      })
+      .catch(() => toast.error("Failed to load value groups"));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [role]);
+
+  const loadGroup = (key: string) => {
+    if (!key) return;
+    setLoading(true);
+    api.get(`/lov/?group=${key}&manage=1`)
+      .then((r) => {
+        setMeta({ label: r.data.label, extendable: r.data.extendable, help_text: r.data.help_text });
+        setRows(r.data.values || []);
+      })
+      .catch(() => toast.error("Failed to load values"))
+      .finally(() => setLoading(false));
+  };
+
+  useEffect(() => { if (groupKey) loadGroup(groupKey); }, [groupKey]);
+
+  const patchRow = async (row: LovRow, patch: Partial<LovRow>) => {
+    try {
+      const r = await api.patch(`/lov/values/${row.id}/`, patch);
+      setRows((prev) => prev.map((x) => (x.id === row.id ? { ...x, ...r.data } : x)));
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || "Update failed");
+      loadGroup(groupKey); // revert to server truth
+    }
+  };
+
+  const addValue = async () => {
+    if (!newCode.trim()) return toast.error("Code is required");
+    setSaving(true);
+    try {
+      await api.post("/lov/", { group: groupKey, code: newCode.trim(), label: newLabel.trim() || newCode.trim() });
+      setNewCode(""); setNewLabel("");
+      loadGroup(groupKey);
+      toast.success("Value added");
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || "Could not add value");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeRow = async (row: LovRow) => {
+    if (!confirm(`Delete "${row.label}"?`)) return;
+    try {
+      await api.delete(`/lov/values/${row.id}/`);
+      setRows((prev) => prev.filter((x) => x.id !== row.id));
+    } catch (e: any) {
+      toast.error(e.response?.data?.detail || "Delete failed");
+    }
+  };
+
+  if (role !== "SUPERADMIN") {
+    return (
+      <Card><CardContent className="py-6 text-sm text-muted-foreground">
+        Lists of values are managed by a Super Administrator.
+      </CardContent></Card>
+    );
+  }
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>List of Values</CardTitle>
+        <CardDescription>
+          Manage the dropdown options used across the app. Extendable lists accept new values;
+          system lists (wired into application logic) can be relabelled, reordered or hidden only.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="max-w-sm">
+          <Select value={groupKey} onValueChange={setGroupKey}>
+            <SelectTrigger><SelectValue placeholder="Choose a list…" /></SelectTrigger>
+            <SelectContent className="max-h-[400px]">
+              {groups.map((g) => (
+                <SelectItem key={g.key} value={g.key}>
+                  {g.label}{g.extendable ? "" : " (system)"}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {meta?.help_text && <p className="text-xs text-muted-foreground">{meta.help_text}</p>}
+
+        {loading ? (
+          <p className="text-sm text-muted-foreground py-4">Loading…</p>
+        ) : (
+          <div className="rounded-lg border divide-y">
+            <div className="grid grid-cols-[70px_1fr_1fr_70px_60px] gap-2 px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground bg-muted/40">
+              <span>Order</span><span>Code</span><span>Label</span><span>Active</span><span></span>
+            </div>
+            {rows.length === 0 ? (
+              <p className="px-3 py-4 text-sm text-muted-foreground">No values yet.</p>
+            ) : rows.map((row) => (
+              <div key={row.id} className="grid grid-cols-[70px_1fr_1fr_70px_60px] gap-2 px-3 py-2 items-center">
+                <Input
+                  type="number" defaultValue={row.sort_order} className="h-8"
+                  onBlur={(e) => { const v = parseInt(e.target.value) || 0; if (v !== row.sort_order) patchRow(row, { sort_order: v }); }}
+                />
+                <span className="font-mono text-xs flex items-center gap-1 truncate">
+                  {row.code}
+                  {row.is_system && <Badge variant="outline" className="text-[9px]">system</Badge>}
+                </span>
+                <Input
+                  defaultValue={row.label} className="h-8"
+                  onBlur={(e) => { const v = e.target.value.trim(); if (v && v !== row.label) patchRow(row, { label: v }); }}
+                />
+                <Switch checked={row.is_active} onCheckedChange={(v) => patchRow(row, { is_active: v })} />
+                <div className="text-right">
+                  {!row.is_system && (
+                    <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500" onClick={() => removeRow(row)}>
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {meta?.extendable && (
+          <div className="flex flex-wrap items-end gap-2 pt-1">
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Code</label>
+              <Input value={newCode} onChange={(e) => setNewCode(e.target.value)} placeholder="CODE" className="h-8 w-40 font-mono" />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-muted-foreground">Label</label>
+              <Input value={newLabel} onChange={(e) => setNewLabel(e.target.value)} placeholder="Display label" className="h-8 w-56" />
+            </div>
+            <Button size="sm" className="h-8" onClick={addValue} disabled={saving}>
+              <Plus className="h-3.5 w-3.5 mr-1" /> Add value
+            </Button>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useDataSync } from "@/hooks/use-data-sync";
 import * as z from "zod";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -210,6 +211,11 @@ export default function UsersPage() {
     }, 400); // 400ms debounce
     return () => clearTimeout(handler);
   }, [searchQuery, roleFilter, departmentFilter]);
+
+  // Reflect changes made elsewhere (e.g. a department added in the other
+  // split-screen panel) without a page reload.
+  useDataSync(["/departments", "/roles"], fetchDependencies);
+  useDataSync("/users", fetchUsers);
 
   const openAddDialog = () => {
     setEditingUser(null);

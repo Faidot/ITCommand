@@ -13,6 +13,7 @@ export function FloorCanvas3D({
   objects,
   width,
   height,
+  wallHeightUnits = 3,
   selectedCids,
   pendingSeatIds,
   onSelect,
@@ -23,6 +24,7 @@ export function FloorCanvas3D({
   objects: FloorObject[];
   width: number;
   height: number;
+  wallHeightUnits?: number;
   selectedCids: string[];
   pendingSeatIds?: number[];
   onSelect: (cid: string | null) => void;
@@ -34,6 +36,8 @@ export function FloorCanvas3D({
   const fw = width / SCALE;
   const fh = height / SCALE;
   const span = Math.max(fw, fh);
+  // Grid units map 1:1 to 3D units (CELL px = 1 unit, and SCALE = CELL).
+  const wallH = Math.max(0, wallHeightUnits || 0);
 
   return (
     <div className="flex-1 bg-gradient-to-b from-sky-100 to-slate-300 dark:from-slate-800 dark:to-slate-950">
@@ -62,6 +66,9 @@ export function FloorCanvas3D({
           <planeGeometry args={[fw, fh]} />
           <meshStandardMaterial color="#eef2f7" roughness={0.95} />
         </mesh>
+
+        {/* Room perimeter walls */}
+        {wallH > 0 && <RoomWalls fw={fw} fh={fh} h={wallH} />}
         <Grid
           position={[0, 0.003, 0]}
           args={[fw, fh]}
@@ -100,6 +107,50 @@ export function FloorCanvas3D({
         />
       </Canvas>
     </div>
+  );
+}
+
+/**
+ * Four thin walls around the floor's edge, giving the plan a sense of room
+ * height. Kept low-opacity + single-sided so the camera can see in from
+ * outside, and drawn just inside the slab edge so corners meet cleanly.
+ */
+function RoomWalls({ fw, fh, h }: { fw: number; fh: number; h: number }) {
+  const t = 0.08; // wall thickness
+  const y = h / 2; // centre height
+  const wallColor = "#cbd5e1";
+  const props = {
+    transparent: true,
+    opacity: 0.35,
+    color: wallColor,
+    side: 2 as const, // THREE.DoubleSide — visible from both faces
+    roughness: 0.9,
+  };
+  // Inset each wall by half its thickness so its outer face sits flush on the
+  // floor border — nothing overhangs past the slab edge.
+  return (
+    <group>
+      {/* North (-Z) */}
+      <mesh position={[0, y, -fh / 2 + t / 2]} castShadow receiveShadow>
+        <boxGeometry args={[fw, h, t]} />
+        <meshStandardMaterial {...props} />
+      </mesh>
+      {/* South (+Z) */}
+      <mesh position={[0, y, fh / 2 - t / 2]} castShadow receiveShadow>
+        <boxGeometry args={[fw, h, t]} />
+        <meshStandardMaterial {...props} />
+      </mesh>
+      {/* West (-X) */}
+      <mesh position={[-fw / 2 + t / 2, y, 0]} castShadow receiveShadow>
+        <boxGeometry args={[t, h, fh]} />
+        <meshStandardMaterial {...props} />
+      </mesh>
+      {/* East (+X) */}
+      <mesh position={[fw / 2 - t / 2, y, 0]} castShadow receiveShadow>
+        <boxGeometry args={[t, h, fh]} />
+        <meshStandardMaterial {...props} />
+      </mesh>
+    </group>
   );
 }
 

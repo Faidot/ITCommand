@@ -92,6 +92,17 @@ class NetworkDeviceViewSet(viewsets.ModelViewSet):
             device=device, old_status='', new_status=device.status,
             changed_by=request.user, note='Device created',
         )
+        # Give the device its interfaces up front so it can be wired in the
+        # topology without hand-adding ports first.
+        try:
+            port_count = int(request.data.get('port_count') or 0)
+        except (TypeError, ValueError):
+            port_count = 0
+        if port_count > 0:
+            NetworkDevicePort.objects.bulk_create([
+                NetworkDevicePort(device=device, port_number=i, port_name=f'Port {i}')
+                for i in range(1, min(port_count, 96) + 1)
+            ])
         return Response(NetworkDeviceDetailSerializer(device).data, status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
@@ -153,7 +164,12 @@ class NetworkDeviceViewSet(viewsets.ModelViewSet):
         device.ports.all().delete()
         for pd in ports_data:
             pd.pop('id', None)
+            pd.pop('device', None)
             pd.pop('connected_to_device_name', None)
+            # FK sent as an integer id; map to the *_id attribute so Django
+            # doesn't require a model instance.
+            if 'connected_to_device' in pd:
+                pd['connected_to_device_id'] = pd.pop('connected_to_device')
             NetworkDevicePort.objects.create(device=device, **pd)
         return Response(NetworkDevicePortSerializer(device.ports.all(), many=True).data)
 
@@ -338,6 +354,85 @@ class NetworkTopologyView(APIView):
             })
 
         return Response({'nodes': nodes, 'edges': edges})
+
+    def post(self, request):
+        """Create a link between two devices straight from the topology map.
+
+        Wires a specific interface (port) on each side to the other, so the
+        edge shows up without hand-entering ports on either side. The chosen
+        ports are optional — leave one out to auto-pick the next free port.
+        """
+        source_id = request.data.get('source')
+        target_id = request.data.get('target')
+        is_uplink = bool(request.data.get('is_uplink', False))
+        if not source_id or not target_id:
+            return Response({'error': 'source and target are required'}, status=status.HTTP_400_BAD_REQUEST)
+        if str(source_id) == str(target_id):
+            return Response({'error': 'A device cannot connect to itself'}, status=status.HTTP_400_BAD_REQUEST)
+
+        source = NetworkDevice.objects.filter(pk=source_id).first()
+        target = NetworkDevice.objects.filter(pk=target_id).first()
+        if not source or not target:
+            return Response({'error': 'Device not found'}, status=status.HTTP_404_NOT_FOUND)
+
+        # Don't duplicate a link that already exists in either direction.
+        existing = NetworkDevicePort.objects.filter(
+            Q(device=source, connected_to_device=target) |
+            Q(device=target, connected_to_device=source)
+        ).first()
+        if existing:
+            return Response({'error': 'These devices are already linked'}, status=status.HTTP_409_CONFLICT)
+
+        def resolve_port(device, requested, other):
+            """Grab the requested interface (or the next free one) and make sure
+            it isn't already wired elsewhere."""
+            if requested:
+                port = device.ports.filter(port_number=requested).first()
+                if port is None:
+                    port = NetworkDevicePort(device=device, port_number=requested, port_name=f'Port {requested}')
+                elif port.connected_to_device_id and port.connected_to_device_id != other.id:
+                    return None, f'{device.device_name} Port {requested} is already connected'
+            else:
+                next_num = (device.ports.order_by('-port_number').values_list('port_number', flat=True).first() or 0) + 1
+                port = NetworkDevicePort(device=device, port_number=next_num, port_name=f'Port {next_num}')
+            return port, None
+
+        src_port, err = resolve_port(source, request.data.get('source_port'), target)
+        if err:
+            return Response({'error': err}, status=status.HTTP_409_CONFLICT)
+        tgt_port, err = resolve_port(target, request.data.get('target_port'), source)
+        if err:
+            return Response({'error': err}, status=status.HTTP_409_CONFLICT)
+
+        # Wire both interfaces to each other so each device's port list reflects it.
+        src_port.connected_to_device = target
+        src_port.connected_to_port = tgt_port.port_number
+        src_port.is_uplink = is_uplink
+        src_port.description = f'Link to {target.device_name}'
+        src_port.save()
+
+        tgt_port.connected_to_device = source
+        tgt_port.connected_to_port = src_port.port_number
+        tgt_port.is_uplink = is_uplink
+        tgt_port.description = f'Link to {source.device_name}'
+        tgt_port.save()
+
+        return Response({
+            'source': source.id, 'target': target.id, 'is_uplink': is_uplink,
+            'source_port': src_port.port_number, 'target_port': tgt_port.port_number,
+        }, status=status.HTTP_201_CREATED)
+
+    def delete(self, request):
+        """Remove every port link between two devices (either direction)."""
+        source_id = request.data.get('source') or request.query_params.get('source')
+        target_id = request.data.get('target') or request.query_params.get('target')
+        if not source_id or not target_id:
+            return Response({'error': 'source and target are required'}, status=status.HTTP_400_BAD_REQUEST)
+        deleted, _ = NetworkDevicePort.objects.filter(
+            Q(device_id=source_id, connected_to_device_id=target_id) |
+            Q(device_id=target_id, connected_to_device_id=source_id)
+        ).delete()
+        return Response({'deleted': deleted})
 
 
 class NetworkDeviceLookupView(APIView):

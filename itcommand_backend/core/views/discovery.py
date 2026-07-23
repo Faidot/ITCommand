@@ -11,6 +11,7 @@ from core.models import (
     DiscoveredHost,
     IPAddressPool,
     NetworkDevice,
+    NetworkDevicePort,
     NetworkIntegration,
     NetworkScan,
 )
@@ -193,25 +194,64 @@ class DiscoveredHostViewSet(AuditLogMixin, viewsets.ReadOnlyModelViewSet):
                 status=status.HTTP_200_OK,
             )
 
+        data = request.data
         name = (
-            request.data.get("device_name")
+            data.get("device_name")
             or host.hostname
             or f"{host.vendor_guess or 'Device'} {host.ip_address}"
         )
+
+        def txt(key, fallback="", limit=None):
+            val = data.get(key)
+            val = fallback if val in (None, "") else val
+            val = str(val) if val is not None else ""
+            return val[:limit] if limit else val
+
+        def num(key):
+            val = data.get(key)
+            try:
+                return int(val) if val not in (None, "") else None
+            except (TypeError, ValueError):
+                return None
+
         with transaction.atomic():
             device = NetworkDevice.objects.create(
                 device_name=name[:255],
-                device_type=request.data.get("device_type") or "OTHER",
-                brand=host.vendor_guess[:255] if host.vendor_guess else "",
-                ip_address=host.ip_address,
-                mac_address=host.mac_address[:17],
-                hostname=host.hostname[:255],
-                status="ONLINE",
+                device_type=data.get("device_type") or "OTHER",
+                brand=txt("brand", host.vendor_guess or "", 100),
+                model=txt("model", limit=100),
+                serial_number=txt("serial_number", limit=255),
+                ip_address=txt("ip_address", host.ip_address) or None,
+                mac_address=txt("mac_address", host.mac_address or "", 17),
+                hostname=txt("hostname", host.hostname or "", 255),
+                subnet_mask=txt("subnet_mask", limit=50),
+                gateway=txt("gateway", limit=50),
+                dns_primary=txt("dns_primary", limit=50),
+                dns_secondary=txt("dns_secondary", limit=50),
+                vlan_id=num("vlan_id"),
+                os_name=txt("os_name", limit=100),
+                os_version=txt("os_version", limit=100),
+                firmware_version=txt("firmware_version", limit=100),
+                cpu_info=txt("cpu_info", limit=255),
+                ram_gb=num("ram_gb"),
+                storage_info=txt("storage_info"),
+                purchase_date=data.get("purchase_date") or None,
+                warranty_expiry=data.get("warranty_expiry") or None,
+                rack_unit_start=num("rack_unit_start"),
+                rack_unit_size=num("rack_unit_size") or 1,
+                status=data.get("status") or "ONLINE",
                 last_seen_online=timezone.now(),
-                location_id=request.data.get("location") or None,
-                notes=f"Added from network discovery ({host.discovered_via}).",
+                location_id=data.get("location") or None,
+                vendor_id=data.get("vendor") or None,
+                notes=txt("notes", f"Added from network discovery ({host.discovered_via})."),
                 created_by=request.user,
             )
+            port_count = num("port_count") or 0
+            if port_count > 0:
+                NetworkDevicePort.objects.bulk_create([
+                    NetworkDevicePort(device=device, port_number=i, port_name=f"Port {i}")
+                    for i in range(1, min(port_count, 96) + 1)
+                ])
             host.state = "LINKED"
             host.linked_device = device
             host.save(update_fields=["state", "linked_device"])

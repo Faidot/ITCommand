@@ -25,6 +25,7 @@ from core.models import (
     SoftwareLicense,
     Subscription,
     SubscriptionAssignment,
+    SubscriptionCategoryBudget,
     SubscriptionPayment,
     SubscriptionRenewal,
     SubscriptionSettings,
@@ -36,6 +37,7 @@ from core.models import (
 from core.permissions import HasModulePermission, has_role_permission
 from core.serializers import (
     SubscriptionAssignmentSerializer,
+    SubscriptionCategoryBudgetSerializer,
     SubscriptionDetailSerializer,
     SubscriptionRenewalSerializer,
     SubscriptionSerializer,
@@ -423,8 +425,12 @@ class SubscriptionViewSet(AuditLogMixin, viewsets.ModelViewSet):
             "is_complete": not unconvertible,
         }
 
-        primary = spend_by_currency[settings.budget_currency]
-        primary_monthly, primary_yearly = _normalized_spend(primary)
+        # Budget spend = every subscription converted into the budget currency,
+        # not just the ones already priced in it. A USD subscription is converted
+        # to PKR (or vice-versa) and added in, so the budget reflects total spend.
+        budget_currency = settings.budget_currency
+        primary_monthly, _, budget_unconvertible = convert_many(monthly_pairs, to_currency=budget_currency)
+        primary_yearly, _, _ = convert_many(yearly_pairs, to_currency=budget_currency)
         monthly_threshold = settings.monthly_budget_threshold
         yearly_threshold = settings.yearly_budget_threshold
 
@@ -433,9 +439,47 @@ class SubscriptionViewSet(AuditLogMixin, viewsets.ModelViewSet):
                 return None
             return float((spend / threshold * Decimal("100")).quantize(TWOPLACES))
 
+        # Per-category budgets: convert each category's spend (across currencies)
+        # into the budget currency and compare against its allocation.
+        cat_pairs = defaultdict(lambda: {"monthly": [], "yearly": []})
+        for (category, currency), values in category_spend.items():
+            m, y = _normalized_spend(values)
+            cat_pairs[category]["monthly"].append((m, currency))
+            cat_pairs[category]["yearly"].append((y, currency))
+
+        category_budget_rows = []
+        allocations = {b.category: b for b in SubscriptionCategoryBudget.objects.all()}
+        # Categories come from the admin-managed LOV so ones added in Settings
+        # are budgetable; fall back to a stored code's own label if it's missing.
+        lov_categories = [(str(code).upper(), label) for code, label in get_values("subscription_category")]
+        lov_seen = {code for code, _ in lov_categories}
+        for code in allocations:
+            if code not in lov_seen:
+                lov_categories.append((code, code.title()))
+        for code, label in lov_categories:
+            allocation = allocations.get(code)
+            if not allocation or (allocation.monthly_threshold is None and allocation.yearly_threshold is None):
+                continue
+            m_spend, _, _ = convert_many(cat_pairs[code]["monthly"], to_currency=budget_currency)
+            y_spend, _, _ = convert_many(cat_pairs[code]["yearly"], to_currency=budget_currency)
+            category_budget_rows.append({
+                "category": code,
+                "category_label": label,
+                "currency": budget_currency,
+                "monthly_spend": _money(m_spend),
+                "yearly_spend": _money(y_spend),
+                "monthly_threshold": _money(allocation.monthly_threshold) if allocation.monthly_threshold is not None else None,
+                "yearly_threshold": _money(allocation.yearly_threshold) if allocation.yearly_threshold is not None else None,
+                "monthly_usage_percent": usage_percent(m_spend, allocation.monthly_threshold),
+                "yearly_usage_percent": usage_percent(y_spend, allocation.yearly_threshold),
+                "monthly_exceeded": bool(allocation.monthly_threshold is not None and m_spend >= allocation.monthly_threshold),
+                "yearly_exceeded": bool(allocation.yearly_threshold is not None and y_spend >= allocation.yearly_threshold),
+            })
+
         return Response(
             {
                 "default_currency": settings.budget_currency,
+                "category_budgets": category_budget_rows,
                 "converted": converted,
                 "monthly_spend": _money(primary_monthly),
                 "yearly_spend": _money(primary_yearly),
@@ -476,6 +520,11 @@ class SubscriptionViewSet(AuditLogMixin, viewsets.ModelViewSet):
                         and yearly_threshold > 0
                         and primary_yearly >= yearly_threshold
                     ),
+                    # Spend now aggregates every currency converted into the
+                    # budget currency; anything with no rate is listed here.
+                    "converted_from_all_currencies": True,
+                    "rates_as_of": rate_as_of(budget_currency),
+                    "unconvertible": budget_unconvertible,
                 },
             }
         )
@@ -992,6 +1041,72 @@ class SubscriptionViewSet(AuditLogMixin, viewsets.ModelViewSet):
         serializer.save(updated_by=request.user)
         self.log_action("UPDATE", subscription_settings, serializer.data)
         return Response(serializer.data)
+
+    @staticmethod
+    def _category_choices():
+        """Categories offered for budgets — sourced from the admin-managed
+        `subscription_category` list of values, so ones added in Settings appear
+        here too."""
+        return [(str(code).upper(), label) for code, label in get_values("subscription_category")]
+
+    def _category_budgets_payload(self):
+        existing = {b.category: b for b in SubscriptionCategoryBudget.objects.all()}
+        rows = []
+        for code, label in self._category_choices():
+            b = existing.get(code)
+            rows.append({
+                "category": code, "category_label": label,
+                "monthly_threshold": _money(b.monthly_threshold) if b and b.monthly_threshold is not None else None,
+                "yearly_threshold": _money(b.yearly_threshold) if b and b.yearly_threshold is not None else None,
+            })
+        return {"budgets": rows}
+
+    @action(detail=False, methods=["get", "put"], url_path="category-budgets", url_name="category-budgets")
+    def category_budgets(self, request):
+        """List or replace per-category subscription spend limits.
+
+        GET  -> every category with its (possibly null) monthly/yearly limit.
+        PUT  -> {"budgets": [{category, monthly_threshold, yearly_threshold}]}
+                Upserts the rows given; a null/blank threshold clears that limit.
+        """
+        if request.method == "GET":
+            return Response(self._category_budgets_payload())
+
+        payload = request.data.get("budgets", [])
+        if not isinstance(payload, list):
+            return Response({"detail": "budgets must be a list."}, status=status.HTTP_400_BAD_REQUEST)
+
+        valid = {code for code, _ in self._category_choices()}
+
+        def parse(v):
+            if v in (None, ""):
+                return None
+            try:
+                d = Decimal(str(v))
+            except (InvalidOperation, TypeError):
+                raise ValueError("Thresholds must be numbers.")
+            if d <= 0:
+                raise ValueError("Thresholds must be greater than zero, or blank to disable.")
+            return d.quantize(TWOPLACES)
+
+        try:
+            for item in payload:
+                category = (item.get("category") or "").strip().upper()
+                if category not in valid:
+                    return Response({"detail": f"Unknown category '{category}'."}, status=status.HTTP_400_BAD_REQUEST)
+                monthly = parse(item.get("monthly_threshold"))
+                yearly = parse(item.get("yearly_threshold"))
+                if monthly is None and yearly is None:
+                    SubscriptionCategoryBudget.objects.filter(category=category).delete()
+                else:
+                    SubscriptionCategoryBudget.objects.update_or_create(
+                        category=category,
+                        defaults={"monthly_threshold": monthly, "yearly_threshold": yearly},
+                    )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        return Response(self._category_budgets_payload())
 
     @action(detail=False, methods=["get"])
     def export(self, request):

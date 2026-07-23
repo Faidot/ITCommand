@@ -156,6 +156,9 @@ export interface SubscriptionBudget {
   yearly_usage_percent: number | null;
   monthly_exceeded: boolean;
   yearly_exceeded: boolean;
+  // Spend now totals every currency converted into the budget currency.
+  unconvertible: { currency: string; amount: string }[];
+  rates_as_of: string | null;
 }
 
 export interface ConvertedSpend {
@@ -166,6 +169,20 @@ export interface ConvertedSpend {
   /** Amounts with no exchange rate — reported, never silently counted. */
   unconvertible: { currency: string; amount: string }[];
   is_complete: boolean;
+}
+
+export interface CategoryBudgetUsage {
+  category: string;
+  category_label: string;
+  currency: string;
+  monthly_spend: number;
+  yearly_spend: number;
+  monthly_threshold: number | null;
+  yearly_threshold: number | null;
+  monthly_usage_percent: number | null;
+  yearly_usage_percent: number | null;
+  monthly_exceeded: boolean;
+  yearly_exceeded: boolean;
 }
 
 export interface SubscriptionDashboard {
@@ -180,6 +197,7 @@ export interface SubscriptionDashboard {
   spend_by_category: CategorySpend[];
   spend_by_currency: CurrencySpend[];
   budget: SubscriptionBudget | null;
+  category_budgets: CategoryBudgetUsage[];
 }
 
 export interface SubscriptionSettings {

@@ -650,6 +650,7 @@ export default function SeatingPlanPage() {
             objects={objects}
             width={floorW}
             height={floorH}
+            wallHeightUnits={selectedFloor?.wall_height_units ?? 3}
             selectedCids={selectedCids}
             pendingSeatIds={pending.map((p) => p.seat)}
             onSelect={(cid) => setSelectedCids(cid ? [cid] : [])}

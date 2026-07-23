@@ -1,12 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
-import { FileText, Plus, UserPlus, UserMinus, Search, Building } from "lucide-react";
+import { FileText, UserPlus, UserMinus, Building, Pencil, Trash2 } from "lucide-react";
 import api from "@/lib/api";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
   Table,
@@ -16,12 +14,13 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { CreateTemplateDialog } from "./create-template-dialog";
+import { CreateTemplateDialog, TemplateDialog } from "./create-template-dialog";
 
 export default function TemplatesListPage() {
-  const router = useRouter();
-  const [templates, setTemplates] = useState([]);
+  const [templates, setTemplates] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<any | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const fetchTemplates = async () => {
     setLoading(true);
@@ -38,6 +37,20 @@ export default function TemplatesListPage() {
   useEffect(() => {
     fetchTemplates();
   }, []);
+
+  const handleDelete = async (template: any) => {
+    if (!confirm(`Delete template "${template.name}" and all its tasks? This cannot be undone.`)) return;
+    setDeletingId(template.id);
+    try {
+      await api.delete(`/onboarding/templates/${template.id}/`);
+      toast.success("Template deleted");
+      fetchTemplates();
+    } catch (err: any) {
+      toast.error(err.response?.data?.detail || "Failed to delete template");
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
     <div className="flex flex-col gap-6 w-full max-w-6xl mx-auto p-4">
@@ -62,24 +75,25 @@ export default function TemplatesListPage() {
               <TableHead>Department</TableHead>
               <TableHead>Items</TableHead>
               <TableHead>Status</TableHead>
+              <TableHead className="text-right">Actions</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {loading ? (
               <TableRow>
-                <TableCell colSpan={5} className="h-24 text-center">
+                <TableCell colSpan={6} className="h-24 text-center">
                   <div className="flex justify-center"><div className="w-6 h-6 border-2 border-violet-500 border-t-transparent rounded-full animate-spin"></div></div>
                 </TableCell>
               </TableRow>
             ) : templates.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={5} className="h-24 text-center text-neutral-500">
+                <TableCell colSpan={6} className="h-24 text-center text-neutral-500">
                   No templates found.
                 </TableCell>
               </TableRow>
             ) : (
               templates.map((template: any) => (
-                <TableRow key={template.id} className="cursor-pointer hover:bg-neutral-50 dark:hover:bg-neutral-900/50">
+                <TableRow key={template.id} className="hover:bg-neutral-50 dark:hover:bg-neutral-900/50">
                   <TableCell className="font-medium">
                     {template.name}
                     <div className="text-xs text-neutral-500 font-normal mt-1 max-w-md truncate">
@@ -112,12 +126,35 @@ export default function TemplatesListPage() {
                       {template.is_active ? "Active" : "Inactive"}
                     </Badge>
                   </TableCell>
+                  <TableCell className="text-right">
+                    <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="sm" className="h-8" onClick={() => setEditing(template)}>
+                        <Pencil className="h-3.5 w-3.5 mr-1" /> Edit
+                      </Button>
+                      <Button
+                        variant="ghost" size="sm"
+                        className="h-8 text-red-500 hover:text-red-600 hover:bg-red-50"
+                        disabled={deletingId === template.id}
+                        onClick={() => handleDelete(template)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5 mr-1" /> Delete
+                      </Button>
+                    </div>
+                  </TableCell>
                 </TableRow>
               ))
             )}
           </TableBody>
         </Table>
       </div>
+
+      {/* Edit dialog */}
+      <TemplateDialog
+        open={!!editing}
+        onOpenChange={(o) => !o && setEditing(null)}
+        template={editing}
+        onSuccess={() => { setEditing(null); fetchTemplates(); }}
+      />
     </div>
   );
 }

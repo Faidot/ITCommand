@@ -246,22 +246,68 @@ class IntegrationTestView(APIView):
         })
 
 
+def _materialize_group(group):
+    """Ensure a group's built-in values exist as editable DB rows, so the admin
+    manager can relabel / reorder / hide them. No-op once rows exist."""
+    from core.lov import GROUPS, seed_values
+
+    spec = GROUPS.get(group)
+    if not spec or ListOfValues.objects.filter(group=group).exists():
+        return
+    for order, (code, label) in enumerate(seed_values(group)):
+        normalized = code.upper() if spec.normalize_code else code
+        ListOfValues.objects.get_or_create(
+            group=group, code=normalized,
+            defaults={'label': label, 'sort_order': order,
+                      'is_active': True, 'is_system': not spec.extendable},
+        )
+
+
 class ListOfValuesView(APIView):
     """Admin-managed dropdown values, for populating selects in the UI.
 
-    GET /api/lov/                -> every group
-    GET /api/lov/?group=currency -> one group
-
-    Falls back to the application's built-in choices when a group has not
-    been customised, so the UI never renders an empty dropdown.
+    GET  /api/lov/                 -> every group's effective values
+    GET  /api/lov/?group=currency  -> one group
+    GET  /api/lov/?group=X&manage=1-> superadmin: raw editable rows + group meta
+    POST /api/lov/  {group, code, label, sort_order} -> superadmin: add a value
     """
 
-    permission_classes = [permissions.IsAuthenticated]
+    def get_permissions(self):
+        # Reading powers dropdowns for everyone; writing is superadmin-only.
+        if self.request.method == 'GET' and not self.request.query_params.get('manage'):
+            return [permissions.IsAuthenticated()]
+        return [permissions.IsAuthenticated(), IsSuperadmin()]
 
     def get(self, request):
         from core.lov import GROUPS, get_values
 
         requested = (request.query_params.get('group') or '').strip()
+
+        # Management view: raw rows for one group (or a group listing).
+        if request.query_params.get('manage'):
+            if not requested:
+                return Response({
+                    'groups': [
+                        {'key': key, 'label': spec.label,
+                         'extendable': spec.extendable, 'help_text': spec.help_text}
+                        for key, spec in GROUPS.items()
+                    ]
+                })
+            if requested not in GROUPS:
+                return Response({'detail': f"Unknown group '{requested}'."}, status=status.HTTP_400_BAD_REQUEST)
+            _materialize_group(requested)
+            spec = GROUPS[requested]
+            rows = ListOfValues.objects.filter(group=requested).order_by('sort_order', 'label')
+            return Response({
+                'group': requested, 'label': spec.label,
+                'extendable': spec.extendable, 'help_text': spec.help_text,
+                'values': [{
+                    'id': r.id, 'code': r.code, 'label': r.label,
+                    'sort_order': r.sort_order, 'is_active': r.is_active,
+                    'is_system': r.is_system,
+                } for r in rows],
+            })
+
         keys = [requested] if requested else list(GROUPS)
         payload = {}
         for key in keys:
@@ -277,6 +323,64 @@ class ListOfValuesView(APIView):
             return Response({'group': requested, 'values': payload[requested]})
         return Response(payload)
 
+    def post(self, request):
+        from django.core.exceptions import ValidationError
+
+        group = (request.data.get('group') or '').strip()
+        row = ListOfValues(
+            group=group,
+            code=(request.data.get('code') or '').strip(),
+            label=(request.data.get('label') or '').strip(),
+            sort_order=request.data.get('sort_order') or 0,
+            is_active=True,
+        )
+        try:
+            row.full_clean()
+            row.save()
+        except ValidationError as exc:
+            return Response({'detail': '; '.join(sum(exc.message_dict.values(), []))},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return Response({'id': row.id, 'code': row.code, 'label': row.label,
+                         'sort_order': row.sort_order, 'is_active': row.is_active,
+                         'is_system': row.is_system}, status=status.HTTP_201_CREATED)
+
+
+class ListOfValuesItemView(APIView):
+    """Update or remove a single admin-managed value (superadmin only)."""
+
+    permission_classes = [permissions.IsAuthenticated, IsSuperadmin]
+
+    def patch(self, request, pk):
+        from django.core.exceptions import ValidationError
+
+        row = ListOfValues.objects.filter(pk=pk).first()
+        if not row:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        for field in ('label', 'sort_order', 'is_active', 'code'):
+            if field in request.data:
+                setattr(row, field, request.data[field])
+        try:
+            row.full_clean()
+            row.save()
+        except ValidationError as exc:
+            return Response({'detail': '; '.join(sum(exc.message_dict.values(), []))},
+                            status=status.HTTP_400_BAD_REQUEST)
+        return Response({'id': row.id, 'code': row.code, 'label': row.label,
+                         'sort_order': row.sort_order, 'is_active': row.is_active,
+                         'is_system': row.is_system})
+
+    def delete(self, request, pk):
+        row = ListOfValues.objects.filter(pk=pk).first()
+        if not row:
+            return Response({'detail': 'Not found.'}, status=status.HTTP_404_NOT_FOUND)
+        if row.is_system:
+            return Response(
+                {'detail': 'This value is referenced by application logic — hide it instead of deleting.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        row.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
 
 class SettingsView(APIView):
     """Company-wide display settings.
@@ -288,9 +392,10 @@ class SettingsView(APIView):
 
     # Keys any authenticated user may read. Anything else is superadmin-only,
     # so adding an internal key later does not leak it by default.
-    PUBLIC_KEYS = ('company_name', 'default_currency', 'fiscal_year_start_month')
+    PUBLIC_KEYS = ('company_name', 'company_short_code', 'default_currency', 'fiscal_year_start_month')
     DEFAULTS = {
         'company_name': '',
+        'company_short_code': 'IT',
         'default_currency': 'USD',
         'fiscal_year_start_month': '1',
     }

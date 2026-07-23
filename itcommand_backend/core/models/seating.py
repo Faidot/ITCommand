@@ -18,6 +18,9 @@ class Floor(models.Model):
     floor_name = models.CharField(max_length=255)
     width_units = models.IntegerField(default=20)
     height_units = models.IntegerField(default=15)
+    # Room / wall height in grid units, drawn as perimeter walls in the 3D view.
+    # 0 hides the walls (open floor plate).
+    wall_height_units = models.IntegerField(default=3)
 
     class Meta:
         ordering = ['floor_number']

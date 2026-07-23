@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useDataSync } from "@/hooks/use-data-sync";
 import * as z from "zod";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -160,6 +161,11 @@ export default function DepartmentsPage() {
     fetchDependencies();
     fetchDepartments();
   }, []);
+
+  // Stay in sync with the other split-screen panel: refresh the list when a
+  // department changes anywhere, and the member dropdown when users change.
+  useDataSync("/departments", fetchDepartments);
+  useDataSync("/users", fetchDependencies);
 
   const openAddDialog = () => {
     setEditingDepartment(null);

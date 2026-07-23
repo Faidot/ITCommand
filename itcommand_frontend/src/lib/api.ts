@@ -1,4 +1,7 @@
 import axios from "axios";
+import { emitDataChange } from "./data-sync";
+
+const MUTATING_METHODS = new Set(["post", "put", "patch", "delete"]);
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000/api";
 const VAULT_TOKEN_KEY = "vault_unlock_token";
@@ -112,6 +115,12 @@ api.interceptors.response.use(
   (response) => {
     const hasExpiry = persistVaultExpiry(expiryFromResponse(response));
     if (!hasExpiry && isProtectedVaultRequest(response)) syncVaultExpiry();
+    // Let other views (incl. the other split-screen panel) know something
+    // changed so they can refresh without a full reload.
+    const method = String(response?.config?.method || "").toLowerCase();
+    if (MUTATING_METHODS.has(method)) {
+      emitDataChange({ path: responsePath(response), method });
+    }
     return response;
   },
   async (error) => {

@@ -7,6 +7,9 @@ import {
   AlertTriangle,
   BellRing,
   CalendarClock,
+  ArrowDown,
+  ArrowUp,
+  ArrowUpDown,
   CheckCircle2,
   CircleDollarSign,
   CreditCard,
@@ -21,7 +24,6 @@ import {
   Plus,
   RefreshCw,
   Search,
-  Settings2,
   Trash2,
   WalletCards,
   XCircle,
@@ -80,6 +82,7 @@ import { can } from "@/lib/permissions";
 import { useAuthStore } from "@/store/authStore";
 import { SubscriptionDialog } from "./subscription-dialog";
 import {
+  CategoryBudgetUsage,
   CategorySpend,
   CurrencySpend,
   BudgetCategoryOption,
@@ -194,6 +197,33 @@ function normalizedStatus(subscription: Subscription): string {
   return subscription.status || "ACTIVE";
 }
 
+/** Annualised cost, so monthly and yearly plans sort on the same basis. */
+function annualCostOf(subscription: Subscription): number {
+  const cost = Number(subscription.cost) || 0;
+  return subscription.billing_cycle === "MONTHLY" ? cost * 12 : cost;
+}
+
+type SortKey = "name" | "cost" | "renewal" | "status";
+
+function SortHeader({
+  label, col, sortKey, sortDir, onSort,
+}: {
+  label: string; col: SortKey; sortKey: SortKey; sortDir: "asc" | "desc"; onSort: (k: SortKey) => void;
+}) {
+  const active = sortKey === col;
+  const Icon = !active ? ArrowUpDown : sortDir === "asc" ? ArrowUp : ArrowDown;
+  return (
+    <button
+      type="button"
+      onClick={() => onSort(col)}
+      className={`inline-flex items-center gap-1 select-none hover:text-foreground ${active ? "text-foreground font-medium" : ""}`}
+    >
+      {label}
+      <Icon className={`h-3.5 w-3.5 ${active ? "opacity-100" : "opacity-40"}`} />
+    </button>
+  );
+}
+
 function subscriptionsFromResponse(value: unknown): Subscription[] {
   return listFromResponse<unknown>(value)
     .map(normalizeSubscription)
@@ -294,6 +324,7 @@ function computedDashboard(subscriptions: Subscription[], currency = "USD"): Sub
     spend_by_currency: Array.from(currencyMap.values()),
     budget: null,
     converted: null,
+    category_budgets: [],
   };
 }
 
@@ -334,6 +365,14 @@ function normalizeBudget(value: unknown): SubscriptionBudget | null {
     yearly_usage_percent: nullableNumeric(value.yearly_usage_percent),
     monthly_exceeded: boolValue(value.monthly_exceeded),
     yearly_exceeded: boolValue(value.yearly_exceeded),
+    unconvertible: Array.isArray(value.unconvertible)
+      ? value.unconvertible.flatMap((row) =>
+          isRecord(row)
+            ? [{ currency: textValue(row.currency, "?"), amount: textValue(row.amount, "0") }]
+            : [],
+        )
+      : [],
+    rates_as_of: typeof value.rates_as_of === "string" ? value.rates_as_of : null,
   };
 }
 
@@ -384,6 +423,21 @@ function normalizeDashboard(value: unknown, subscriptions: Subscription[], fallb
     spend_by_currency: currencies.length ? currencies : fallback.spend_by_currency,
     budget: normalizeBudget(value.budget),
     converted: normalizeConverted(value.converted),
+    category_budgets: Array.isArray(value.category_budgets)
+      ? value.category_budgets.flatMap((row) => (isRecord(row) ? [{
+          category: textValue(row.category, "OTHER"),
+          category_label: textValue(row.category_label, textValue(row.category, "Other")),
+          currency: textValue(row.currency, currency),
+          monthly_spend: numeric(row.monthly_spend),
+          yearly_spend: numeric(row.yearly_spend),
+          monthly_threshold: nullableNumeric(row.monthly_threshold),
+          yearly_threshold: nullableNumeric(row.yearly_threshold),
+          monthly_usage_percent: nullableNumeric(row.monthly_usage_percent),
+          yearly_usage_percent: nullableNumeric(row.yearly_usage_percent),
+          monthly_exceeded: boolValue(row.monthly_exceeded),
+          yearly_exceeded: boolValue(row.yearly_exceeded),
+        }] : []))
+      : [],
   };
 }
 
@@ -579,7 +633,10 @@ function BudgetProgress({ budget }: { budget: SubscriptionBudget }) {
           </div>
           <div>
             <p className="font-medium">Subscription budget</p>
-            <p className="text-xs text-muted-foreground">Budget alerts and active spend in {budget.currency}</p>
+            <p className="text-xs text-muted-foreground">
+              All subscriptions converted into {budget.currency}
+              {budget.rates_as_of ? ` · rates as of ${budget.rates_as_of}` : ""}
+            </p>
           </div>
         </div>
         {exceeded && <Badge variant="destructive">Threshold exceeded</Badge>}
@@ -587,6 +644,37 @@ function BudgetProgress({ budget }: { budget: SubscriptionBudget }) {
       <div className="mt-4 grid gap-4 sm:grid-cols-2">
         <BudgetMeter label="Monthly" spend={budget.monthly_spend} threshold={budget.monthly_threshold} percent={budget.monthly_usage_percent} exceeded={budget.monthly_exceeded} currency={budget.currency} />
         <BudgetMeter label="Yearly" spend={budget.yearly_spend} threshold={budget.yearly_threshold} percent={budget.yearly_usage_percent} exceeded={budget.yearly_exceeded} currency={budget.currency} />
+      </div>
+      {budget.unconvertible.length > 0 && (
+        <p className="mt-3 text-xs text-amber-600 dark:text-amber-400">
+          No exchange rate for {budget.unconvertible.map((u) => `${u.currency} ${u.amount}`).join(", ")} — not included above.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function CategoryBudgets({ rows }: { rows: CategoryBudgetUsage[] }) {
+  return (
+    <div className="rounded-xl border bg-card/60 p-4">
+      <div className="mb-3">
+        <p className="font-medium">Category budgets</p>
+        <p className="text-xs text-muted-foreground">Spend per category vs its allocation, converted into the budget currency.</p>
+      </div>
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+        {rows.map((row) => (
+          <div key={row.category} className={`rounded-lg border p-3 ${row.monthly_exceeded || row.yearly_exceeded ? "border-red-300 bg-red-50/60 dark:border-red-900 dark:bg-red-950/20" : ""}`}>
+            <p className="text-sm font-medium mb-2">{row.category_label}</p>
+            <div className="space-y-3">
+              {row.monthly_threshold !== null && (
+                <BudgetMeter label="Monthly" spend={row.monthly_spend} threshold={row.monthly_threshold} percent={row.monthly_usage_percent} exceeded={row.monthly_exceeded} currency={row.currency} />
+              )}
+              {row.yearly_threshold !== null && (
+                <BudgetMeter label="Yearly" spend={row.yearly_spend} threshold={row.yearly_threshold} percent={row.yearly_usage_percent} exceeded={row.yearly_exceeded} currency={row.currency} />
+              )}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );
@@ -638,9 +726,14 @@ export default function SubscriptionsPage() {
   const [statusFilter, setStatusFilter] = useState("ALL");
   const [categoryFilter, setCategoryFilter] = useState("ALL");
   const [billingFilter, setBillingFilter] = useState("ALL");
+  const [sortKey, setSortKey] = useState<SortKey>("renewal");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const toggleSort = (key: SortKey) => {
+    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    else { setSortKey(key); setSortDir(key === "cost" ? "desc" : "asc"); }
+  };
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Subscription | null>(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
   const [exporting, setExporting] = useState<"xlsx" | "pdf" | null>(null);
   const sel = useBulkSelection<number>();
   const clearSelection = sel.clear;
@@ -735,9 +828,29 @@ export default function SubscriptionsPage() {
     });
   }, [billingFilter, categoryFilter, search, statusFilter, subscriptions]);
 
+  const sortedSubscriptions = useMemo(() => {
+    const dir = sortDir === "asc" ? 1 : -1;
+    const big = dir === 1 ? Infinity : -Infinity; // push "no value" to the end
+    return [...filteredSubscriptions].sort((a, b) => {
+      switch (sortKey) {
+        case "cost":
+          return (annualCostOf(a) - annualCostOf(b)) * dir;
+        case "renewal": {
+          const da = daysUntil(a); const db = daysUntil(b);
+          return ((da ?? big) - (db ?? big)) * dir;
+        }
+        case "status":
+          return normalizedStatus(a).localeCompare(normalizedStatus(b)) * dir;
+        case "name":
+        default:
+          return (a.name || "").localeCompare(b.name || "") * dir;
+      }
+    });
+  }, [filteredSubscriptions, sortKey, sortDir]);
+
   const visibleIds = useMemo(
-    () => filteredSubscriptions.map((subscription) => subscription.id),
-    [filteredSubscriptions],
+    () => sortedSubscriptions.map((subscription) => subscription.id),
+    [sortedSubscriptions],
   );
 
   // Selection can span pages and filters, so drop it whenever the visible set
@@ -896,11 +1009,6 @@ export default function SubscriptionsPage() {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
-          {canEdit && settings && (
-            <Button variant="outline" onClick={() => setSettingsOpen(true)}>
-              <Settings2 className="mr-2 h-4 w-4" /> Alerts &amp; budget
-            </Button>
-          )}
           {canAdd && (
             <Button onClick={() => { setEditing(null); setDialogOpen(true); }}>
               <Plus className="mr-2 h-4 w-4" /> Add subscription
@@ -910,6 +1018,8 @@ export default function SubscriptionsPage() {
       </div>
 
       {dashboard.budget && <BudgetProgress budget={dashboard.budget} />}
+
+      {dashboard.category_budgets.length > 0 && <CategoryBudgets rows={dashboard.category_budgets} />}
 
       {dashboard.converted && dashboard.spend_by_currency.length > 1 && (
         <Card className="border-primary/30 bg-primary/5">
@@ -1167,13 +1277,13 @@ export default function SubscriptionsPage() {
                       />
                     </TableHead>
                   )}
-                  <TableHead className="pl-4">Service</TableHead>
+                  <TableHead className="pl-4"><SortHeader label="Service" col="name" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} /></TableHead>
                   <TableHead>Plan</TableHead>
                   <TableHead>Used by</TableHead>
                   <TableHead>Owner / admin</TableHead>
-                  <TableHead>Cost</TableHead>
-                  <TableHead>Renewal</TableHead>
-                  <TableHead>Status</TableHead>
+                  <TableHead><SortHeader label="Cost" col="cost" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} /></TableHead>
+                  <TableHead><SortHeader label="Renewal" col="renewal" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} /></TableHead>
+                  <TableHead><SortHeader label="Status" col="status" sortKey={sortKey} sortDir={sortDir} onSort={toggleSort} /></TableHead>
                   <TableHead className="w-12 pr-4 text-right"><span className="sr-only">Actions</span></TableHead>
                 </TableRow>
               </TableHeader>
@@ -1188,7 +1298,7 @@ export default function SubscriptionsPage() {
                       </p>
                     </TableCell>
                   </TableRow>
-                ) : filteredSubscriptions.map((subscription) => {
+                ) : sortedSubscriptions.map((subscription) => {
                   const status = normalizedStatus(subscription);
                   const urgency = renewalLabel(subscription);
                   return (
@@ -1302,153 +1412,6 @@ export default function SubscriptionsPage() {
         onSubmit={saveSubscription}
       />
 
-      <SubscriptionSettingsDialog
-        open={settingsOpen}
-        onOpenChange={setSettingsOpen}
-        settings={settings}
-        onSaved={async () => { setSettingsOpen(false); await loadData(true); }}
-      />
     </div>
-  );
-}
-
-
-function SubscriptionSettingsDialog({
-  open,
-  onOpenChange,
-  settings,
-  onSaved,
-}: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  settings: SubscriptionSettings | null;
-  onSaved: () => Promise<void>;
-}) {
-  const [draft, setDraft] = useState<SubscriptionSettings>({
-    notifications_enabled: true,
-    notify_owners: true,
-    default_renewal_reminder_days: 30,
-    default_cancellation_reminder_days: 7,
-    monthly_budget_threshold: null,
-    yearly_budget_threshold: null,
-    budget_currency: "USD",
-  });
-  const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (open && settings) setDraft(settings);
-  }, [open, settings]);
-
-  const save = async () => {
-    if (!settings) {
-      toast.error("Alert settings are unavailable. Refresh the page before editing them.");
-      return;
-    }
-    if (
-      !Number.isInteger(draft.default_renewal_reminder_days)
-      || draft.default_renewal_reminder_days < 0
-      || !Number.isInteger(draft.default_cancellation_reminder_days)
-      || draft.default_cancellation_reminder_days < 0
-    ) {
-      toast.error("Reminder days must be whole numbers of zero or greater.");
-      return;
-    }
-    if (!/^[A-Za-z]{3}$/.test(draft.budget_currency.trim())) {
-      toast.error("Budget currency must be a 3-letter currency code.");
-      return;
-    }
-    if (
-      (draft.monthly_budget_threshold !== null && draft.monthly_budget_threshold <= 0)
-      || (draft.yearly_budget_threshold !== null && draft.yearly_budget_threshold <= 0)
-    ) {
-      toast.error("Budget thresholds must be greater than zero, or left blank to disable.");
-      return;
-    }
-    setSaving(true);
-    try {
-      await api.patch("/subscriptions/settings/", {
-        ...draft,
-        budget_currency: draft.budget_currency.toUpperCase(),
-      });
-      toast.success("Subscription alerts and budget updated.");
-      await onSaved();
-    } catch (error: unknown) {
-      toast.error(errorMessage(error, "Could not save subscription settings."));
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Dialog open={open} onOpenChange={(next) => !saving && onOpenChange(next)}>
-      <DialogContent className="sm:max-w-[640px]">
-        <DialogHeader>
-          <DialogTitle>Alerts &amp; budget thresholds</DialogTitle>
-          <DialogDescription>
-            Set defaults for new subscriptions and company-wide spend alerts. Existing records keep their own reminder timing.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-5 py-2">
-          <div className="space-y-3 rounded-xl border p-4">
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <Label htmlFor="settings-notifications">In-app notifications</Label>
-                <p className="text-xs text-muted-foreground">Create in-app alerts when reminders or budgets are due.</p>
-              </div>
-              <Switch id="settings-notifications" checked={draft.notifications_enabled} onCheckedChange={(checked) => setDraft((current) => ({ ...current, notifications_enabled: checked }))} />
-            </div>
-            <div className="flex items-center justify-between gap-4">
-              <div>
-                <Label htmlFor="settings-notify-owner">Notify owners</Label>
-                <p className="text-xs text-muted-foreground">Include owners who have permission to view the Subscriptions module.</p>
-              </div>
-              <Switch id="settings-notify-owner" checked={draft.notify_owners} onCheckedChange={(checked) => setDraft((current) => ({ ...current, notify_owners: checked }))} />
-            </div>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label htmlFor="settings-renewal-days">Default renewal reminder</Label>
-              <div className="relative">
-                <Input id="settings-renewal-days" type="number" min="0" step="1" value={draft.default_renewal_reminder_days} onChange={(event) => setDraft((current) => ({ ...current, default_renewal_reminder_days: numeric(event.target.value) }))} className="pr-14" />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">days</span>
-              </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="settings-cancellation-days">Default cancellation reminder</Label>
-              <div className="relative">
-                <Input id="settings-cancellation-days" type="number" min="0" step="1" value={draft.default_cancellation_reminder_days} onChange={(event) => setDraft((current) => ({ ...current, default_cancellation_reminder_days: numeric(event.target.value) }))} className="pr-14" />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">days</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="space-y-4 rounded-xl border p-4">
-            <div>
-              <p className="font-medium">Budget threshold alerts</p>
-              <p className="text-xs text-muted-foreground">Leave a threshold blank to disable that alert.</p>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-[110px_1fr_1fr]">
-              <div className="space-y-1.5">
-                <Label htmlFor="settings-budget-currency">Currency</Label>
-                <Input id="settings-budget-currency" maxLength={3} value={draft.budget_currency} onChange={(event) => setDraft((current) => ({ ...current, budget_currency: event.target.value.toUpperCase() }))} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="settings-monthly-budget">Monthly threshold</Label>
-                <Input id="settings-monthly-budget" type="number" min="0.01" step="0.01" value={draft.monthly_budget_threshold ?? ""} onChange={(event) => setDraft((current) => ({ ...current, monthly_budget_threshold: event.target.value === "" ? null : numeric(event.target.value) }))} placeholder="No limit" />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="settings-yearly-budget">Yearly threshold</Label>
-                <Input id="settings-yearly-budget" type="number" min="0.01" step="0.01" value={draft.yearly_budget_threshold ?? ""} onChange={(event) => setDraft((current) => ({ ...current, yearly_budget_threshold: event.target.value === "" ? null : numeric(event.target.value) }))} placeholder="No limit" />
-              </div>
-            </div>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={saving}>Cancel</Button>
-          <Button onClick={save} disabled={saving}>{saving ? "Saving…" : "Save alert settings"}</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
   );
 }

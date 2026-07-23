@@ -441,6 +441,34 @@ class SubscriptionSettings(models.Model):
             return settings
 
 
+class SubscriptionCategoryBudget(models.Model):
+    """A monthly / yearly spend limit for one subscription category.
+
+    Thresholds are held in the company budget currency (SubscriptionSettings
+    .budget_currency); the dashboard converts each category's spend into that
+    currency before comparing.
+    """
+
+    category = models.CharField(
+        max_length=24, choices=Subscription.CATEGORY_CHOICES, unique=True, db_index=True
+    )
+    monthly_threshold = models.DecimalField(
+        max_digits=14, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal("0.01"))],
+    )
+    yearly_threshold = models.DecimalField(
+        max_digits=14, decimal_places=2, null=True, blank=True,
+        validators=[MinValueValidator(Decimal("0.01"))],
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["category"]
+
+    def __str__(self):
+        return f"{self.category} budget"
+
+
 class SubscriptionAlertLog(models.Model):
     ALERT_TYPE_CHOICES = (
         ("RENEWAL", "Renewal reminder"),
