@@ -5,7 +5,12 @@ from django.db import models
 from django.utils import timezone
 
 from core.currencies import is_current_iso_4217_code
+# `core.estate` is the taxonomy (layer order, thresholds); `.estate` below is
+# the models module. Same name, different layers — imported explicitly so the
+# distinction stays visible at the call site.
+from core.estate import AT_RISK_WINDOW_DAYS, SERVICE_LAYERS
 
+from .estate import DigitalProperty, ProviderAccount
 from .finance import BudgetCategory
 from .licenses import SoftwareLicense
 from .users import Department, User
@@ -128,6 +133,38 @@ class Subscription(models.Model):
         blank=True,
         related_name="linked_subscriptions",
     )
+    # --- Digital Estate ---
+    # All four are optional: a subscription that predates the estate module, or
+    # one that genuinely serves no property, stays valid.
+    provider_account = models.ForeignKey(
+        ProviderAccount,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="subscriptions",
+        help_text="The provider login this service is bought through.",
+    )
+    digital_property = models.ForeignKey(
+        DigitalProperty,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="subscriptions",
+        help_text="What this service keeps running. Empty means orphaned.",
+    )
+    service_layer = models.CharField(
+        max_length=16,
+        choices=SERVICE_LAYERS,
+        null=True,
+        blank=True,
+        help_text="Where this sits in the stack: registrar, DNS, hosting, …",
+    )
+    identifier = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+        help_text='What this service actually points at — "zone: example.com", "ecs-prod · ap-south-1".',
+    )
     url = models.URLField(blank=True, default="")
     status = models.CharField(
         max_length=12, choices=STATUS_CHOICES, default="ACTIVE", db_index=True
@@ -172,6 +209,19 @@ class Subscription(models.Model):
         indexes = [
             models.Index(fields=["status", "expiry_date"], name="sub_status_exp_idx"),
             models.Index(fields=["currency", "category"], name="sub_currency_cat_idx"),
+            # Digital Estate. Note the plan's fourth index, (status, expiry_date),
+            # is already covered by sub_status_exp_idx above.
+            models.Index(
+                fields=["digital_property", "service_layer"], name="sub_prop_layer_idx"
+            ),
+            models.Index(
+                fields=["provider_account", "status"], name="sub_acct_status_idx"
+            ),
+            # (auto_renew, expiry_date) — the plan says renewal_date, which does
+            # not exist on this model; expiry_date is the renewal boundary.
+            models.Index(
+                fields=["auto_renew", "expiry_date"], name="sub_autorenew_exp_idx"
+            ),
         ]
         constraints = [
             models.CheckConstraint(
@@ -233,11 +283,43 @@ class Subscription(models.Model):
             return "EXPIRED"
         return "ACTIVE"
 
+    def save(self, *args, **kwargs):
+        # `service_layer` is nullable so "no layer set" is distinct from a real
+        # layer. Forms and JSON both like to send "", which would give us two
+        # different empty values in one column; collapse it to NULL on the way in.
+        if not self.service_layer:
+            self.service_layer = None
+        return super().save(*args, **kwargs)
+
     @property
     def days_until_expiry(self):
         if not self.expiry_date:
             return None
         return (self.expiry_date - timezone.localdate()).days
+
+    # --- Digital Estate ---
+
+    @property
+    def is_orphan(self):
+        """Billed, but tied to nothing we own.
+
+        Reads the FK id rather than the object so this stays free on a list page
+        that has not select_related'd the property.
+        """
+        return self.digital_property_id is None
+
+    @property
+    def is_at_risk(self):
+        """Will not auto-renew, and expires soon enough for that to matter.
+
+        A cancelled or paused subscription is not at risk — it is already gone;
+        and one that has already expired is a different problem the dashboard
+        reports separately, so the window is forward-looking only.
+        """
+        if self.auto_renew or self.effective_status != "ACTIVE":
+            return False
+        days = self.days_until_expiry
+        return days is not None and 0 <= days <= AT_RISK_WINDOW_DAYS
 
     @property
     def monthly_cost_unrounded(self):
