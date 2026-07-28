@@ -123,3 +123,24 @@ AT_RISK_WINDOW_DAYS = 30
 
 #: How far ahead the renewal timeline looks.
 TIMELINE_WINDOW_DAYS = 90
+
+#: A renewal inside this window is urgent, not merely upcoming.
+URGENT_WINDOW_DAYS = 7
+
+
+def renewal_urgency(days_until):
+    """Tone for a renewal that lands in `days_until` days.
+
+    Returned by the API rather than derived in the UI, for the same reason as
+    `mfa_severity`: two places computing "is this alarming" drift apart, and the
+    one that drifts is always the one a user is looking at.
+    """
+    if days_until is None:
+        return "muted"
+    if days_until < 0:
+        return "critical"
+    if days_until <= URGENT_WINDOW_DAYS:
+        return "critical"
+    if days_until <= AT_RISK_WINDOW_DAYS:
+        return "warning"
+    return "muted"

@@ -31,6 +31,8 @@ from .views import (
     NetworkTopologyView, NetworkExportView, NetworkDeviceLookupView,
     KBCategoryViewSet, KBTagViewSet, KBArticleViewSet, KBDashboardView, KBSuggestView,
     SubscriptionViewSet,
+    ProviderViewSet, ProviderAccountViewSet, DigitalPropertyViewSet,
+    EstateOverviewView, EstateGapsView,
 )
 from .reports import (
     FinancialSummaryView, AssetSummaryView, ExportFinancialView, ExportAssetsView, MainDashboardView,
@@ -103,6 +105,10 @@ router.register(r'kb/tags', KBTagViewSet, basename='kb-tag')
 router.register(r'kb/articles', KBArticleViewSet, basename='kb-article')
 # Software subscriptions
 router.register(r'subscriptions', SubscriptionViewSet, basename='subscription')
+# Digital Estate
+router.register(r'estate/providers', ProviderViewSet, basename='estate-provider')
+router.register(r'estate/accounts', ProviderAccountViewSet, basename='estate-account')
+router.register(r'estate/properties', DigitalPropertyViewSet, basename='estate-property')
 
 urlpatterns = [
     path('auth/login/', LoginView.as_view(), name='auth_login'),
@@ -164,6 +170,9 @@ urlpatterns = [
     path('network/topology/', NetworkTopologyView.as_view(), name='network_topology'),
     path('network/lookup/', NetworkDeviceLookupView.as_view(), name='network_lookup'),
     path('network/export/', NetworkExportView.as_view(), name='network_export'),
+    # Digital Estate aggregations
+    path('estate/overview/', EstateOverviewView.as_view(), name='estate_overview'),
+    path('estate/gaps/', EstateGapsView.as_view(), name='estate_gaps'),
     # KB
     path('kb/dashboard/', KBDashboardView.as_view(), name='kb_dashboard'),
     path('kb/suggest/', KBSuggestView.as_view(), name='kb_suggest'),
