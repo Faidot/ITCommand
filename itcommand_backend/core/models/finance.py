@@ -155,6 +155,21 @@ class RecurringBill(models.Model):
     # Auto-post: a scheduled job records the payment when due
     auto_post = models.BooleanField(default=False)
     auto_pay_from = models.CharField(max_length=10, choices=(('COMPANY', 'Company'), ('IT', 'IT Budget')), default='COMPANY')
+    #: Soft link to the subscription this bill was raised from.
+    #
+    #: Deliberately a link and not a generator. Auto-creating a RecurringBill for
+    #: every subscription was considered and rejected: this table has no currency
+    #: column, so a USD subscription would land here as a bare number in the
+    #: company currency and silently misstate the commitment. A human creates the
+    #: bill once, in the right currency, and finance owns it from then on.
+    linked_subscription = models.ForeignKey(
+        'Subscription',
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='recurring_bills',
+        help_text='The subscription this bill was raised from, if any.',
+    )
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     created_at = models.DateTimeField(auto_now_add=True)
 

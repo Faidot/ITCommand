@@ -647,6 +647,17 @@ class CostOverviewView(APIView):
             + unbooked_procurement_actual
         )
 
+        # Subscription spend, sliced the two ways the estate cares about.
+        #
+        # Kept out of `grand_total_cost` on purpose: that figure is booked and
+        # unbooked *purchases*, while subscription spend is a recurring
+        # commitment, and any renewal already booked as an expense is inside
+        # `total_expenses` too. Adding them would double-count. These carry
+        # their own converted-money blocks, complete with `is_complete`.
+        from core import finance_estate
+
+        estate_spend = finance_estate.subscription_spend_by_property_and_layer()
+
         return Response({
             'financial_year': active_fy.name if active_fy else None,
             'total_income': total_income,
@@ -666,4 +677,16 @@ class CostOverviewView(APIView):
             'grand_total_cost': grand_total,
             'modules': modules,
             'by_category': by_category,
+            'subscriptions': {
+                'currency': estate_spend['currency'],
+                'by_property': estate_spend['by_property'],
+                'by_layer': estate_spend['by_layer'],
+                'orphaned': estate_spend['orphaned'],
+                'note': (
+                    'Recurring commitment, shown separately from booked spend. '
+                    'Not included in grand_total_cost.'
+                ),
+            },
+            'budget_impact': finance_estate.budget_impact(financial_year=active_fy),
+            'vendor_subscription_spend': finance_estate.subscription_spend_by_vendor(),
         })

@@ -30,6 +30,7 @@ const DEFAULTS: SubscriptionSettings = {
   monthly_budget_threshold: null,
   yearly_budget_threshold: null,
   budget_currency: "USD",
+  create_expense_on_renewal: false,
 };
 
 interface CategoryBudget {
@@ -166,6 +167,39 @@ export function SubscriptionSettingsDialog({
                 <Label htmlFor="settings-yearly-budget">Yearly threshold</Label>
                 <Input id="settings-yearly-budget" type="number" min="0.01" step="0.01" value={draft.yearly_budget_threshold ?? ""} onChange={(e) => setDraft((c) => ({ ...c, yearly_budget_threshold: e.target.value === "" ? null : num(e.target.value) }))} placeholder="No limit" />
               </div>
+            </div>
+          </div>
+
+          {/* Finance linkage. Deliberately its own block with a warning tone:
+              this is the only switch in the app that lets one module write into
+              the finance ledger. */}
+          <div className="space-y-3 rounded-xl border border-amber-300 p-4 dark:border-amber-900">
+            <div>
+              <p className="font-medium">Finance</p>
+              <p className="text-xs text-muted-foreground">
+                Whether renewals reach the ledger on their own.
+              </p>
+            </div>
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0">
+                <Label htmlFor="settings-expense-on-renewal" className="text-sm">
+                  Raise a pending expense when a renewal is recorded
+                </Label>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Books against the subscription&apos;s budget category and the active
+                  financial year. Created as <strong>pending</strong>, so it does not
+                  consume budget until somebody approves it. Skipped — with a reason —
+                  when there is no category, no active financial year, or no exchange
+                  rate for the subscription&apos;s currency.
+                </p>
+              </div>
+              <Switch
+                id="settings-expense-on-renewal"
+                checked={draft.create_expense_on_renewal}
+                onCheckedChange={(checked) =>
+                  setDraft((c) => ({ ...c, create_expense_on_renewal: checked }))
+                }
+              />
             </div>
           </div>
 

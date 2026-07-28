@@ -15,6 +15,7 @@ from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
+from core import finance_estate
 from core.mixins import AuditLogMixin
 from core.models import (
     BudgetCategory,
@@ -83,8 +84,17 @@ def apply_subscription_renewal(
 ):
     """Record a renewal and advance the subscription's expiry.
 
-    Returns the SubscriptionRenewal. Callers are responsible for refreshing
-    alerts afterwards — see run_subscription_auto_renewals.
+    Returns the SubscriptionRenewal, with two attributes attached describing
+    what happened on the finance side: `expense` (the raised Expense or None)
+    and `expense_skipped_reason` (a `finance_estate.SKIP_*` code or None).
+
+    The finance write is best-effort by design. Expense creation is off unless
+    switched on in Subscription settings, and a renewal that succeeded must not
+    be undone because the ledger side could not be completed — a missing
+    exchange rate is not a reason to leave a subscription showing as expired.
+
+    Callers are responsible for refreshing alerts afterwards — see
+    run_subscription_auto_renewals.
     """
     renewal = SubscriptionRenewal.objects.create(
         subscription=subscription,
@@ -99,6 +109,12 @@ def apply_subscription_renewal(
     if seats_added and subscription.seats_total is not None:
         subscription.seats_total = subscription.seats_total + seats_added
     subscription.save(update_fields=["expiry_date", "seats_total", "updated_at"])
+
+    expense, skipped = finance_estate.attempt_renewal_expense(
+        subscription, renewal, actor=renewer
+    )
+    renewal.expense = expense
+    renewal.expense_skipped_reason = skipped
     return renewal
 
 
@@ -746,9 +762,61 @@ class SubscriptionViewSet(AuditLogMixin, viewsets.ModelViewSet):
         # Reminders were raised against the old expiry; reconcile them.
         self._refresh_alerts_after_commit(subscription.pk)
 
+        # Say plainly whether an expense was raised. Silence here would leave a
+        # user unsure whether finance has been told, which is worse than either
+        # answer.
+        payload = SubscriptionRenewalSerializer(renewal).data
+        skipped = getattr(renewal, "expense_skipped_reason", None)
+        payload["expense"] = {
+            "created": bool(getattr(renewal, "expense", None)),
+            "expense_id": renewal.expense.pk if getattr(renewal, "expense", None) else None,
+            "skipped_reason": skipped,
+            "detail": (
+                f"Pending expense #{renewal.expense.pk} raised against "
+                f"{subscription.budget_category.name}."
+                if getattr(renewal, "expense", None)
+                else finance_estate.SKIP_REASONS.get(skipped, "")
+            ),
+        }
+        return Response(payload, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["post"], url_path="create-recurring-bill")
+    def create_recurring_bill(self, request, pk=None):
+        """Raise a RecurringBill from this subscription, once, on request.
+
+        Deliberately an explicit action rather than something that happens on
+        save. See `RecurringBill.linked_subscription` for why auto-generation
+        was rejected — chiefly that RecurringBill has no currency column.
+        """
+        subscription = self.get_object()
+        if not has_role_permission(request.user, "finance", "add"):
+            return Response(
+                {"detail": "You need permission to add finance records to raise a bill."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+        try:
+            bill, created = finance_estate.build_recurring_bill(
+                subscription, actor=request.user
+            )
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
         return Response(
-            SubscriptionRenewalSerializer(renewal).data,
-            status=status.HTTP_201_CREATED,
+            {
+                "created": created,
+                "recurring_bill_id": bill.pk,
+                "title": bill.title,
+                "amount": str(bill.amount),
+                "frequency": bill.frequency,
+                "next_due_date": bill.next_due_date,
+                "detail": (
+                    "Recurring bill raised. Finance owns it from here — it will not "
+                    "change when the subscription does."
+                    if created
+                    else "This subscription is already linked to an active recurring bill."
+                ),
+            },
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )
 
     @action(detail=False, methods=["post"], url_path="process_auto_renewals")

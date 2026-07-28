@@ -208,6 +208,9 @@ export interface SubscriptionSettings {
   monthly_budget_threshold: number | null;
   yearly_budget_threshold: number | null;
   budget_currency: string;
+  /** Raise a pending expense when a renewal is recorded. Off by default — the
+   *  only switch that lets this module write into the finance ledger. */
+  create_expense_on_renewal: boolean;
 }
 
 export const EMPTY_SUBSCRIPTION_FORM: SubscriptionFormValues = {

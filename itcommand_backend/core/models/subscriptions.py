@@ -469,6 +469,22 @@ class SubscriptionSettings(models.Model):
         blank=True,
         validators=[MinValueValidator(Decimal("0.01"))],
     )
+    #: Record a PENDING Expense when a renewal is applied.
+    #
+    #: Off by default, and deliberately so. This is the only switch in the app
+    #: that lets one module write into the finance ledger, and a renewal that
+    #: silently books money nobody approved is the kind of surprise that makes
+    #: people distrust the whole system. When on, the expense is created as
+    #: PENDING — budget consumption counts APPROVED only, so a human still has
+    #: to look at it before it moves a number.
+    create_expense_on_renewal = models.BooleanField(
+        default=False,
+        help_text=(
+            "When a renewal is recorded, raise a pending expense against the "
+            "subscription's budget category. Requires a category and an active "
+            "financial year; nothing is booked without both."
+        ),
+    )
     updated_by = models.ForeignKey(
         User,
         on_delete=models.SET_NULL,

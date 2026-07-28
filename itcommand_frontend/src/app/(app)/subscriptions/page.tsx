@@ -451,6 +451,9 @@ function normalizeSettings(value: unknown): SubscriptionSettings | null {
     monthly_budget_threshold: nullableNumeric(value.monthly_budget_threshold),
     yearly_budget_threshold: nullableNumeric(value.yearly_budget_threshold),
     budget_currency: textValue(value.budget_currency, "USD"),
+    // Defaults to false: an absent field must never read as "yes, write to the
+    // finance ledger".
+    create_expense_on_renewal: boolValue(value.create_expense_on_renewal, false),
   };
 }
 

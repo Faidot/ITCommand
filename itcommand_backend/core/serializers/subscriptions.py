@@ -333,6 +333,7 @@ class SubscriptionSettingsSerializer(serializers.ModelSerializer):
             "budget_currency",
             "monthly_budget_threshold",
             "yearly_budget_threshold",
+            "create_expense_on_renewal",
             "updated_by",
             "updated_by_name",
             "updated_at",
