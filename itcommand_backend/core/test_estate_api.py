@@ -379,13 +379,19 @@ class StackGapTests(EstateApiTestCase):
         self.assertEqual(set(data["missing_layers"]), set(estate.REQUIRED_LAYERS))
         self.assertTrue(all(not row["configured"] for row in data["layers"]))
 
-    def test_every_layer_is_returned_even_when_empty(self):
+    def test_every_tracked_layer_is_returned_even_when_empty(self):
+        """The stack shows the layers this org tracks, in its configured order.
+
+        Not the whole catalog: since Phase 4, tracking a layer is what makes an
+        empty one a gap, so an untracked layer has no empty slot to show. The
+        default tracked set is the seven required ones.
+        """
         data = self._stack()
-        self.assertEqual(len(data["layers"]), len(estate.SERVICE_LAYERS))
+        self.assertEqual(len(data["layers"]), len(estate.REQUIRED_LAYERS))
         self.assertEqual(
-            [row["layer"] for row in data["layers"]],
-            [code for code, _ in estate.SERVICE_LAYERS],
+            [row["layer"] for row in data["layers"]], list(estate.REQUIRED_LAYERS)
         )
+        self.assertTrue(all(row["is_tracked"] for row in data["layers"]))
 
     def test_property_with_some_layers_reports_only_the_rest(self):
         self._attach("REGISTRAR")
@@ -404,14 +410,25 @@ class StackGapTests(EstateApiTestCase):
         self.assertEqual(data["gap_count"], 0)
         self.assertEqual(data["missing_layers"], [])
 
-    def test_optional_layers_left_empty_are_not_gaps(self):
-        for layer in estate.REQUIRED_LAYERS:
-            self._attach(layer)
+    def test_untracked_layer_shows_no_empty_slot(self):
+        """Storage is off by default, so it does not clutter every property."""
         data = self._stack()
-        optional = [row for row in data["layers"] if not row["is_required"]]
-        self.assertTrue(optional)
-        self.assertTrue(all(not row["is_gap"] for row in optional))
-        self.assertTrue(all(not row["configured"] for row in optional))
+        self.assertNotIn("STORAGE", [row["layer"] for row in data["layers"]])
+
+    def test_untracked_layer_still_shows_a_service_bound_to_it(self):
+        """Turning a layer off must hide the empty slot, never the money.
+
+        A service on an untracked layer is real spend; dropping it from the
+        stack because of a settings change would make it invisible everywhere
+        except the orphan report, which it is not.
+        """
+        self._attach("STORAGE", name="S3 bucket")
+        data = self._stack()
+        storage = next(row for row in data["layers"] if row["layer"] == "STORAGE")
+        self.assertFalse(storage["is_tracked"])
+        self.assertFalse(storage["is_gap"])
+        self.assertTrue(storage["configured"])
+        self.assertEqual(storage["services"][0]["name"], "S3 bucket")
 
     def test_expired_service_does_not_fill_a_layer(self):
         today = timezone.localdate()
@@ -460,6 +477,10 @@ class StackGapTests(EstateApiTestCase):
             return len(captured.captured_queries), len(response.data["results"])
 
         add_properties(0, 3)
+        # Warm up first: the very first request also materialises singletons and
+        # settings rows, which is a one-off cost, not per-property work. Measuring
+        # a cold call against a warm one compares the wrong two things.
+        count_queries()
         few_queries, few_rows = count_queries()
 
         add_properties(3, 15)

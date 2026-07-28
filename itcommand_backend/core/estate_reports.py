@@ -49,6 +49,36 @@ def _money(value):
     return str(Decimal(value or 0).quantize(TWOPLACES, rounding=ROUND_HALF_UP))
 
 
+# ───────────────────────────── configured shape ─────────────────────────────
+
+def estate_settings():
+    from core.models import EstateSettings
+
+    return EstateSettings.get_solo()
+
+
+def tracked_layers(settings=None):
+    """Layer codes this organisation tracks, in its configured order.
+
+    `core.estate.SERVICE_LAYERS` remains the catalog of what is possible; this
+    is what the org opted into. Everything that renders or scores a stack reads
+    this, so enabling a layer in Settings is the single switch.
+    """
+    return (settings or estate_settings()).tracked_layers()
+
+
+def urgency_for(days_until, settings=None):
+    """Renewal tone, using the org's windows rather than the module defaults."""
+    settings = settings or estate_settings()
+    if days_until is None:
+        return "muted"
+    if days_until < 0 or days_until <= settings.renewal_urgent_days:
+        return "critical"
+    if days_until <= settings.renewal_warning_days:
+        return "warning"
+    return "muted"
+
+
 # ───────────────────────────── active-subscription scope ─────────────────────
 
 def active_q(today=None):
@@ -366,13 +396,14 @@ def spend_by_layer(queryset, to_currency=None):
 
 # ───────────────────────────── renewal timeline ─────────────────────────────
 
-def renewal_timeline(queryset, *, days=None, today=None):
+def renewal_timeline(queryset, *, days=None, today=None, settings=None):
     """Active subscriptions renewing inside the window, soonest first.
 
     Returns flat rows. Lane packing is the frontend's job — it depends on
     rendered label width, which the server cannot know.
     """
-    days = estate.TIMELINE_WINDOW_DAYS if days is None else days
+    settings = settings or estate_settings()
+    days = settings.timeline_window_days if days is None else days
     today = today or timezone.localdate()
     horizon = today + timezone.timedelta(days=days)
 
@@ -397,9 +428,14 @@ def renewal_timeline(queryset, *, days=None, today=None):
                 "service_layer_label": estate.layer_label(subscription.service_layer),
                 "expiry_date": subscription.expiry_date,
                 "days_until": days_until,
-                "urgency": estate.renewal_urgency(days_until),
+                "urgency": urgency_for(days_until, settings),
                 "auto_renew": subscription.auto_renew,
-                "is_at_risk": subscription.is_at_risk,
+                "is_at_risk": estate.is_at_risk(
+                    auto_renew=subscription.auto_renew,
+                    effective_status=subscription.effective_status,
+                    days_until_expiry=days_until,
+                    window_days=settings.renewal_warning_days,
+                ),
                 "cost": _money(subscription.cost),
                 "currency": subscription.currency,
                 "provider_name": provider.name if provider else None,
@@ -418,8 +454,10 @@ def renewal_timeline(queryset, *, days=None, today=None):
 
 # ───────────────────────────── stacks and gaps ─────────────────────────────
 
-def _service_row(subscription):
+def _service_row(subscription, settings=None):
+    settings = settings or estate_settings()
     provider = getattr(subscription.provider_account, "provider", None)
+    days_until = subscription.days_until_expiry
     return {
         "id": subscription.id,
         "name": subscription.name,
@@ -429,10 +467,15 @@ def _service_row(subscription):
         "billing_cycle": subscription.billing_cycle,
         "monthly_cost": _money(subscription.monthly_cost),
         "expiry_date": subscription.expiry_date,
-        "days_until_expiry": subscription.days_until_expiry,
-        "urgency": estate.renewal_urgency(subscription.days_until_expiry),
+        "days_until_expiry": days_until,
+        "urgency": urgency_for(days_until, settings),
         "auto_renew": subscription.auto_renew,
-        "is_at_risk": subscription.is_at_risk,
+        "is_at_risk": estate.is_at_risk(
+            auto_renew=subscription.auto_renew,
+            effective_status=subscription.effective_status,
+            days_until_expiry=days_until,
+            window_days=settings.renewal_warning_days,
+        ),
         "provider_account_id": subscription.provider_account_id,
         "provider_name": provider.name if provider else None,
         "brand_color": provider.brand_color if provider else "",
@@ -444,7 +487,7 @@ def _service_row(subscription):
     }
 
 
-def property_stack(digital_property, *, today=None):
+def property_stack(digital_property, *, today=None, settings=None):
     """Every layer for one property, present or missing.
 
     Missing layers are returned as explicit rows rather than omitted: a gap you
@@ -457,6 +500,8 @@ def property_stack(digital_property, *, today=None):
     module exists to surface.
     """
     today = today or timezone.localdate()
+    settings = settings or estate_settings()
+    tracked = tracked_layers(settings)
     subscriptions = (
         digital_property.subscriptions.filter(active_q(today))
         .select_related("provider_account", "provider_account__provider")
@@ -465,19 +510,29 @@ def property_stack(digital_property, *, today=None):
 
     by_layer = defaultdict(list)
     for subscription in subscriptions:
-        by_layer[subscription.service_layer].append(_service_row(subscription))
+        by_layer[subscription.service_layer].append(_service_row(subscription, settings))
+
+    # Tracked layers first, in the configured order. Then any untracked layer
+    # that nonetheless has a live service on it: turning a layer off in Settings
+    # must hide the empty slot, never the money already attached to it.
+    untracked_with_services = [
+        code
+        for code in estate.SERVICE_LAYER_CODES
+        if code not in tracked and by_layer.get(code)
+    ]
 
     layers = []
-    for code, label in estate.SERVICE_LAYERS:
+    for code in [*tracked, *untracked_with_services]:
         services = by_layer.get(code, [])
-        required = code in estate.REQUIRED_LAYERS
+        is_tracked = code in tracked
         layers.append(
             {
                 "layer": code,
-                "layer_label": label,
-                "is_required": required,
+                "layer_label": estate.layer_label(code),
+                "is_required": is_tracked,
+                "is_tracked": is_tracked,
                 "configured": bool(services),
-                "is_gap": required and not services,
+                "is_gap": is_tracked and not services,
                 "service_count": len(services),
                 "services": services,
             }
@@ -517,13 +572,14 @@ def stack_coverage(*, today=None):
     return coverage
 
 
-def estate_gaps(*, today=None):
-    """Properties missing a required layer, and services attached to nothing."""
+def estate_gaps(*, today=None, settings=None):
+    """Properties missing a tracked layer, and services attached to nothing."""
     from core.models import DigitalProperty
 
     today = today or timezone.localdate()
+    settings = settings or estate_settings()
     coverage = stack_coverage(today=today)
-    required = list(estate.REQUIRED_LAYERS)
+    required = tracked_layers(settings)
 
     properties = []
     for prop in DigitalProperty.objects.filter(is_active=True).select_related(
@@ -550,7 +606,7 @@ def estate_gaps(*, today=None):
     properties.sort(key=lambda item: (-item["missing_count"], item["name"]))
 
     orphans = [
-        _service_row(subscription) | {"currency": subscription.currency}
+        _service_row(subscription, settings)
         for subscription in active_subscriptions(today)
         .filter(digital_property__isnull=True)
         .select_related("provider_account", "provider_account__provider")
@@ -576,19 +632,21 @@ def overview(*, to_currency=None, timeline_days=None, today=None):
     from core.models import DigitalProperty, ProviderAccount
 
     today = today or timezone.localdate()
+    settings = estate_settings()
     active = active_subscriptions(today)
 
     currency_rows = spend_by_currency(active)
     total = converted_money(currency_rows, to_currency=to_currency)
 
-    gaps = estate_gaps(today=today)
+    gaps = estate_gaps(today=today, settings=settings)
 
     at_risk = [
         subscription
         for subscription in active.filter(
             auto_renew=False,
             expiry_date__gte=today,
-            expiry_date__lte=today + timezone.timedelta(days=estate.AT_RISK_WINDOW_DAYS),
+            expiry_date__lte=today
+            + timezone.timedelta(days=settings.renewal_warning_days),
         ).select_related("provider_account__provider", "digital_property")
     ]
 
@@ -615,7 +673,7 @@ def overview(*, to_currency=None, timeline_days=None, today=None):
         "spend_by_provider": spend_by_provider(active, to_currency=to_currency),
         "spend_by_layer": spend_by_layer(active, to_currency=to_currency),
         "renewal_timeline": renewal_timeline(
-            active, days=timeline_days, today=today
+            active, days=timeline_days, today=today, settings=settings
         ),
         "kpis": {
             "service_count": active.count(),
@@ -630,21 +688,87 @@ def overview(*, to_currency=None, timeline_days=None, today=None):
             "accounts_with_weak_mfa": weak_mfa,
             "accounts_with_unknown_mfa": unknown_mfa,
         },
-        "at_risk_services": [_service_row(s) for s in at_risk],
+        "at_risk_services": [_service_row(s, settings) for s in at_risk],
         "orphaned_services": gaps["orphaned_services"],
-        "layers": [
-            {
-                "layer": code,
-                "layer_label": label,
-                "is_required": code in estate.REQUIRED_LAYERS,
-            }
-            for code, label in estate.SERVICE_LAYERS
-        ],
+        "layers": layer_catalog(settings),
         "thresholds": {
-            "at_risk_window_days": estate.AT_RISK_WINDOW_DAYS,
-            "urgent_window_days": estate.URGENT_WINDOW_DAYS,
+            "at_risk_window_days": settings.renewal_warning_days,
+            "urgent_window_days": settings.renewal_urgent_days,
             "timeline_window_days": (
-                estate.TIMELINE_WINDOW_DAYS if timeline_days is None else timeline_days
+                settings.timeline_window_days if timeline_days is None else timeline_days
             ),
         },
+        "alerts": {
+            "on_auto_renew_off": settings.alert_on_auto_renew_off,
+            "on_new_orphan": settings.alert_on_new_orphan,
+        },
     }
+
+
+def currency_status(*, base=None, on_date=None):
+    """Every currency actually in use, and whether it converts into `base`.
+
+    "In use" spans subscriptions and vendor contracts, because both feed money
+    figures a user will see. A currency with no rate is reported with what it is
+    costing, so the admin fixing it can see what the gap is worth rather than
+    just that one exists.
+    """
+    from core.models import Subscription, VendorContract
+
+    base = (base or reporting_currency()).upper()
+
+    usage = defaultdict(lambda: {"subscriptions": 0, "contracts": 0})
+    for row in (
+        Subscription.objects.filter(active_q())
+        .values("currency")
+        .annotate(total=Sum(Value(1)))
+    ):
+        usage[(row["currency"] or "").upper()]["subscriptions"] = row["total"] or 0
+    for row in (
+        VendorContract.objects.exclude(currency="")
+        .values("currency")
+        .annotate(total=Sum(Value(1)))
+    ):
+        usage[(row["currency"] or "").upper()]["contracts"] = row["total"] or 0
+    usage.pop("", None)
+
+    spend = {
+        row["currency"]: row for row in spend_by_currency(active_subscriptions())
+    }
+
+    rows = []
+    for code in sorted(usage):
+        rate = get_rate(code, base=base, on_date=on_date)
+        monthly = spend.get(code, {}).get("monthly", ZERO)
+        rows.append(
+            {
+                "currency": code,
+                "has_rate": rate is not None,
+                "rate": str(rate) if rate is not None else None,
+                "is_base": code == base,
+                "subscription_count": usage[code]["subscriptions"],
+                "contract_count": usage[code]["contracts"],
+                "monthly_spend": _money(monthly),
+            }
+        )
+    return rows
+
+
+def layer_catalog(settings=None):
+    """Tracked layers in configured order, then the rest of the catalog.
+
+    The whole catalog is returned — an untracked layer must still be selectable
+    when adding a service — but `is_tracked` says which ones count toward gaps.
+    """
+    settings = settings or estate_settings()
+    tracked = tracked_layers(settings)
+    remainder = [code for code in estate.SERVICE_LAYER_CODES if code not in tracked]
+    return [
+        {
+            "layer": code,
+            "layer_label": estate.layer_label(code),
+            "is_required": code in tracked,
+            "is_tracked": code in tracked,
+        }
+        for code in [*tracked, *remainder]
+    ]

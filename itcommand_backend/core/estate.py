@@ -128,6 +128,23 @@ TIMELINE_WINDOW_DAYS = 90
 URGENT_WINDOW_DAYS = 7
 
 
+def is_at_risk(*, auto_renew, effective_status, days_until_expiry, window_days=None):
+    """Will not renew itself, and expires soon enough for that to matter.
+
+    A pure function so the model property and the settings-aware API layer share
+    one definition. `Subscription.is_at_risk` calls it with the default window;
+    `estate_reports` calls it with whatever the organisation configured. Two
+    copies of this rule would eventually disagree, and the KPI would stop
+    matching the row it counted.
+    """
+    if auto_renew or effective_status != "ACTIVE":
+        return False
+    if days_until_expiry is None:
+        return False
+    window = AT_RISK_WINDOW_DAYS if window_days is None else window_days
+    return 0 <= days_until_expiry <= window
+
+
 def renewal_urgency(days_until):
     """Tone for a renewal that lands in `days_until` days.
 

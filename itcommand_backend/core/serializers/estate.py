@@ -20,6 +20,8 @@ from rest_framework import serializers
 from core import estate
 from core.models import (
     DigitalProperty,
+    EstateSettings,
+    ExchangeRate,
     Provider,
     ProviderAccount,
     VaultCredential,
@@ -184,6 +186,11 @@ class ProviderAccountSerializer(serializers.ModelSerializer):
 
 
 class DigitalPropertySerializer(serializers.ModelSerializer):
+    # Override the model's ChoiceField: kinds are admin-managed under Settings →
+    # Lists of values, so the model's frozen `choices` must not be the gate.
+    # `validate_kind` below checks against the LOV instead. Same reason
+    # UserSerializer overrides `role`.
+    kind = serializers.CharField(required=False)
     kind_label = serializers.CharField(source="get_kind_display", read_only=True)
     owner_name = serializers.CharField(
         source="owner.full_name", read_only=True, default=None
@@ -225,6 +232,25 @@ class DigitalPropertySerializer(serializers.ModelSerializer):
             raise serializers.ValidationError(f"'{name}' is already tracked.")
         return name
 
+    def validate_kind(self, value):
+        """Accept any kind an admin has added under Settings → Lists of values.
+
+        The model keeps its `choices` for the Django admin, but validating
+        against them here would reject a kind the org just created — which is
+        the whole point of moving this list behind the LOV registry.
+        """
+        from core.lov import is_valid
+
+        code = (value or "").strip().upper()
+        if not code:
+            return "OTHER"
+        if not is_valid("estate_property_kind", code):
+            raise serializers.ValidationError(
+                f"'{code}' is not an available property kind. Add it under "
+                f"Settings → Lists of values first."
+            )
+        return code
+
 
 class EstateLayerSerializer(serializers.Serializer):
     """The layer catalog, served so the frontend never hardcodes stack order."""
@@ -233,13 +259,97 @@ class EstateLayerSerializer(serializers.Serializer):
     layer_label = serializers.CharField()
     is_required = serializers.BooleanField()
 
-    @staticmethod
-    def catalog():
-        return [
-            {
-                "layer": code,
-                "layer_label": label,
-                "is_required": code in estate.REQUIRED_LAYERS,
-            }
-            for code, label in estate.SERVICE_LAYERS
+
+class EstateSettingsSerializer(serializers.ModelSerializer):
+    updated_by_name = serializers.CharField(
+        source="updated_by.full_name", read_only=True, default=None
+    )
+
+    class Meta:
+        model = EstateSettings
+        fields = [
+            "enabled_layers",
+            "renewal_warning_days",
+            "renewal_urgent_days",
+            "timeline_window_days",
+            "alert_on_auto_renew_off",
+            "alert_on_new_orphan",
+            "updated_by",
+            "updated_by_name",
+            "updated_at",
         ]
+        read_only_fields = ["updated_by", "updated_at"]
+
+    def validate_enabled_layers(self, value):
+        if not isinstance(value, list):
+            raise serializers.ValidationError("Expected a list of layer codes.")
+        cleaned, seen = [], set()
+        for raw in value:
+            code = str(raw or "").strip().upper()
+            if not code:
+                continue
+            if code not in estate.SERVICE_LAYER_CODES:
+                raise serializers.ValidationError(f"'{code}' is not a known layer.")
+            if code not in seen:
+                seen.add(code)
+                cleaned.append(code)
+        return cleaned
+
+    def validate(self, attrs):
+        urgent = attrs.get(
+            "renewal_urgent_days", getattr(self.instance, "renewal_urgent_days", None)
+        )
+        warning = attrs.get(
+            "renewal_warning_days", getattr(self.instance, "renewal_warning_days", None)
+        )
+        if urgent and warning and urgent > warning:
+            raise serializers.ValidationError(
+                {
+                    "renewal_urgent_days": (
+                        "The red window cannot be wider than the amber one — nothing "
+                        "would ever render amber."
+                    )
+                }
+            )
+        return attrs
+
+
+class ExchangeRateSerializer(serializers.ModelSerializer):
+    """A manually-entered rate. `rate` is how many `base_currency` one
+    `currency` buys, matching the model's own definition."""
+
+    # Optional at field level so `validate()` can default it to today. Left
+    # required, DRF rejects the payload before the default is ever applied.
+    as_of = serializers.DateField(required=False)
+
+    class Meta:
+        model = ExchangeRate
+        fields = ["id", "base_currency", "currency", "rate", "as_of", "source", "created_at"]
+        read_only_fields = ["source", "created_at"]
+        # The model's unique constraint would otherwise reject the upsert that
+        # `perform_create` performs deliberately.
+        validators = []
+
+    def validate_base_currency(self, value):
+        return (value or "").strip().upper()
+
+    def validate_currency(self, value):
+        return (value or "").strip().upper()
+
+    def validate_rate(self, value):
+        if value is None or value <= 0:
+            raise serializers.ValidationError("A rate must be greater than zero.")
+        return value
+
+    def validate(self, attrs):
+        base = attrs.get("base_currency") or getattr(self.instance, "base_currency", "")
+        currency = attrs.get("currency") or getattr(self.instance, "currency", "")
+        if base and currency and base == currency:
+            raise serializers.ValidationError(
+                {"currency": "A currency always converts to itself at 1 — no rate needed."}
+            )
+        if not attrs.get("as_of") and not getattr(self.instance, "as_of", None):
+            from django.utils import timezone
+
+            attrs["as_of"] = timezone.localdate()
+        return attrs

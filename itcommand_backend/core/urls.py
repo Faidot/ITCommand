@@ -32,7 +32,7 @@ from .views import (
     KBCategoryViewSet, KBTagViewSet, KBArticleViewSet, KBDashboardView, KBSuggestView,
     SubscriptionViewSet,
     ProviderViewSet, ProviderAccountViewSet, DigitalPropertyViewSet,
-    EstateOverviewView, EstateGapsView,
+    EstateOverviewView, EstateGapsView, EstateSettingsView, ExchangeRateViewSet,
 )
 from .reports import (
     FinancialSummaryView, AssetSummaryView, ExportFinancialView, ExportAssetsView, MainDashboardView,
@@ -109,6 +109,7 @@ router.register(r'subscriptions', SubscriptionViewSet, basename='subscription')
 router.register(r'estate/providers', ProviderViewSet, basename='estate-provider')
 router.register(r'estate/accounts', ProviderAccountViewSet, basename='estate-account')
 router.register(r'estate/properties', DigitalPropertyViewSet, basename='estate-property')
+router.register(r'exchange-rates', ExchangeRateViewSet, basename='exchange-rate')
 
 urlpatterns = [
     path('auth/login/', LoginView.as_view(), name='auth_login'),
@@ -173,6 +174,7 @@ urlpatterns = [
     # Digital Estate aggregations
     path('estate/overview/', EstateOverviewView.as_view(), name='estate_overview'),
     path('estate/gaps/', EstateGapsView.as_view(), name='estate_gaps'),
+    path('estate/settings/', EstateSettingsView.as_view(), name='estate_settings'),
     # KB
     path('kb/dashboard/', KBDashboardView.as_view(), name='kb_dashboard'),
     path('kb/suggest/', KBSuggestView.as_view(), name='kb_suggest'),

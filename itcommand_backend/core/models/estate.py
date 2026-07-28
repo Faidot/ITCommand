@@ -10,10 +10,20 @@ A Subscription with no DigitalProperty is an *orphan*: money leaving the
 company for something nobody has tied to a thing we own.
 """
 
-from django.core.validators import RegexValidator
+from django.core.validators import MinValueValidator, RegexValidator
 from django.db import models
 
-from core.estate import AUTH_METHODS, MFA_METHODS, PROPERTY_KINDS, mfa_severity
+from core.estate import (
+    AT_RISK_WINDOW_DAYS,
+    AUTH_METHODS,
+    MFA_METHODS,
+    PROPERTY_KINDS,
+    REQUIRED_LAYERS,
+    SERVICE_LAYER_CODES,
+    TIMELINE_WINDOW_DAYS,
+    URGENT_WINDOW_DAYS,
+    mfa_severity,
+)
 
 from .users import Department, User
 from .vault import AccountWorkspace, VaultCredential
@@ -224,3 +234,110 @@ class DigitalProperty(models.Model):
     def save(self, *args, **kwargs):
         self.name = (self.name or "").strip().lower()
         return super().save(*args, **kwargs)
+
+
+def default_enabled_layers():
+    """Callable, not a literal — a mutable default on a JSONField is shared
+    state across every row that never overrode it."""
+    return list(REQUIRED_LAYERS)
+
+
+class EstateSettings(models.Model):
+    """Which layers this organisation tracks, and when it wants warning.
+
+    `core.estate` says what is *possible* — all ten layers, the default windows.
+    This says what this org actually uses. Keeping the two apart means adding a
+    layer to the catalog does not silently start reporting gaps for it on every
+    existing property.
+
+    Singleton (pk=1), same pattern as SubscriptionSettings.
+    """
+
+    #: Ordered list of layer codes. Order is the stack order shown in the UI;
+    #: membership is what counts as a gap when empty.
+    enabled_layers = models.JSONField(
+        default=default_enabled_layers,
+        help_text="Ordered layer codes this organisation tracks. Empty means every layer.",
+    )
+    renewal_warning_days = models.PositiveSmallIntegerField(
+        default=AT_RISK_WINDOW_DAYS,
+        validators=[MinValueValidator(1)],
+        help_text="A renewal inside this many days is amber, and counts as at-risk when auto-renew is off.",
+    )
+    renewal_urgent_days = models.PositiveSmallIntegerField(
+        default=URGENT_WINDOW_DAYS,
+        validators=[MinValueValidator(1)],
+        help_text="A renewal inside this many days is red.",
+    )
+    timeline_window_days = models.PositiveSmallIntegerField(
+        default=TIMELINE_WINDOW_DAYS,
+        validators=[MinValueValidator(7)],
+        help_text="How far ahead the renewal timeline looks.",
+    )
+    alert_on_auto_renew_off = models.BooleanField(
+        default=True,
+        help_text="Warn when a service approaching renewal will not renew itself.",
+    )
+    alert_on_new_orphan = models.BooleanField(
+        default=True,
+        help_text="Warn when a service is billed but tied to no property.",
+    )
+    updated_by = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="updated_estate_settings",
+    )
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        verbose_name_plural = "estate settings"
+
+    def __str__(self):
+        return "Digital Estate settings"
+
+    @classmethod
+    def get_solo(cls):
+        """The singleton, unsaved-with-defaults when nobody has configured it.
+
+        Deliberately does not `get_or_create`: this is read on every estate
+        request, and a GET that writes a row is both a surprise and a race. The
+        instance carries pk=1, so the first PUT inserts it. Same approach as
+        `VaultMasterPassword.get_singleton`.
+        """
+        return cls.objects.filter(pk=1).first() or cls(pk=1)
+
+    def clean(self):
+        from django.core.exceptions import ValidationError
+
+        errors = {}
+        unknown = [
+            code for code in (self.enabled_layers or []) if code not in SERVICE_LAYER_CODES
+        ]
+        if unknown:
+            errors["enabled_layers"] = (
+                f"Unknown layer code(s): {', '.join(sorted(unknown))}."
+            )
+        if self.renewal_urgent_days and self.renewal_warning_days:
+            if self.renewal_urgent_days > self.renewal_warning_days:
+                errors["renewal_urgent_days"] = (
+                    "The red window cannot be wider than the amber one — nothing "
+                    "would ever render amber."
+                )
+        if errors:
+            raise ValidationError(errors)
+
+    def tracked_layers(self):
+        """Enabled layer codes, de-duplicated and in the configured order.
+
+        Falls back to the whole catalog when the list is empty, so an org that
+        clears every layer sees everything rather than nothing — an empty estate
+        page is a worse answer than a noisy one.
+        """
+        seen, ordered = set(), []
+        for code in self.enabled_layers or []:
+            if code in SERVICE_LAYER_CODES and code not in seen:
+                seen.add(code)
+                ordered.append(code)
+        return ordered or list(SERVICE_LAYER_CODES)

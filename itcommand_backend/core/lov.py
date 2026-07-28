@@ -44,6 +44,17 @@ COMMON_CURRENCIES = (
 )
 
 
+#: Seed for the digital-property kinds group. Imported from the estate taxonomy
+#: rather than restated, so the model choices and the dropdown cannot diverge.
+def _estate_property_kinds():
+    from core.estate import PROPERTY_KINDS
+
+    return tuple(PROPERTY_KINDS)
+
+
+ESTATE_PROPERTY_KINDS = _estate_property_kinds()
+
+
 def _validate_currency_code(code: str) -> Optional[str]:
     if not code or len(code) != 3 or not code.isalpha():
         return "A currency code must be three letters (for example, USD)."
@@ -234,6 +245,17 @@ _GROUP_LIST = [
         label="Onboarding assigned roles",
         extendable=True,
         help_text="Roles a checklist task can be assigned to. Safe to extend.",
+    ),
+    GroupSpec(
+        key="estate_property_kind",
+        label="Digital property kinds",
+        extendable=True,
+        seed=ESTATE_PROPERTY_KINDS,
+        help_text=(
+            "What a digital property is — a game, an app, a marketing site. "
+            "Safe to extend: nothing in the code branches on these codes, they "
+            "only group and label properties."
+        ),
     ),
 ]
 

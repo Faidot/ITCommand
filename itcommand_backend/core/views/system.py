@@ -144,6 +144,9 @@ class IntegrationsView(APIView):
             'help': spec.get('help', ''),
             'needs_api_key': spec.get('needs_api_key', False),
             'supports_sync': spec.get('supports_sync', False),
+            # True when the credential is stored for a feature that does not
+            # exist yet, so the UI can say so instead of implying a live sync.
+            'config_only': spec.get('config_only', False),
             'credential_label': spec.get('credential_label', 'API key'),
             'default_base_url': spec.get('default_base_url', ''),
             'is_enabled': bool(integration and integration.is_enabled),

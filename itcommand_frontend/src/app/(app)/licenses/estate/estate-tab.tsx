@@ -679,7 +679,9 @@ export function EstateTab() {
       usersResult,
       departmentsResult,
     ] = await Promise.allSettled([
-      api.get<unknown>("/estate/overview/?days=90"),
+      // No ?days= on purpose: the timeline window is configured in
+      // Settings → Digital Estate, and passing one here would override it.
+      api.get<unknown>("/estate/overview/"),
       api.get<unknown>("/estate/properties/stacks/"),
       api.get<unknown>("/estate/gaps/"),
       api.get<unknown>("/estate/providers/?page_size=200"),

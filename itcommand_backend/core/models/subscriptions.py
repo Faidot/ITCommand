@@ -8,7 +8,7 @@ from core.currencies import is_current_iso_4217_code
 # `core.estate` is the taxonomy (layer order, thresholds); `.estate` below is
 # the models module. Same name, different layers — imported explicitly so the
 # distinction stays visible at the call site.
-from core.estate import AT_RISK_WINDOW_DAYS, SERVICE_LAYERS
+from core.estate import SERVICE_LAYERS, is_at_risk as estate_is_at_risk
 
 from .estate import DigitalProperty, ProviderAccount
 from .finance import BudgetCategory
@@ -312,14 +312,15 @@ class Subscription(models.Model):
     def is_at_risk(self):
         """Will not auto-renew, and expires soon enough for that to matter.
 
-        A cancelled or paused subscription is not at risk — it is already gone;
-        and one that has already expired is a different problem the dashboard
-        reports separately, so the window is forward-looking only.
+        Uses the default window. The API layer re-evaluates with the org's
+        configured window via the same predicate, so the two cannot drift —
+        see `core.estate.is_at_risk`.
         """
-        if self.auto_renew or self.effective_status != "ACTIVE":
-            return False
-        days = self.days_until_expiry
-        return days is not None and 0 <= days <= AT_RISK_WINDOW_DAYS
+        return estate_is_at_risk(
+            auto_renew=self.auto_renew,
+            effective_status=self.effective_status,
+            days_until_expiry=self.days_until_expiry,
+        )
 
     @property
     def monthly_cost_unrounded(self):

@@ -11,19 +11,26 @@ the money logic can be tested without going through HTTP.
 
 from django.db.models import Count, ProtectedError, Q
 from django.utils import timezone
-from rest_framework import status, viewsets
+from rest_framework import permissions, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core import estate, estate_reports
+from core import estate, estate_reports, fx
 from core.mixins import AuditLogMixin
-from core.models import DigitalProperty, Provider, ProviderAccount
-from core.permissions import HasModulePermission
+from core.models import (
+    DigitalProperty,
+    EstateSettings,
+    ExchangeRate,
+    Provider,
+    ProviderAccount,
+)
+from core.permissions import HasModulePermission, IsSuperadmin
 from core.serializers import (
     DigitalPropertySerializer,
-    EstateLayerSerializer,
+    EstateSettingsSerializer,
+    ExchangeRateSerializer,
     ProviderAccountSerializer,
     ProviderSerializer,
 )
@@ -95,8 +102,8 @@ class ProviderViewSet(AuditLogMixin, viewsets.ModelViewSet):
 
     @action(detail=False, methods=["get"])
     def layers(self, request):
-        """The service-layer catalog, in stack order."""
-        return Response(EstateLayerSerializer.catalog())
+        """The service-layer catalog, in the org's configured stack order."""
+        return Response(estate_reports.layer_catalog())
 
 
 class ProviderAccountViewSet(AuditLogMixin, viewsets.ModelViewSet):
@@ -255,6 +262,7 @@ class DigitalPropertyViewSet(AuditLogMixin, viewsets.ModelViewSet):
         today = timezone.localdate()
         currency = _reporting_currency(request)
         active = estate_reports.active_subscriptions(today)
+        catalog = estate_reports.layer_catalog()
         # Three queries total, whatever the property count: layer coverage,
         # spend, and the property list itself. Not one spend query per card.
         coverage = estate_reports.stack_coverage(today=today)
@@ -279,13 +287,11 @@ class DigitalPropertyViewSet(AuditLogMixin, viewsets.ModelViewSet):
             spend = spend_by_property.get(prop.id, zero)
             layers = [
                 {
-                    "layer": code,
-                    "layer_label": label,
-                    "is_required": code in estate.REQUIRED_LAYERS,
-                    "configured": code in present,
-                    "is_gap": code in estate.REQUIRED_LAYERS and code not in present,
+                    **entry,
+                    "configured": entry["layer"] in present,
+                    "is_gap": entry["is_tracked"] and entry["layer"] not in present,
                 }
-                for code, label in estate.SERVICE_LAYERS
+                for entry in catalog
             ]
             rows.append(
                 {
@@ -319,11 +325,16 @@ class EstateOverviewView(APIView):
     rbac_module = "subscriptions"
 
     def get(self, request):
-        try:
-            days = int(request.query_params.get("days", estate.TIMELINE_WINDOW_DAYS))
-        except (TypeError, ValueError):
-            days = estate.TIMELINE_WINDOW_DAYS
-        days = max(1, min(days, 365))
+        # Left as None unless the caller actually asked, so the configured
+        # window in Settings is what applies. Defaulting here would quietly
+        # override the setting on every request.
+        days = None
+        raw = request.query_params.get("days")
+        if raw is not None:
+            try:
+                days = max(1, min(int(raw), 365))
+            except (TypeError, ValueError):
+                days = None
         return Response(
             estate_reports.overview(
                 to_currency=_reporting_currency(request), timeline_days=days
@@ -339,3 +350,109 @@ class EstateGapsView(APIView):
 
     def get(self, request):
         return Response(estate_reports.estate_gaps())
+
+
+# ───────────────────────────── settings ─────────────────────────────
+
+class EstateSettingsView(APIView):
+    """Which layers this organisation tracks, and when it wants warning.
+
+    Readable by anyone who can see the estate — the layer order drives every
+    stack strip, so the tab cannot render without it. Writable by a superadmin
+    only, matching the rest of Master Settings.
+    """
+
+    def get_permissions(self):
+        if self.request.method == "GET":
+            return [HasModulePermission()]
+        return [permissions.IsAuthenticated(), IsSuperadmin()]
+
+    rbac_module = "subscriptions"
+
+    def _payload(self, settings):
+        return {
+            **EstateSettingsSerializer(settings).data,
+            # The full catalog travels with the settings so the editor can offer
+            # layers that are currently switched off.
+            "catalog": estate_reports.layer_catalog(settings),
+            "all_layers": [
+                {"layer": code, "layer_label": label}
+                for code, label in estate.SERVICE_LAYERS
+            ],
+        }
+
+    def get(self, request):
+        return Response(self._payload(EstateSettings.get_solo()))
+
+    def put(self, request):
+        settings = EstateSettings.get_solo()
+        serializer = EstateSettingsSerializer(
+            settings, data=request.data, partial=True, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save(updated_by=request.user)
+        settings.refresh_from_db()
+        return Response(self._payload(settings))
+
+
+# ───────────────────────────── exchange rates ─────────────────────────────
+
+class ExchangeRateViewSet(AuditLogMixin, viewsets.ModelViewSet):
+    """Manual exchange rates, and a plain answer to "what is missing?".
+
+    This is the other half of the FX fix. The estate and subscription pages tell
+    a user that a currency has no rate and to come to Settings; until now there
+    was nowhere to go. `status/` lists every currency actually in use, whether it
+    converts, and what it is costing — so the gap is closed from the same screen
+    that reported it.
+
+    Superadmin-only, matching the Integrations tab it sits beside.
+    """
+
+    serializer_class = ExchangeRateSerializer
+    permission_classes = [permissions.IsAuthenticated, IsSuperadmin]
+    pagination_class = EstatePagination
+
+    def get_queryset(self):
+        queryset = ExchangeRate.objects.all().order_by("-as_of", "currency")
+        params = self.request.query_params
+        currency = (params.get("currency") or "").strip().upper()
+        if currency:
+            queryset = queryset.filter(currency=currency)
+        base = (params.get("base") or "").strip().upper()
+        if base:
+            queryset = queryset.filter(base_currency=base)
+        return queryset
+
+    def perform_create(self, serializer):
+        """Upsert rather than duplicate: one rate per (base, currency, day).
+
+        A second POST for the same day is someone correcting a typo, not asking
+        for two rates — and the unique constraint would 500 the page.
+        """
+        data = serializer.validated_data
+        instance, _ = ExchangeRate.objects.update_or_create(
+            base_currency=data["base_currency"],
+            currency=data["currency"],
+            as_of=data["as_of"],
+            defaults={"rate": data["rate"], "source": "MANUAL"},
+        )
+        serializer.instance = instance
+        self.log_action("CREATE", instance, serializer.data)
+
+    @action(detail=False, methods=["get"])
+    def status(self, request):
+        """Every currency in use, and whether it can be converted."""
+        base = _reporting_currency(request) or fx.reporting_currency()
+        rows = estate_reports.currency_status(base=base)
+        missing = [row for row in rows if not row["has_rate"]]
+        return Response(
+            {
+                "base_currency": base,
+                "rates_as_of": fx.rate_as_of(base),
+                "currencies": rows,
+                "missing_count": len(missing),
+                "missing_currencies": [row["currency"] for row in missing],
+                "is_complete": not missing,
+            }
+        )

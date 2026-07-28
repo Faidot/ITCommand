@@ -24,7 +24,15 @@ class Integration(models.Model):
         ("TEAMS", "Microsoft Teams notifications"),
         ("DISCORD", "Discord notifications"),
         ("WEBHOOK", "Outgoing webhook"),
+        ("AWS_DISCOVERY", "AWS (estate discovery)"),
+        ("CLOUDFLARE_DISCOVERY", "Cloudflare (estate discovery)"),
     )
+
+    #: Credentials stored ahead of a sync that does not exist yet. Nothing in
+    #: this codebase contacts them — `notify.broadcast` only ever reaches
+    #: CHAT_PROVIDERS, and IntegrationTestView has no command registered for
+    #: these — so saving a key here is inert until discovery is built.
+    DISCOVERY_PROVIDERS = ("AWS_DISCOVERY", "CLOUDFLARE_DISCOVERY")
 
     #: Providers that post a message to a secret URL rather than call an API.
     CHAT_PROVIDERS = ("SLACK", "TEAMS", "DISCORD", "WEBHOOK")
@@ -96,6 +104,36 @@ class Integration(models.Model):
             "credential_label": "Endpoint URL",
             "default_base_url": "",
             "help": "Receives {event, title, message, url, timestamp} as JSON.",
+        },
+        "AWS_DISCOVERY": {
+            "label": "AWS (estate discovery)",
+            "description": (
+                "Stores AWS credentials for a future estate discovery sync. "
+                "Nothing contacts AWS yet — this is configuration only."
+            ),
+            "needs_api_key": True,
+            "credential_label": "AWS secret access key",
+            "default_base_url": "https://ec2.amazonaws.com",
+            "help": (
+                "An IAM user with read-only access to Route 53 and CloudFront. "
+                "Saving a key here does not start a sync; discovery is not built yet."
+            ),
+            "config_only": True,
+        },
+        "CLOUDFLARE_DISCOVERY": {
+            "label": "Cloudflare (estate discovery)",
+            "description": (
+                "Stores a Cloudflare API token for a future estate discovery sync. "
+                "Nothing contacts Cloudflare yet — this is configuration only."
+            ),
+            "needs_api_key": True,
+            "credential_label": "Cloudflare API token",
+            "default_base_url": "https://api.cloudflare.com/client/v4",
+            "help": (
+                "My Profile → API Tokens → Create Token, with Zone:Read and "
+                "DNS:Read. Saving a token here does not start a sync."
+            ),
+            "config_only": True,
         },
     }
 
