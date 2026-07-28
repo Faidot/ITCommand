@@ -12,7 +12,20 @@ import { Button } from "@/components/ui/button";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useMoney, useCurrencyCode } from "@/lib/currency";
 import SubscriptionsPage from "../subscriptions/page";
-import { LayoutDashboard, CalendarClock } from "lucide-react";
+import { LayoutDashboard, CalendarClock, Globe, ShieldCheck } from "lucide-react";
+import dynamic from "next/dynamic";
+
+// Code-split: most visits to this hub want Overview or Licenses, and the Estate
+// tab pulls in the timeline packer, the property cards and two dialogs. Loading
+// that on every visit would tax the common path to serve the rarer one.
+const EstateTab = dynamic(() => import("./estate/estate-tab").then((m) => m.EstateTab), {
+  ssr: false,
+  loading: () => <Spinner />,
+});
+const AccountsTab = dynamic(() => import("./estate/accounts-tab").then((m) => m.AccountsTab), {
+  ssr: false,
+  loading: () => <Spinner />,
+});
 
 const LICENSE_TYPE_BADGE: Record<string, string> = {
   PERPETUAL: "bg-blue-100 text-blue-800",
@@ -32,11 +45,13 @@ function Spinner() {
 }
 
 /** Tabbed shell: a combined overview, Software Licenses, and Subscriptions. */
+const SOFTWARE_TABS = ["overview", "licenses", "subscriptions", "estate", "accounts"] as const;
+
 function SoftwareTabs() {
   const searchParams = useSearchParams();
   const initial = searchParams.get("tab");
   const [tab, setTab] = useState(
-    initial === "subscriptions" ? "subscriptions" : initial === "licenses" ? "licenses" : "overview"
+    SOFTWARE_TABS.includes(initial as (typeof SOFTWARE_TABS)[number]) ? initial! : "overview"
   );
 
   return (
@@ -48,6 +63,8 @@ function SoftwareTabs() {
             <TabsTrigger value="overview"><LayoutDashboard className="h-4 w-4 mr-1.5" /> Overview</TabsTrigger>
             <TabsTrigger value="licenses"><KeyRound className="h-4 w-4 mr-1.5" /> Licenses</TabsTrigger>
             <TabsTrigger value="subscriptions"><CreditCard className="h-4 w-4 mr-1.5" /> Subscriptions</TabsTrigger>
+            <TabsTrigger value="estate"><Globe className="h-4 w-4 mr-1.5" /> Estate</TabsTrigger>
+            <TabsTrigger value="accounts"><ShieldCheck className="h-4 w-4 mr-1.5" /> Accounts</TabsTrigger>
           </TabsList>
           <TabsContent value="overview" className="mt-4">
             <SoftwareOverview onGoTo={setTab} />
@@ -59,6 +76,15 @@ function SoftwareTabs() {
             <Suspense fallback={<Spinner />}>
               <SubscriptionsPage />
             </Suspense>
+          </TabsContent>
+          {/* Mounted only when selected: each tab fetches on mount, and the
+              Estate tab issues eight requests. Paying for that on every visit
+              to the Licenses tab would be rude. */}
+          <TabsContent value="estate" className="mt-4">
+            {tab === "estate" && <EstateTab />}
+          </TabsContent>
+          <TabsContent value="accounts" className="mt-4">
+            {tab === "accounts" && <AccountsTab />}
           </TabsContent>
         </Tabs>
       </div>
