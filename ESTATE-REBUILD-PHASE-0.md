@@ -490,5 +490,31 @@ read and a write against the real viewset.
 ### Deviations from the spec, flagged not silently chosen
 
 1. **`ProviderAccount.service_count` is a method (`count_services()`), not a property.** Django assigns queryset annotations with `setattr`, so a getter-only property of that name makes every annotated query raise `AttributeError`. The annotation owns the name because it costs one query per page instead of one per row.
-2. **`Service` has no separate `name` field.** The spec lists `identifier` among the fields but `name` in the dashboard payload. `identifier` doubles as the display name; Phase 2 can emit it as `name`. A second field would be a second thing to keep truthful.
+2. **`Service` has no separate `name` field.** The spec lists `identifier` among the fields but `name` in the dashboard payload. `identifier` doubles as the display name; the API emits both keys from the one field. A second column would be a second thing to keep truthful.
 3. **`@builtins.property` inside `Service`.** The spec fixes the FK name as `property`, which shadows the builtin decorator in that class body.
+
+---
+
+## Phase 2 — delivered
+
+`manage.py test`: **507 tests, OK** (38 new in `test_estate_phase2.py`).
+
+| Area | What landed |
+|---|---|
+| RBAC | `estate` added to `rbac.MODULES`; migration **0067** copies each role's `subscriptions` grants onto it. Verified across all 7 roles — identical maps, nobody gains or loses access. Every estate view now `rbac_module = "estate"`. |
+| Services API | `GET/POST/PATCH/DELETE /api/estate/services/` with `select_related` on provider, account and property; filters for type, provider, property, `expiring_soon`, `auto_renew`, `orphans`, `at_risk`, plus free-text search. |
+| Dashboard | `GET /api/estate/dashboard/` — one call carrying `kpis`, `timeline` (single 90-day query), `by_provider` with percentages, and `by_category`. |
+| Aggregation | `estate_reports.py` repointed from `Subscription` to `Service`. `active_q` is now a single status test, not a status-plus-date window mirroring a Python property. |
+| Bulk writes | `bulk-update` iterates and audits per row rather than `qs.update()` — that endpoint exists to reassign orphans, which is exactly the change someone later has to explain. |
+| Credentials | `ServiceSerializer` exposes `vault_credential` as id + masked title only. No new reveal path. |
+| **Vault audit gap (§7b)** | `reveal`, `reveal_extras` and `reveal_shared` now call `log_action('REVEAL', …)`. `reveal_extras` previously did not even bump the counter, despite decrypting TOTP seeds and recovery codes. Optional `?service=<id>` attributes a reveal to the estate row it was opened from. The unlock gate is unchanged, and a test pins that an ungated call is still 403 **and** writes no row. |
+
+### Phase 2 deviations, flagged
+
+1. **Off-stack services moved out of the layer list.** A service on an untracked role (SaaS, Storage) used to be appended to the stack diagram as an extra node. It is now returned in `off_stack_services` / `unassigned_services`, matching the brief's "listed separately since they sit outside the stack". The money is still there — the diagram is just the seven-role chain a request travels through. `test_untracked_layer_still_shows_a_service_bound_to_it` was rewritten to assert the new location and explains why.
+2. **`unassigned_services` changed meaning.** It was "service with no layer set", which `Service.service_type` (non-null) no longer permits. It now means "attached here but outside the stack". The key is unchanged so the current frontend keeps working.
+3. **`finance_estate.py` still reads `Subscription`** for budget-impact and vendor spend, via a clearly-marked `legacy_active_subscriptions()`. Those functions group by `budget_category` and `vendor`, which the estate spec does not give `Service`. Adding speculative finance FKs to the new model, or breaking a working module, both looked worse than an explicit legacy helper that dies with the old table in Phase 5. **The Cost Overview's property/layer slice did move to `Service`.**
+
+### Consequence of the clean-drop decision, now visible
+
+The estate endpoints read `Service`, which has **0 rows**. Until Phase 4 seeds demo data or the services are re-entered, the Estate tab renders empty. The 4 old subscriptions remain only in `~/it-command-backups/legacy-subscriptions-2026-07-29.json`.

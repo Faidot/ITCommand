@@ -26,7 +26,7 @@ from core.models import (
     Provider,
     ProviderAccount,
     Role,
-    Subscription,
+    Service,
     VaultCredential,
 )
 
@@ -37,13 +37,13 @@ PASSWORD = "EstateApiTestPassword!1"
 
 
 def create_role(slug, *, view=False, add=False, edit=False, delete=False):
+    grants = {"view": view, "add": add, "edit": edit, "delete": delete}
     permissions = rbac.blank_permissions()
-    permissions["subscriptions"] = {
-        "view": view,
-        "add": add,
-        "edit": edit,
-        "delete": delete,
-    }
+    # Both keys, mirroring migration 0067. The estate views moved to `estate`
+    # in Phase 2; `subscriptions` stays until the old module is retired, and
+    # granting only one here would make these tests pass for the wrong reason.
+    permissions["estate"] = dict(grants)
+    permissions["subscriptions"] = dict(grants)
     return Role.objects.create(
         slug=slug, name=slug.replace("_", " ").title(), permissions=permissions
     )
@@ -55,21 +55,69 @@ def create_user(email, role):
     )
 
 
+#: Reused so the factory does not create a provider per call, which would make
+#: `provider_count` assertions depend on how many services a test happened to
+#: build.
+_DEFAULT_PROVIDER_SLUG = "fixture-provider"
+
+
+def default_account():
+    provider, _ = Provider.objects.get_or_create(
+        slug=_DEFAULT_PROVIDER_SLUG,
+        defaults={"name": "Fixture Provider", "brand_color": "#336699"},
+    )
+    account, _ = ProviderAccount.objects.get_or_create(
+        provider=provider, account_email="fixtures@example.invalid"
+    )
+    return account
+
+
 def make_subscription(**overrides):
+    """Create a `Service`, accepting the pre-Phase-1 kwarg names.
+
+    Kept under the old name, and translating the old keyword arguments, so the
+    forty-odd call sites below stay readable diffs rather than forty renames in
+    the same commit that changes what they assert against. The aliases are:
+
+        name           -> identifier
+        digital_property -> property
+        service_layer  -> service_type
+        expiry_date    -> renewal_date
+        start_date     -> dropped; Service has no start date
+
+    `PAUSED` maps to `CANCELLED`: Service has no paused state, and the tests
+    using it only ever assert that such a row is *not* counted as live spend.
+    """
     today = timezone.localdate()
     fields = {
-        "name": "Service",
-        "platform": "Platform",
+        "identifier": "Service",
         "cost": Decimal("100.00"),
         "currency": "USD",
         "billing_cycle": "MONTHLY",
-        "start_date": today - timedelta(days=30),
-        "expiry_date": today + timedelta(days=180),
+        "renewal_date": today + timedelta(days=180),
         "status": "ACTIVE",
         "auto_renew": True,
+        "service_type": "SAAS",
     }
-    fields.update(overrides)
-    return Subscription.objects.create(**fields)
+    aliases = {
+        "name": "identifier",
+        "digital_property": "property",
+        "service_layer": "service_type",
+        "expiry_date": "renewal_date",
+    }
+    for key, value in overrides.items():
+        if key in ("start_date", "platform"):
+            continue
+        fields[aliases.get(key, key)] = value
+    if fields.get("status") == "PAUSED":
+        fields["status"] = "CANCELLED"
+    if fields.get("service_type") is None:
+        fields["service_type"] = "SAAS"
+
+    account = fields.pop("provider_account", None) or default_account()
+    fields["provider_account"] = account
+    fields.setdefault("provider", account.provider)
+    return Service.objects.create(**fields)
 
 
 class EstateApiTestCase(TestCase):
@@ -92,7 +140,7 @@ class EstateApiTestCase(TestCase):
 # ───────────────────────────── permissions (required) ─────────────────────────
 
 class EstatePermissionTests(EstateApiTestCase):
-    """A role without `subscriptions.view` gets 403 on every new endpoint."""
+    """A role without `estate.view` gets 403 on every new endpoint."""
 
     READ_ROUTES = (
         "estate-provider-list",
@@ -103,6 +151,8 @@ class EstatePermissionTests(EstateApiTestCase):
         "estate-property-stacks",
         "estate_overview",
         "estate_gaps",
+        "estate_dashboard",
+        "estate-service-list",
     )
 
     def setUp(self):
@@ -174,38 +224,39 @@ class EstatePermissionTests(EstateApiTestCase):
 # ───────────────────────── active scope drift guard ──────────────────────────
 
 class ActiveScopeTests(EstateApiTestCase):
-    """`active_q` is SQL; `effective_status` is Python. They must agree."""
+    """What counts as live spend.
 
-    def test_sql_active_filter_matches_the_python_property_row_for_row(self):
+    The predecessor of this test guarded a SQL filter against a Python property
+    that each decided "active" from `start_date`/`expiry_date`. `Service.status`
+    is a single stored value, so there is no second definition left to drift —
+    what remains worth pinning is *which* statuses count.
+    """
+
+    def test_active_and_at_risk_count_as_live_spend(self):
         today = timezone.localdate()
         make_subscription(name="active")
-        make_subscription(
-            name="expired",
-            start_date=today - timedelta(days=400),
-            expiry_date=today - timedelta(days=1),
-        )
-        make_subscription(
-            name="scheduled",
-            start_date=today + timedelta(days=5),
-            expiry_date=today + timedelta(days=100),
-        )
-        make_subscription(name="paused", status="PAUSED")
+        make_subscription(name="at_risk", status="AT_RISK")
+        make_subscription(name="expired", status="EXPIRED")
         make_subscription(name="cancelled", status="CANCELLED")
-        make_subscription(name="expires_today", expiry_date=today)
-        make_subscription(name="starts_today", start_date=today)
 
-        from_sql = set(
-            Subscription.objects.filter(active_q(today)).values_list("name", flat=True)
+        live = set(
+            Service.objects.filter(active_q(today)).values_list("identifier", flat=True)
         )
-        from_python = {
-            s.name
-            for s in Subscription.objects.all()
-            if s.effective_status == "ACTIVE"
-        }
-        self.assertEqual(from_sql, from_python)
-        self.assertEqual(
-            from_sql, {"active", "expires_today", "starts_today"}
-        )
+        self.assertEqual(live, {"active", "at_risk"})
+
+    def test_at_risk_spend_is_not_dropped_from_the_total(self):
+        """An at-risk service is still being paid for.
+
+        Excluding it would shrink the monthly total at exactly the moment
+        someone is looking at the thing that is about to go wrong.
+        """
+        make_subscription(name="at_risk", status="AT_RISK", cost=Decimal("50.00"))
+        rows = spend_by_currency(Service.objects.filter(active_q()))
+        self.assertEqual(rows[0]["monthly"], Decimal("50"))
+
+    def test_a_lapsed_service_is_expired_not_merely_undated(self):
+        make_subscription(name="gone", status="EXPIRED", cost=Decimal("999.00"))
+        self.assertEqual(list(spend_by_currency(Service.objects.filter(active_q()))), [])
 
 
 # ───────────────────── money: Decimal, never float (required) ────────────────
@@ -216,7 +267,7 @@ class MoneyAggregationTests(EstateApiTestCase):
         make_subscription(
             name="y", cost=Decimal("1200.00"), billing_cycle="YEARLY", currency="USD"
         )
-        rows = spend_by_currency(Subscription.objects.filter(active_q()))
+        rows = spend_by_currency(Service.objects.filter(active_q()))
         self.assertEqual(len(rows), 1)
         row = rows[0]
         self.assertIsInstance(row["monthly"], Decimal)
@@ -229,7 +280,7 @@ class MoneyAggregationTests(EstateApiTestCase):
 
     def test_yearly_only_spend_is_divided_exactly_once(self):
         make_subscription(cost=Decimal("1200.00"), billing_cycle="YEARLY")
-        rows = spend_by_currency(Subscription.objects.filter(active_q()))
+        rows = spend_by_currency(Service.objects.filter(active_q()))
         self.assertEqual(rows[0]["monthly"], Decimal("100"))
 
     def test_api_serialises_money_as_strings_not_json_floats(self):
@@ -243,13 +294,13 @@ class MoneyAggregationTests(EstateApiTestCase):
     def test_currencies_are_grouped_separately_before_conversion(self):
         make_subscription(name="usd", currency="USD", cost=Decimal("10.00"))
         make_subscription(name="pkr", currency="PKR", cost=Decimal("20.00"))
-        rows = spend_by_currency(Subscription.objects.filter(active_q()))
+        rows = spend_by_currency(Service.objects.filter(active_q()))
         self.assertEqual([r["currency"] for r in rows], ["PKR", "USD"])
 
     def test_inactive_subscriptions_are_excluded_from_spend(self):
         make_subscription(name="live", cost=Decimal("10.00"))
         make_subscription(name="dead", cost=Decimal("999.00"), status="CANCELLED")
-        rows = spend_by_currency(Subscription.objects.filter(active_q()))
+        rows = spend_by_currency(Service.objects.filter(active_q()))
         self.assertEqual(rows[0]["monthly"], Decimal("10"))
 
 
@@ -322,7 +373,7 @@ class FxTruncationTests(EstateApiTestCase):
         account = ProviderAccount.objects.create(
             provider=provider, account_email="root@example.com"
         )
-        Subscription.objects.filter(name="Cloud").update(provider_account=account)
+        Service.objects.filter(identifier="Cloud").update(provider_account=account, provider=account.provider)
 
         response = self.client.get(reverse("estate_overview"))
         rows = {row["provider_name"]: row for row in response.data["spend_by_provider"]}
@@ -337,7 +388,7 @@ class FxTruncationTests(EstateApiTestCase):
         account = ProviderAccount.objects.create(
             provider=provider, account_email="root@example.com"
         )
-        Subscription.objects.filter(name="Cloud").update(provider_account=account)
+        Service.objects.filter(identifier="Cloud").update(provider_account=account, provider=account.provider)
         response = self.client.get(reverse("estate_overview"))
         names = [row["provider_name"] for row in response.data["spend_by_provider"]]
         self.assertIn("AWS", names)
@@ -419,26 +470,35 @@ class StackGapTests(EstateApiTestCase):
         """Turning a layer off must hide the empty slot, never the money.
 
         A service on an untracked layer is real spend; dropping it from the
-        stack because of a settings change would make it invisible everywhere
-        except the orphan report, which it is not.
+        response because of a settings change would make it invisible
+        everywhere except the orphan report, which it is not on.
+
+        Phase 2 changed *where* it surfaces. It used to be appended to the
+        layer list as an extra node; it is now in the off-stack list that the
+        property page renders below the diagram, alongside SaaS. The diagram
+        is the chain a request travels through, and an untracked role is not
+        part of that chain — but the row is still there, with its cost.
         """
         self._attach("STORAGE", name="S3 bucket")
         data = self._stack()
-        storage = next(row for row in data["layers"] if row["layer"] == "STORAGE")
-        self.assertFalse(storage["is_tracked"])
-        self.assertFalse(storage["is_gap"])
-        self.assertTrue(storage["configured"])
-        self.assertEqual(storage["services"][0]["name"], "S3 bucket")
+        self.assertNotIn("STORAGE", [row["layer"] for row in data["layers"]])
+        off_stack = data["off_stack_services"]
+        self.assertEqual([row["name"] for row in off_stack], ["S3 bucket"])
+        self.assertEqual(off_stack[0]["service_type"], "STORAGE")
 
     def test_expired_service_does_not_fill_a_layer(self):
-        today = timezone.localdate()
-        self._attach(
-            "REGISTRAR",
-            start_date=today - timedelta(days=400),
-            expiry_date=today - timedelta(days=1),
-        )
+        """A registrar that lapsed is not a registrar.
+
+        Under `Subscription` this was a date comparison; `Service.status` says
+        it outright, so the test now pins the status rather than the dates.
+        """
+        self._attach("REGISTRAR", status="EXPIRED")
         data = self._stack()
         self.assertIn("REGISTRAR", data["missing_layers"])
+
+    def test_cancelled_service_does_not_fill_a_layer(self):
+        self._attach("REGISTRAR", status="CANCELLED")
+        self.assertIn("REGISTRAR", self._stack()["missing_layers"])
 
     def test_two_services_on_one_layer_are_both_returned(self):
         self._attach("DNS")
@@ -448,11 +508,24 @@ class StackGapTests(EstateApiTestCase):
         self.assertEqual(dns["service_count"], 2)
         self.assertEqual(len(dns["services"]), 2)
 
-    def test_service_on_the_property_with_no_layer_is_surfaced_not_hidden(self):
-        self._attach(None, name="unplaced")
+    def test_off_stack_service_is_surfaced_below_the_diagram_not_hidden(self):
+        """SaaS holds no stack position, so it is listed separately.
+
+        It must not become an eighth node in the diagram — the stack is the
+        chain a request travels through — but it is real spend and must not
+        disappear either.
+        """
+        self._attach("SAAS", name="design tool")
         data = self._stack()
         self.assertEqual(data["unassigned_count"], 1)
-        self.assertEqual(data["unassigned_services"][0]["name"], "unplaced")
+        self.assertEqual(data["unassigned_services"][0]["name"], "design tool")
+        self.assertNotIn("SAAS", [row["layer"] for row in data["layers"]])
+
+    def test_off_stack_service_never_closes_a_gap(self):
+        self._attach("SAAS", name="design tool")
+        self.assertEqual(
+            len(self._stack()["missing_layers"]), len(estate.STACK_TYPE_CODES)
+        )
 
     def test_stacks_query_count_does_not_grow_with_the_number_of_properties(self):
         """The property cards are the Estate tab's centrepiece and load on sight.

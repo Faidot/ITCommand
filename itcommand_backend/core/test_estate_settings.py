@@ -38,6 +38,13 @@ PASSWORD = "EstateSettingsTest!1"
 
 def create_role(slug, *, view=False, add=False, edit=False, delete=False):
     permissions = rbac.blank_permissions()
+    # Both keys, mirroring migration 0067 — see test_estate_api.create_role.
+    permissions["estate"] = {
+        "view": view,
+        "add": add,
+        "edit": edit,
+        "delete": delete,
+    }
     permissions["subscriptions"] = {
         "view": view,
         "add": add,
@@ -55,21 +62,9 @@ def create_user(email, role):
     )
 
 
-def make_subscription(**overrides):
-    today = timezone.localdate()
-    fields = {
-        "name": "Service",
-        "platform": "Platform",
-        "cost": Decimal("100.00"),
-        "currency": "USD",
-        "billing_cycle": "MONTHLY",
-        "start_date": today - timedelta(days=30),
-        "expiry_date": today + timedelta(days=180),
-        "status": "ACTIVE",
-        "auto_renew": True,
-    }
-    fields.update(overrides)
-    return Subscription.objects.create(**fields)
+#: Shared with test_estate_api so the two files cannot drift about what a
+#: fixture service looks like. See that module for the kwarg aliases.
+from core.test_estate_api import make_subscription  # noqa: E402
 
 
 class SettingsTestCase(TestCase):

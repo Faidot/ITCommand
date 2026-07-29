@@ -1,6 +1,6 @@
 """Digital Estate API.
 
-Everything here runs on `rbac_module = "subscriptions"` — the estate is a view
+Everything here runs on `rbac_module = "estate"` — the estate is a view
 onto subscription spend, not a new permission domain. That was the deciding
 argument for not reusing `AccountWorkspace`, which is reachable only behind the
 vault master-password unlock.
@@ -8,6 +8,8 @@ vault master-password unlock.
 Aggregation lives in `core.estate_reports`; these views are thin on purpose so
 the money logic can be tested without going through HTTP.
 """
+
+from datetime import timedelta
 
 from django.db.models import Count, ProtectedError, Q
 from django.utils import timezone
@@ -25,6 +27,7 @@ from core.models import (
     ExchangeRate,
     Provider,
     ProviderAccount,
+    Service,
 )
 from core.permissions import HasModulePermission, IsSuperadmin
 from core.serializers import (
@@ -33,6 +36,7 @@ from core.serializers import (
     ExchangeRateSerializer,
     ProviderAccountSerializer,
     ProviderSerializer,
+    ServiceSerializer,
 )
 
 
@@ -59,7 +63,7 @@ class ProviderViewSet(AuditLogMixin, viewsets.ModelViewSet):
 
     serializer_class = ProviderSerializer
     permission_classes = [HasModulePermission]
-    rbac_module = "subscriptions"
+    rbac_module = "estate"
     pagination_class = EstatePagination
 
     def get_queryset(self):
@@ -116,7 +120,7 @@ class ProviderAccountViewSet(AuditLogMixin, viewsets.ModelViewSet):
 
     serializer_class = ProviderAccountSerializer
     permission_classes = [HasModulePermission]
-    rbac_module = "subscriptions"
+    rbac_module = "estate"
     pagination_class = EstatePagination
 
     def get_queryset(self):
@@ -124,7 +128,7 @@ class ProviderAccountViewSet(AuditLogMixin, viewsets.ModelViewSet):
             ProviderAccount.objects.select_related(
                 "provider", "owner", "vault_credential", "account_workspace"
             )
-            .annotate(service_count=Count("subscriptions", distinct=True))
+            .annotate(service_count=Count("services", distinct=True))
             .order_by("provider__name", "account_email")
         )
         params = self.request.query_params
@@ -188,13 +192,13 @@ class PropertyViewSet(AuditLogMixin, viewsets.ModelViewSet):
 
     serializer_class = PropertySerializer
     permission_classes = [HasModulePermission]
-    rbac_module = "subscriptions"
+    rbac_module = "estate"
     pagination_class = EstatePagination
 
     def get_queryset(self):
         queryset = (
             Property.objects.select_related("owner", "department")
-            .annotate(service_count=Count("subscriptions", distinct=True))
+            .annotate(service_count=Count("services", distinct=True))
             .order_by("name")
         )
         params = self.request.query_params
@@ -224,7 +228,7 @@ class PropertyViewSet(AuditLogMixin, viewsets.ModelViewSet):
         how many services just became orphans, because that number moves a KPI.
         """
         prop = self.get_object()
-        orphaned = prop.subscriptions.count()
+        orphaned = prop.services.count()
         response = super().destroy(request, *args, **kwargs)
         if orphaned:
             return Response(
@@ -264,7 +268,7 @@ class PropertyViewSet(AuditLogMixin, viewsets.ModelViewSet):
         """
         today = timezone.localdate()
         currency = _reporting_currency(request)
-        active = estate_reports.active_subscriptions(today)
+        active = estate_reports.active_services(today)
         catalog = estate_reports.layer_catalog()
         # Three queries total, whatever the property count: layer coverage,
         # spend, and the property list itself. Not one spend query per card.
@@ -313,6 +317,119 @@ class PropertyViewSet(AuditLogMixin, viewsets.ModelViewSet):
         return Response({"count": len(rows), "results": rows})
 
 
+class ServiceViewSet(AuditLogMixin, viewsets.ModelViewSet):
+    """The services themselves — the table the money comes from.
+
+    Every list is `select_related` across provider, account and property. Those
+    three are rendered on every row (chip, login, property link), so without it
+    a 50-row page is 150 extra queries.
+    """
+
+    serializer_class = ServiceSerializer
+    permission_classes = [HasModulePermission]
+    rbac_module = "estate"
+    pagination_class = EstatePagination
+
+    def get_queryset(self):
+        queryset = Service.objects.select_related(
+            "provider", "provider_account", "property", "vault_credential"
+        ).order_by("property__name", "service_type", "identifier")
+
+        params = self.request.query_params
+        search = (params.get("search") or "").strip()
+        if search:
+            # Free-text across identifier, provider and account email, which is
+            # what the Services table's search box offers.
+            queryset = queryset.filter(
+                Q(identifier__icontains=search)
+                | Q(provider__name__icontains=search)
+                | Q(provider_account__account_email__icontains=search)
+                | Q(notes__icontains=search)
+            )
+
+        for param, field in (
+            ("service_type", "service_type"),
+            ("status", "status"),
+            ("currency", "currency"),
+            ("billing_cycle", "billing_cycle"),
+        ):
+            value = (params.get(param) or "").strip().upper()
+            if value:
+                queryset = queryset.filter(**{field: value})
+
+        for param, field in (
+            ("provider", "provider_id"),
+            ("provider_account", "provider_account_id"),
+            ("property", "property_id"),
+        ):
+            value = params.get(param)
+            if value:
+                queryset = queryset.filter(**{field: value})
+
+        if "auto_renew" in params:
+            queryset = queryset.filter(auto_renew=_bool_param(params, "auto_renew"))
+        if _bool_param(params, "orphans"):
+            queryset = queryset.filter(property__isnull=True)
+        if _bool_param(params, "expiring_soon"):
+            settings = estate_reports.estate_settings()
+            today = timezone.localdate()
+            queryset = queryset.filter(
+                status="ACTIVE",
+                renewal_date__gte=today,
+                renewal_date__lte=today
+                + timedelta(days=settings.renewal_warning_days),
+            )
+        if _bool_param(params, "at_risk"):
+            # The stored flag *or* the derived condition, mirroring
+            # `Service.is_at_risk` so the filter and the badge cannot disagree.
+            settings = estate_reports.estate_settings()
+            today = timezone.localdate()
+            queryset = queryset.filter(
+                Q(status="AT_RISK")
+                | Q(
+                    status="ACTIVE",
+                    auto_renew=False,
+                    renewal_date__gte=today,
+                    renewal_date__lte=today
+                    + timedelta(days=settings.renewal_warning_days),
+                )
+            )
+        return queryset
+
+    @action(detail=False, methods=["post"], url_path="bulk-update")
+    def bulk_update(self, request):
+        """Set one field across many services, one audited write each.
+
+        Deliberately not `qs.update()`. That would be a single statement with no
+        per-row audit trail and no `updated_at` bump — and this endpoint exists
+        precisely to reassign a batch of orphans, which is exactly the change
+        someone will later need to explain.
+        """
+        ids = request.data.get("ids") or []
+        if not isinstance(ids, list) or not ids:
+            return Response(
+                {"detail": "Provide a non-empty list of service ids."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        allowed = {"property", "status", "auto_renew", "service_type"}
+        changes = {k: v for k, v in (request.data.get("changes") or {}).items() if k in allowed}
+        if not changes:
+            return Response(
+                {"detail": f"Provide at least one of: {', '.join(sorted(allowed))}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        updated = 0
+        for service in self.get_queryset().filter(pk__in=ids):
+            serializer = self.get_serializer(service, data=changes, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            self.log_action("UPDATE", service, serializer.data)
+            updated += 1
+        return Response({"updated": updated, "requested": len(ids)})
+
+
 # ─────────────────────────── read-only aggregations ───────────────────────────
 
 class EstateOverviewView(APIView):
@@ -325,7 +442,7 @@ class EstateOverviewView(APIView):
     """
 
     permission_classes = [HasModulePermission]
-    rbac_module = "subscriptions"
+    rbac_module = "estate"
 
     def get(self, request):
         # Left as None unless the caller actually asked, so the configured
@@ -345,11 +462,29 @@ class EstateOverviewView(APIView):
         )
 
 
+class EstateDashboardView(APIView):
+    """Everything the Estate dashboard renders, in one request.
+
+    KPIs, the 90-day timeline and both breakdowns come from the same read of
+    active services. Five endpoints would be five round trips that can
+    disagree with one another if a service changes between the first and the
+    last.
+    """
+
+    permission_classes = [HasModulePermission]
+    rbac_module = "estate"
+
+    def get(self, request):
+        return Response(
+            estate_reports.dashboard(to_currency=_reporting_currency(request))
+        )
+
+
 class EstateGapsView(APIView):
     """Properties missing a required layer, and services attached to nothing."""
 
     permission_classes = [HasModulePermission]
-    rbac_module = "subscriptions"
+    rbac_module = "estate"
 
     def get(self, request):
         return Response(estate_reports.estate_gaps())
@@ -370,7 +505,7 @@ class EstateSettingsView(APIView):
             return [HasModulePermission()]
         return [permissions.IsAuthenticated(), IsSuperadmin()]
 
-    rbac_module = "subscriptions"
+    rbac_module = "estate"
 
     def _payload(self, settings):
         return {

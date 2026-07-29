@@ -230,12 +230,12 @@ def subscription_commitment_by_category(*, financial_year=None):
     Only subscriptions that convert are included; the rest are reported by
     `unconvertible_commitment` so a partial figure is never presented as whole.
     """
-    from core.estate_reports import active_subscriptions
+    from core.estate_reports import legacy_active_subscriptions
     from core.fx import get_rate
 
     company = _company_currency()
     rows = (
-        active_subscriptions()
+        legacy_active_subscriptions()
         .filter(budget_category__isnull=False)
         .values("budget_category_id", "currency", "billing_cycle")
         .annotate(total=Sum("cost"))
@@ -340,13 +340,13 @@ def budget_impact(*, financial_year=None):
 
 def subscription_spend_by_vendor():
     """Annual subscription commitment per vendor, in the company currency."""
-    from core.estate_reports import active_subscriptions
+    from core.estate_reports import legacy_active_subscriptions
     from core.fx import get_rate
     from core.models import Vendor
 
     company = _company_currency()
     rows = (
-        active_subscriptions()
+        legacy_active_subscriptions()
         .filter(vendor__isnull=False)
         .values("vendor_id", "currency", "billing_cycle")
         .annotate(total=Sum("cost"))
@@ -396,7 +396,10 @@ def subscription_spend_by_property_and_layer(*, to_currency=None):
     """
     from core import estate_reports
 
-    active = estate_reports.active_subscriptions()
+    # Estate spend, so this reads `Service`. The budget-impact functions above
+    # stay on `Subscription` because they group by `budget_category` and
+    # `vendor`, which the estate model does not carry.
+    active = estate_reports.active_services()
     currency = to_currency or _company_currency()
 
     property_spend = estate_reports.spend_by_property(active, to_currency=currency)
@@ -419,7 +422,7 @@ def subscription_spend_by_property_and_layer(*, to_currency=None):
     ]
 
     orphan_rows = estate_reports.spend_by_currency(
-        active.filter(digital_property__isnull=True)
+        active.filter(property__isnull=True)
     )
     orphan_spend = estate_reports.converted_money(orphan_rows, to_currency=currency)
 

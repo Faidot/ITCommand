@@ -399,6 +399,40 @@ class VaultCredentialViewSet(AuditLogMixin, viewsets.ModelViewSet):
             return [ScopedRateThrottle()]
         return super().get_throttles()
 
+    def _log_reveal(self, credential, what, extra=None):
+        """Write an AuditLog row for a decryption.
+
+        Reading a secret is the single most sensitive thing this API does, and
+        until now it left no trace beyond a counter on the row itself — which
+        the next reveal overwrites. `last_revealed_by` answers "who was last",
+        never "who, and when, and how often".
+
+        `what` names which secret was opened, because `reveal_extras` decrypts
+        TOTP seeds and recovery codes — strictly more dangerous than the
+        password and previously not even counted.
+
+        Nothing here may contain a secret. Only ids, names and the caller's
+        context are recorded; the decrypted value never reaches this function.
+        """
+        changes = {'revealed': what, 'credential_title': credential.title}
+        if extra:
+            changes.update(extra)
+        self.log_action('REVEAL', credential, changes)
+
+    def _reveal_context(self, request):
+        """Optional `?service=<id>` attribution for an estate-initiated reveal.
+
+        The estate UI opens a credential from a service row, and "which service
+        was this password read for" is the question an audit of that page has
+        to answer. Unresolvable ids are recorded as-is rather than dropped: a
+        caller probing with junk service ids is itself worth seeing in the log,
+        and validating here would cost a query on the hot path.
+        """
+        raw = request.query_params.get('service') or request.data.get('service')
+        if raw in (None, ''):
+            return None
+        return {'service_id': str(raw)[:32]}
+
     def get_queryset(self):
         queryset = super().get_queryset()
         params = self.request.query_params
@@ -579,6 +613,13 @@ class VaultCredentialViewSet(AuditLogMixin, viewsets.ModelViewSet):
         share.last_revealed_at = timezone.now()
         share.reveal_count = (share.reveal_count or 0) + 1
         share.save(update_fields=['last_revealed_at', 'reveal_count'])
+        # Logged against the credential, not the share, so one query answers
+        # "who has ever seen this secret" across both reveal paths.
+        self._log_reveal(
+            share.credential,
+            'shared_secret',
+            {'share_id': share.pk, 'shared_by_id': share.shared_by_id},
+        )
         return Response({
             'password': secret.get('password', ''),
             'totp_secret': secret.get('totp_secret') or None,
@@ -596,6 +637,7 @@ class VaultCredentialViewSet(AuditLogMixin, viewsets.ModelViewSet):
             credential.last_revealed_by = request.user
             credential.reveal_count = (credential.reveal_count or 0) + 1
             credential.save(update_fields=['last_revealed_at', 'last_revealed_by', 'reveal_count'])
+            self._log_reveal(credential, 'password', self._reveal_context(request))
             return Response({
                 'password': password,
                 'revealed_at': credential.last_revealed_at,
@@ -619,6 +661,18 @@ class VaultCredentialViewSet(AuditLogMixin, viewsets.ModelViewSet):
         except Exception:
             return Response({'detail': 'Failed to decrypt extras.'},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        # Which kinds were actually opened, never their values. A TOTP seed is
+        # a second factor in permanent form; reading one deserves a named row,
+        # not a silent 200. This endpoint did not even bump `reveal_count`.
+        context = self._reveal_context(request) or {}
+        context['kinds'] = [
+            name for name, value in (
+                ('totp_secret', out['totp_secret']),
+                ('recovery_codes', out['recovery_codes']),
+                ('custom_fields', out['custom_fields']),
+            ) if value
+        ]
+        self._log_reveal(credential, 'extras', context)
         return Response(out)
 
     @action(detail=True, methods=['post'])

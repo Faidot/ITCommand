@@ -31,8 +31,8 @@ from .views import (
     NetworkTopologyView, NetworkExportView, NetworkDeviceLookupView,
     KBCategoryViewSet, KBTagViewSet, KBArticleViewSet, KBDashboardView, KBSuggestView,
     SubscriptionViewSet,
-    ProviderViewSet, ProviderAccountViewSet, PropertyViewSet,
-    EstateOverviewView, EstateGapsView, EstateSettingsView, ExchangeRateViewSet,
+    ProviderViewSet, ProviderAccountViewSet, PropertyViewSet, ServiceViewSet,
+    EstateDashboardView, EstateOverviewView, EstateGapsView, EstateSettingsView, ExchangeRateViewSet,
 )
 from .reports import (
     FinancialSummaryView, AssetSummaryView, ExportFinancialView, ExportAssetsView, MainDashboardView,
@@ -109,6 +109,7 @@ router.register(r'subscriptions', SubscriptionViewSet, basename='subscription')
 router.register(r'estate/providers', ProviderViewSet, basename='estate-provider')
 router.register(r'estate/accounts', ProviderAccountViewSet, basename='estate-account')
 router.register(r'estate/properties', PropertyViewSet, basename='estate-property')
+router.register(r'estate/services', ServiceViewSet, basename='estate-service')
 router.register(r'exchange-rates', ExchangeRateViewSet, basename='exchange-rate')
 
 urlpatterns = [
@@ -172,6 +173,7 @@ urlpatterns = [
     path('network/lookup/', NetworkDeviceLookupView.as_view(), name='network_lookup'),
     path('network/export/', NetworkExportView.as_view(), name='network_export'),
     # Digital Estate aggregations
+    path('estate/dashboard/', EstateDashboardView.as_view(), name='estate_dashboard'),
     path('estate/overview/', EstateOverviewView.as_view(), name='estate_overview'),
     path('estate/gaps/', EstateGapsView.as_view(), name='estate_gaps'),
     path('estate/settings/', EstateSettingsView.as_view(), name='estate_settings'),

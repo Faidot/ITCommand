@@ -24,6 +24,7 @@ from core.models import (
     ExchangeRate,
     Provider,
     ProviderAccount,
+    Service,
     VaultCredential,
 )
 
@@ -263,6 +264,148 @@ class PropertySerializer(serializers.ModelSerializer):
                 f"Settings → Lists of values first."
             )
         return code
+
+
+class ServiceSerializer(serializers.ModelSerializer):
+    """One billable thing.
+
+    `vault_credential` is the field to be careful with. It serialises to an id
+    and a name and nothing else — never `encrypted_password`, never a decrypted
+    value. Revealing stays on the vault's own endpoints behind the unlock gate,
+    which is also where the reveal gets audited. Adding a shortcut here would
+    put a secret behind `estate.view`, a far wider grant than `vault`.
+
+    The same title-masking rule as `ProviderAccountSerializer` applies: a reader
+    who could not see the credential in the vault sees "Restricted", and cannot
+    attach one they cannot see.
+    """
+
+    service_type_label = serializers.CharField(
+        source="get_service_type_display", read_only=True
+    )
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+    billing_cycle_label = serializers.CharField(
+        source="get_billing_cycle_display", read_only=True
+    )
+    provider_name = serializers.CharField(source="provider.name", read_only=True)
+    provider_slug = serializers.CharField(source="provider.slug", read_only=True)
+    brand_color = serializers.CharField(source="provider.brand_color", read_only=True)
+    account_email = serializers.CharField(
+        source="provider_account.account_email", read_only=True
+    )
+    property_name = serializers.CharField(
+        source="property.name", read_only=True, default=None
+    )
+    #: Id and title only. See the class docstring.
+    vault_credential_title = serializers.SerializerMethodField()
+
+    # Derived on the model so the UI never recomputes what "at risk" means.
+    is_orphan = serializers.BooleanField(read_only=True)
+    is_at_risk = serializers.BooleanField(read_only=True)
+    occupies_stack_slot = serializers.BooleanField(read_only=True)
+    days_until_renewal = serializers.IntegerField(read_only=True)
+    monthly_equivalent = serializers.DecimalField(
+        max_digits=14, decimal_places=2, read_only=True, coerce_to_string=True
+    )
+    yearly_equivalent = serializers.DecimalField(
+        max_digits=14, decimal_places=2, read_only=True, coerce_to_string=True
+    )
+
+    class Meta:
+        model = Service
+        fields = [
+            "id",
+            "service_type",
+            "service_type_label",
+            "identifier",
+            "provider",
+            "provider_name",
+            "provider_slug",
+            "brand_color",
+            "provider_account",
+            "account_email",
+            "property",
+            "property_name",
+            "status",
+            "status_label",
+            "renewal_date",
+            "days_until_renewal",
+            "auto_renew",
+            "cost",
+            "currency",
+            "billing_cycle",
+            "billing_cycle_label",
+            "monthly_equivalent",
+            "yearly_equivalent",
+            "console_url",
+            "vault_credential",
+            "vault_credential_title",
+            "notes",
+            "is_orphan",
+            "is_at_risk",
+            "occupies_stack_slot",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at"]
+
+    def get_vault_credential_title(self, obj):
+        if not obj.vault_credential_id:
+            return None
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        credential = obj.vault_credential
+        if credential.visibility == "ORG" or (
+            user and credential.created_by_id == getattr(user, "id", None)
+        ):
+            return credential.title
+        return RESTRICTED_LABEL
+
+    def validate_vault_credential(self, value):
+        """Refuse to attach a credential the requester cannot already see.
+
+        Same oracle argument as on the account serializer: without this, POSTing
+        ids until one stops erroring enumerates private vault rows.
+        """
+        if value is None:
+            return value
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if not visible_credentials(user).filter(pk=value.pk).exists():
+            raise serializers.ValidationError("That vault credential is not available to you.")
+        return value
+
+    def validate_identifier(self, value):
+        value = (value or "").strip()
+        if not value:
+            raise serializers.ValidationError("A service needs an identifier.")
+        return value
+
+    def validate_currency(self, value):
+        return (value or "PKR").strip().upper()
+
+    def validate(self, attrs):
+        """The account must belong to the provider it is filed under.
+
+        Nothing in the schema prevents pairing an AWS account with a Cloudflare
+        provider, and the result would be a row whose provider chip and login
+        contradict each other — reported under one provider and reachable only
+        through another.
+        """
+        provider = attrs.get("provider") or getattr(self.instance, "provider", None)
+        account = attrs.get("provider_account") or getattr(
+            self.instance, "provider_account", None
+        )
+        if provider and account and account.provider_id != provider.pk:
+            raise serializers.ValidationError(
+                {
+                    "provider_account": (
+                        f"That account belongs to {account.provider.name}, not "
+                        f"{provider.name}."
+                    )
+                }
+            )
+        return attrs
 
 
 class EstateLayerSerializer(serializers.Serializer):

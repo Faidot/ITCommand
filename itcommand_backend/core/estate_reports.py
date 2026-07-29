@@ -79,25 +79,51 @@ def urgency_for(days_until, settings=None):
     return "muted"
 
 
-# ───────────────────────────── active-subscription scope ─────────────────────
+# ───────────────────────────── active-service scope ─────────────────────
 
 def active_q(today=None):
-    """SQL equivalent of ``Subscription.effective_status == "ACTIVE"``.
+    """Services counted as live spend.
 
-    The model property is Python-only (it compares dates at read time), so it
-    cannot be filtered on. This mirrors it exactly: currently-ACTIVE status,
-    started, not yet expired. `test_estate_api` asserts the two agree, so a
-    change to one that is not made to the other fails a test rather than
-    quietly producing two different definitions of "active".
+    Simpler than the predecessor this replaces. `Subscription` carried
+    `start_date` and `expiry_date`, so "active" meant a status *and* a date
+    window, and the SQL had to mirror a Python property that compared dates at
+    read time. `Service.status` is the single stored answer — a lapsed service
+    is EXPIRED, a stopped one CANCELLED — so there is no second definition left
+    to drift out of sync.
+
+    AT_RISK is deliberately included: an at-risk service is still being paid
+    for. Excluding it would drop its cost out of the monthly total at exactly
+    the moment someone is looking at it.
+
+    `today` is accepted and unused so callers can keep passing the date they
+    already computed rather than special-casing this one function.
     """
-    today = today or timezone.localdate()
-    return Q(status="ACTIVE", start_date__lte=today, expiry_date__gte=today)
+    return Q(status__in=("ACTIVE", "AT_RISK"))
 
 
-def active_subscriptions(today=None):
+def active_services(today=None):
+    from core.models import Service
+
+    return Service.objects.filter(active_q(today))
+
+
+def legacy_active_subscriptions(today=None):
+    """Active `Subscription` rows, for the pre-rework finance linkage only.
+
+    `core.finance_estate` groups spend by `budget_category` and `vendor`, which
+    live on `Subscription` and have no counterpart on `Service` — the estate
+    spec does not carry finance links. Rather than add speculative fields to the
+    new model or break a working module, that code keeps reading the old table
+    until Phase 5 retires both it and this function.
+
+    Nothing in the estate API path may call this.
+    """
     from core.models import Subscription
 
-    return Subscription.objects.filter(active_q(today))
+    today = today or timezone.localdate()
+    return Subscription.objects.filter(
+        Q(status="ACTIVE", start_date__lte=today, expiry_date__gte=today)
+    )
 
 
 # ───────────────────────────── money aggregation ─────────────────────────────
@@ -306,21 +332,21 @@ def _grouped_converted(queryset, *, group_fields, key_builder, to_currency=None)
 
 def spend_by_provider(queryset, to_currency=None):
     def key_builder(row):
-        provider_id = row["provider_account__provider__id"]
+        provider_id = row["provider__id"]
         return provider_id, {
             "provider_id": provider_id,
-            "provider_name": row["provider_account__provider__name"] or "Unassigned",
-            "provider_slug": row["provider_account__provider__slug"] or "",
-            "brand_color": row["provider_account__provider__brand_color"] or "",
+            "provider_name": row["provider__name"] or "Unassigned",
+            "provider_slug": row["provider__slug"] or "",
+            "brand_color": row["provider__brand_color"] or "",
         }
 
     return _grouped_converted(
         queryset,
         group_fields=(
-            "provider_account__provider__id",
-            "provider_account__provider__name",
-            "provider_account__provider__slug",
-            "provider_account__provider__brand_color",
+            "provider__id",
+            "provider__name",
+            "provider__slug",
+            "provider__brand_color",
         ),
         key_builder=key_builder,
         to_currency=to_currency,
@@ -334,14 +360,14 @@ def spend_by_property(queryset, to_currency=None):
     Properties with no active spend are simply absent; the caller supplies a
     zero block for those rather than paying for an outer join.
     """
-    rows = queryset.filter(digital_property__isnull=False).values(
-        "digital_property_id", "currency"
+    rows = queryset.filter(property__isnull=False).values(
+        "property_id", "currency"
     ).annotate(count=Sum(Value(1)), **_CYCLE_SUMS)
 
     buckets = defaultdict(list)
     for row in rows:
         monthly, yearly = _equivalents(row["monthly_billed"], row["yearly_billed"])
-        buckets[row["digital_property_id"]].append(
+        buckets[row["property_id"]].append(
             {
                 "currency": row["currency"],
                 "monthly": monthly,
@@ -376,15 +402,15 @@ def zero_money(to_currency=None, as_of=_UNSET):
 
 def spend_by_layer(queryset, to_currency=None):
     def key_builder(row):
-        layer = row["service_layer"]
+        layer = row["service_type"]
         return layer, {
             "layer": layer,
-            "layer_label": estate.layer_label(layer) if layer else "Unassigned",
+            "layer_label": estate.service_type_label(layer) if layer else "Unassigned",
         }
 
     rows = _grouped_converted(
         queryset,
-        group_fields=("service_layer",),
+        group_fields=("service_type",),
         key_builder=key_builder,
         to_currency=to_currency,
     )
@@ -396,10 +422,31 @@ def spend_by_layer(queryset, to_currency=None):
 
 # ───────────────────────────── renewal timeline ─────────────────────────────
 
-def renewal_timeline(queryset, *, days=None, today=None, settings=None):
-    """Active subscriptions renewing inside the window, soonest first.
+def _at_risk(service, days_until, settings):
+    """Settings-aware at-risk, agreeing with `Service.is_at_risk`.
 
-    Returns flat rows. Lane packing is the frontend's job — it depends on
+    The model property uses the module default window; the org may have
+    configured a different one. Both answer True for a manually-flagged
+    AT_RISK service, so a human's judgement is never overridden by arithmetic
+    in one place and honoured in the other.
+    """
+    if service.status == "AT_RISK":
+        return True
+    if service.auto_renew or service.status != "ACTIVE":
+        return False
+    if days_until is None:
+        return False
+    return 0 <= days_until <= settings.renewal_warning_days
+
+
+def renewal_timeline(queryset, *, days=None, today=None, settings=None):
+    """Active services renewing inside the window, soonest first.
+
+    One query over the whole window. The frontend slices it for its 30/60/90
+    views — separate per-window endpoints would be three round trips returning
+    overlapping subsets of the same rows.
+
+    Returns flat rows. Lane packing is the frontend's job: it depends on
     rendered label width, which the server cannot know.
     """
     settings = settings or estate_settings()
@@ -408,44 +455,38 @@ def renewal_timeline(queryset, *, days=None, today=None, settings=None):
     horizon = today + timezone.timedelta(days=days)
 
     rows = (
-        queryset.filter(expiry_date__gte=today, expiry_date__lte=horizon)
-        .select_related(
-            "provider_account", "provider_account__provider", "digital_property"
-        )
-        .order_by("expiry_date", "name")
+        queryset.filter(renewal_date__gte=today, renewal_date__lte=horizon)
+        .select_related("provider", "provider_account", "property")
+        .order_by("renewal_date", "identifier")
     )
 
     out = []
-    for subscription in rows:
-        days_until = (subscription.expiry_date - today).days
-        provider = getattr(subscription.provider_account, "provider", None)
+    for service in rows:
+        days_until = (service.renewal_date - today).days
+        provider = service.provider
         out.append(
             {
-                "id": subscription.id,
-                "name": subscription.name,
-                "identifier": subscription.identifier or subscription.name,
-                "service_layer": subscription.service_layer,
-                "service_layer_label": estate.layer_label(subscription.service_layer),
-                "expiry_date": subscription.expiry_date,
+                "id": service.id,
+                # `identifier` is the display name; there is no second `name`
+                # field to keep truthful. Both keys are emitted because the
+                # dashboard contract names one and the stack rows the other.
+                "name": service.identifier,
+                "identifier": service.identifier,
+                "service_type": service.service_type,
+                "service_type_label": estate.service_type_label(service.service_type),
+                "provider_slug": provider.slug if provider else "",
+                "renewal_date": service.renewal_date,
                 "days_until": days_until,
                 "urgency": urgency_for(days_until, settings),
-                "auto_renew": subscription.auto_renew,
-                "is_at_risk": estate.is_at_risk(
-                    auto_renew=subscription.auto_renew,
-                    effective_status=subscription.effective_status,
-                    days_until_expiry=days_until,
-                    window_days=settings.renewal_warning_days,
-                ),
-                "cost": _money(subscription.cost),
-                "currency": subscription.currency,
+                "auto_renew": service.auto_renew,
+                "is_at_risk": _at_risk(service, days_until, settings),
+                "cost": _money(service.cost),
+                "currency": service.currency,
                 "provider_name": provider.name if provider else None,
                 "brand_color": provider.brand_color if provider else "",
-                "digital_property_id": subscription.digital_property_id,
-                "digital_property_name": (
-                    subscription.digital_property.name
-                    if subscription.digital_property_id
-                    else None
-                ),
+                "property_id": service.property_id,
+                "property": service.property.name if service.property_id else None,
+                "property_name": service.property.name if service.property_id else None,
                 "window_days": days,
             }
         )
@@ -454,99 +495,108 @@ def renewal_timeline(queryset, *, days=None, today=None, settings=None):
 
 # ───────────────────────────── stacks and gaps ─────────────────────────────
 
-def _service_row(subscription, settings=None):
+def _service_row(service, settings=None):
     settings = settings or estate_settings()
-    provider = getattr(subscription.provider_account, "provider", None)
-    days_until = subscription.days_until_expiry
+    provider = service.provider
+    days_until = service.days_until_renewal
     return {
-        "id": subscription.id,
-        "name": subscription.name,
-        "identifier": subscription.identifier or "",
-        "cost": _money(subscription.cost),
-        "currency": subscription.currency,
-        "billing_cycle": subscription.billing_cycle,
-        "monthly_cost": _money(subscription.monthly_cost),
-        "expiry_date": subscription.expiry_date,
+        "id": service.id,
+        "name": service.identifier,
+        "identifier": service.identifier,
+        "service_type": service.service_type,
+        "service_type_label": estate.service_type_label(service.service_type),
+        "cost": _money(service.cost),
+        "currency": service.currency,
+        "billing_cycle": service.billing_cycle,
+        "monthly_cost": _money(service.monthly_equivalent),
+        "renewal_date": service.renewal_date,
         "days_until_expiry": days_until,
         "urgency": urgency_for(days_until, settings),
-        "auto_renew": subscription.auto_renew,
-        "is_at_risk": estate.is_at_risk(
-            auto_renew=subscription.auto_renew,
-            effective_status=subscription.effective_status,
-            days_until_expiry=days_until,
-            window_days=settings.renewal_warning_days,
-        ),
-        "provider_account_id": subscription.provider_account_id,
+        "auto_renew": service.auto_renew,
+        "is_at_risk": _at_risk(service, days_until, settings),
+        "status": service.status,
+        "provider_account_id": service.provider_account_id,
         "provider_name": provider.name if provider else None,
+        "provider_slug": provider.slug if provider else "",
         "brand_color": provider.brand_color if provider else "",
         "account_login": (
-            subscription.provider_account.account_email
-            if subscription.provider_account_id
+            service.provider_account.account_email
+            if service.provider_account_id
             else None
         ),
+        "console_url": service.console_url or (provider.console_url if provider else ""),
+        # Id and title only — never a secret. See ServiceSerializer.
+        "vault_credential_id": service.vault_credential_id,
     }
 
 
-def property_stack(digital_property, *, today=None, settings=None):
-    """Every layer for one property, present or missing.
+def property_stack(prop, *, today=None, settings=None):
+    """Every stack role for one property, present or missing.
 
-    Missing layers are returned as explicit rows rather than omitted: a gap you
-    cannot see is a gap nobody fills. `is_gap` is true only for a *required*
-    layer with nothing in it — Storage and Monitoring being empty is normal, and
-    flagging them would train people to ignore the flag.
+    Missing roles are returned as explicit rows rather than omitted: a gap you
+    cannot see is a gap nobody fills. `is_gap` is true only for a *tracked*
+    role with nothing in it — SaaS, Storage and Monitoring being empty is
+    normal, and flagging them would train people to ignore the flag.
 
-    Multiple services on one layer are all returned. Silently showing the first
+    Multiple services on one role are all returned. Silently showing the first
     would hide a duplicate registrar, which is exactly the kind of thing this
     module exists to surface.
     """
     today = today or timezone.localdate()
     settings = settings or estate_settings()
     tracked = tracked_layers(settings)
-    subscriptions = (
-        digital_property.subscriptions.filter(active_q(today))
-        .select_related("provider_account", "provider_account__provider")
-        .order_by("service_layer", "name")
+    services = (
+        prop.services.filter(active_q(today))
+        .select_related("provider", "provider_account")
+        .order_by("service_type", "identifier")
     )
 
     by_layer = defaultdict(list)
-    for subscription in subscriptions:
-        by_layer[subscription.service_layer].append(_service_row(subscription, settings))
+    for service in services:
+        by_layer[service.service_type].append(_service_row(service, settings))
 
-    # Tracked layers first, in the configured order. Then any untracked layer
-    # that nonetheless has a live service on it: turning a layer off in Settings
-    # must hide the empty slot, never the money already attached to it.
-    untracked_with_services = [
-        code
-        for code in estate.SERVICE_LAYER_CODES
-        if code not in tracked and by_layer.get(code)
-    ]
-
+    # The diagram is the tracked stack roles, in configured order, and nothing
+    # else. A role with no live service is still rendered — as an empty slot —
+    # because a gap you cannot see is a gap nobody fills.
     layers = []
-    for code in [*tracked, *untracked_with_services]:
+    for code in tracked:
         services = by_layer.get(code, [])
-        is_tracked = code in tracked
         layers.append(
             {
                 "layer": code,
-                "layer_label": estate.layer_label(code),
-                "is_required": is_tracked,
-                "is_tracked": is_tracked,
+                "layer_label": estate.service_type_label(code),
+                "is_required": True,
+                "is_tracked": True,
                 "configured": bool(services),
-                "is_gap": is_tracked and not services,
+                "is_gap": not services,
                 "service_count": len(services),
                 "services": services,
             }
         )
 
-    unassigned = by_layer.get(None, [])
+    # Everything attached to this property that holds no stack position: SaaS,
+    # and anything whose role the org has switched off in Settings. Listed
+    # separately below the diagram rather than as extra nodes in it — they are
+    # real spend, so they must not vanish, but they are not part of the chain a
+    # request travels through and drawing them there would misrepresent it.
+    off_stack = [
+        row
+        for code, rows in by_layer.items()
+        if code not in tracked
+        for row in rows
+    ]
+    off_stack.sort(key=lambda row: (estate.sort_key(row["service_type"]), row["name"]))
+
     return {
         "layers": layers,
         "gap_count": sum(1 for row in layers if row["is_gap"]),
         "missing_layers": [row["layer"] for row in layers if row["is_gap"]],
-        # Services on this property that nobody has placed in the stack. They
-        # are real spend, so they must not vanish between the layer rows.
-        "unassigned_services": unassigned,
-        "unassigned_count": len(unassigned),
+        # Key kept as `unassigned_*` for the existing frontend; the meaning is
+        # now "attached here but outside the stack" rather than "no layer set",
+        # which `Service.service_type` no longer allows.
+        "unassigned_services": off_stack,
+        "unassigned_count": len(off_stack),
+        "off_stack_services": off_stack,
     }
 
 
@@ -558,17 +608,17 @@ def stack_coverage(*, today=None):
     """
     today = today or timezone.localdate()
     rows = (
-        active_subscriptions(today)
-        .filter(digital_property__isnull=False)
-        .values("digital_property_id", "service_layer")
+        active_services(today)
+        .filter(property__isnull=False)
+        .values("property_id", "service_type")
         .annotate(count=Sum(Value(1)))
     )
     coverage = defaultdict(lambda: {"present": set(), "count": 0})
     for row in rows:
-        entry = coverage[row["digital_property_id"]]
+        entry = coverage[row["property_id"]]
         entry["count"] += row["count"] or 0
-        if row["service_layer"]:
-            entry["present"].add(row["service_layer"])
+        if row["service_type"]:
+            entry["present"].add(row["service_type"])
     return coverage
 
 
@@ -599,18 +649,18 @@ def estate_gaps(*, today=None, settings=None):
                 "owner_name": prop.owner.full_name if prop.owner_id else None,
                 "service_count": entry["count"],
                 "missing_layers": missing,
-                "missing_layer_labels": [estate.layer_label(code) for code in missing],
+                "missing_layer_labels": [estate.service_type_label(code) for code in missing],
                 "missing_count": len(missing),
             }
         )
     properties.sort(key=lambda item: (-item["missing_count"], item["name"]))
 
     orphans = [
-        _service_row(subscription, settings)
-        for subscription in active_subscriptions(today)
-        .filter(digital_property__isnull=True)
-        .select_related("provider_account", "provider_account__provider")
-        .order_by("name")
+        _service_row(service, settings)
+        for service in active_services(today)
+        .filter(property__isnull=True)
+        .select_related("provider", "provider_account")
+        .order_by("identifier")
     ]
 
     return {
@@ -620,7 +670,7 @@ def estate_gaps(*, today=None, settings=None):
         "orphaned_services": orphans,
         "orphan_count": len(orphans),
         "required_layers": [
-            {"layer": code, "layer_label": estate.layer_label(code)}
+            {"layer": code, "layer_label": estate.service_type_label(code)}
             for code in required
         ],
     }
@@ -633,22 +683,28 @@ def overview(*, to_currency=None, timeline_days=None, today=None):
 
     today = today or timezone.localdate()
     settings = estate_settings()
-    active = active_subscriptions(today)
+    active = active_services(today)
 
     currency_rows = spend_by_currency(active)
     total = converted_money(currency_rows, to_currency=to_currency)
 
     gaps = estate_gaps(today=today, settings=settings)
 
-    at_risk = [
-        subscription
-        for subscription in active.filter(
-            auto_renew=False,
-            expiry_date__gte=today,
-            expiry_date__lte=today
-            + timezone.timedelta(days=settings.renewal_warning_days),
-        ).select_related("provider_account__provider", "digital_property")
-    ]
+    # The stored flag or the derived condition, matching `Service.is_at_risk`
+    # and the `?at_risk=` filter on the services list. Three places asking the
+    # same question must not answer it three ways.
+    at_risk = list(
+        active.filter(
+            Q(status="AT_RISK")
+            | Q(
+                status="ACTIVE",
+                auto_renew=False,
+                renewal_date__gte=today,
+                renewal_date__lte=today
+                + timezone.timedelta(days=settings.renewal_warning_days),
+            )
+        ).select_related("provider", "provider_account", "property")
+    )
 
     accounts = ProviderAccount.objects.filter(is_active=True)
     mfa_counts = defaultdict(int)
@@ -708,21 +764,23 @@ def overview(*, to_currency=None, timeline_days=None, today=None):
 def currency_status(*, base=None, on_date=None):
     """Every currency actually in use, and whether it converts into `base`.
 
-    "In use" spans subscriptions and vendor contracts, because both feed money
+    "In use" spans estate services and vendor contracts, because both feed money
     figures a user will see. A currency with no rate is reported with what it is
     costing, so the admin fixing it can see what the gap is worth rather than
     just that one exists.
     """
-    from core.models import Subscription, VendorContract
+    from core.models import Service, VendorContract
 
     base = (base or reporting_currency()).upper()
 
     usage = defaultdict(lambda: {"subscriptions": 0, "contracts": 0})
     for row in (
-        Subscription.objects.filter(active_q())
+        Service.objects.filter(active_q())
         .values("currency")
         .annotate(total=Sum(Value(1)))
     ):
+        # Key kept as `subscriptions` until Phase 3 moves the Settings screen
+        # that reads it; the count behind it is now services.
         usage[(row["currency"] or "").upper()]["subscriptions"] = row["total"] or 0
     for row in (
         VendorContract.objects.exclude(currency="")
@@ -733,7 +791,7 @@ def currency_status(*, base=None, on_date=None):
     usage.pop("", None)
 
     spend = {
-        row["currency"]: row for row in spend_by_currency(active_subscriptions())
+        row["currency"]: row for row in spend_by_currency(active_services())
     }
 
     rows = []
@@ -754,6 +812,102 @@ def currency_status(*, base=None, on_date=None):
     return rows
 
 
+def dashboard(*, to_currency=None, today=None):
+    """Everything the Estate dashboard renders, in one call.
+
+    Deliberately one endpoint rather than five. The KPI row, the timeline and
+    both breakdowns are read from the same set of active services; splitting
+    them would mean five round trips that can disagree with each other because
+    a service changed between the first and the last.
+
+    The payload is the shape the Phase 2 brief specifies. `kpis.unconverted`
+    is the important part: when a currency has no rate its spend is listed
+    there rather than folded in at 1:1 or silently dropped, so
+    `monthly_spend` is never a figure that quietly omits the larger number.
+    """
+    from core.models import Property, ProviderAccount
+
+    today = today or timezone.localdate()
+    settings = estate_settings()
+    active = active_services(today)
+
+    currency_rows = spend_by_currency(active)
+    total = converted_money(currency_rows, to_currency=to_currency)
+
+    timeline = renewal_timeline(
+        active, days=settings.timeline_window_days, today=today, settings=settings
+    )
+    renewals_30d = sum(
+        1 for row in timeline if row["days_until"] <= settings.renewal_warning_days
+    )
+
+    by_provider = spend_by_provider(active, to_currency=to_currency)
+    # Percentages are of the *converted* total, so they sum to 100 across what
+    # could be priced. A provider billed only in an unconvertible currency
+    # shows 0.0% next to a non-zero unconverted figure rather than being
+    # dropped, which would make the remaining shares look complete.
+    total_monthly = Decimal(total["monthly"])
+    for row in by_provider:
+        monthly = Decimal(row["spend"]["monthly"])
+        row["slug"] = row.get("provider_slug") or ""
+        row["name"] = row.get("provider_name") or "Unassigned"
+        row["monthly"] = row["spend"]["monthly"]
+        row["pct"] = (
+            str((monthly / total_monthly * 100).quantize(TWOPLACES, rounding=ROUND_HALF_UP))
+            if total_monthly > 0
+            else "0.00"
+        )
+
+    by_category = []
+    for row in spend_by_layer(active, to_currency=to_currency):
+        by_category.append(
+            {
+                "service_type": row["layer"],
+                "label": row["layer_label"],
+                "monthly": row["spend"]["monthly"],
+                "count": row["count"],
+                "spend": row["spend"],
+            }
+        )
+
+    orphan_count = active.filter(property__isnull=True).count()
+    accounts = ProviderAccount.objects.filter(is_active=True)
+    missing_mfa = accounts.filter(mfa_type__in=("NONE", "UNKNOWN")).count()
+
+    return {
+        "as_of": today,
+        "currency": total["currency"],
+        "kpis": {
+            "monthly_spend": total["monthly"],
+            "yearly_spend": total["yearly"],
+            "currency": total["currency"],
+            "active_services": active.count(),
+            "renewals_30d": renewals_30d,
+            "accounts_missing_mfa": missing_mfa,
+            "accounts_without_mfa": accounts.filter(mfa_type="NONE").count(),
+            "orphan_services": orphan_count,
+            "properties": Property.objects.filter(is_active=True).count(),
+            # Named `unconverted` because the brief names it that. It carries
+            # the same rows as the `unconvertible` block on every money figure.
+            "unconverted": [
+                {"currency": row["currency"], "monthly": row["amount"]}
+                for row in total["unconvertible"]
+            ],
+            "is_complete": total["is_complete"],
+        },
+        "total_spend": total,
+        "timeline": timeline,
+        "by_provider": by_provider,
+        "by_category": by_category,
+        "thresholds": {
+            "at_risk_window_days": settings.renewal_warning_days,
+            "urgent_window_days": settings.renewal_urgent_days,
+            "timeline_window_days": settings.timeline_window_days,
+        },
+        "service_types": layer_catalog(settings),
+    }
+
+
 def layer_catalog(settings=None):
     """Tracked layers in configured order, then the rest of the catalog.
 
@@ -762,11 +916,11 @@ def layer_catalog(settings=None):
     """
     settings = settings or estate_settings()
     tracked = tracked_layers(settings)
-    remainder = [code for code in estate.SERVICE_LAYER_CODES if code not in tracked]
+    remainder = [code for code in estate.SERVICE_TYPE_CODES if code not in tracked]
     return [
         {
             "layer": code,
-            "layer_label": estate.layer_label(code),
+            "layer_label": estate.service_type_label(code),
             "is_required": code in tracked,
             "is_tracked": code in tracked,
         }

@@ -83,6 +83,17 @@ class FinanceEstateTestCase(TestCase):
             is_active=True,
         )
 
+    def _service(self, **overrides):
+        """An estate `Service`, for the Cost Overview property/layer slice.
+
+        Separate from `_subscription` on purpose: the budget-impact tests group
+        by `budget_category` and `vendor`, which only `Subscription` carries,
+        so the two fixtures cannot be merged until Phase 5 retires that path.
+        """
+        from core.test_estate_api import make_subscription
+
+        return make_subscription(**overrides)
+
     def _settings(self, **changes):
         settings = SubscriptionSettings.get_solo()
         for key, value in changes.items():
@@ -457,9 +468,9 @@ class VendorSpendTests(FinanceEstateTestCase):
 class CostOverviewTests(FinanceEstateTestCase):
     def test_subscription_spend_appears_by_property_and_layer(self):
         prop = Property.objects.create(name="example.com", kind="CORPORATE")
-        self._subscription(
+        self._service(
             digital_property=prop, service_layer="HOSTING",
-            cost=Decimal("120.00"), billing_cycle="YEARLY",
+            cost=Decimal("120.00"), billing_cycle="YEARLY", currency="PKR",
         )
 
         response = self.client.get(reverse("finance_cost_overview"))
@@ -472,7 +483,7 @@ class CostOverviewTests(FinanceEstateTestCase):
         self.assertEqual(layers["HOSTING"]["spend"]["yearly"], "120.00")
 
     def test_orphaned_spend_is_reported_separately(self):
-        self._subscription(cost=Decimal("240.00"), billing_cycle="YEARLY")
+        self._service(cost=Decimal("240.00"), billing_cycle="YEARLY", currency="PKR")
         response = self.client.get(reverse("finance_cost_overview"))
         self.assertEqual(
             response.data["subscriptions"]["orphaned"]["yearly"], "240.00"
