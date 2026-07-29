@@ -539,3 +539,55 @@ class VaultRevealAuditTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         row = AuditLog.objects.get(action="REVEAL")
         self.assertEqual(row.changes["revealed"], "extras")
+
+
+# ─────────────── non-stack types are never gaps (regression) ──────────────
+
+class StackGapScopeTests(Phase2TestCase):
+    """A tracked non-stack type must not render as a gap.
+
+    Found by running the real app: an `EstateSettings` row saved before the
+    Phase 1 rework holds all ten pre-rework codes, so every property showed
+    permanent amber gaps for Storage, Monitoring and Other. Three gaps nobody
+    can ever close is how people learn to ignore the colour.
+    """
+
+    def setUp(self):
+        super().setUp()
+        from core.models import EstateSettings
+
+        settings = EstateSettings.get_solo()
+        settings.enabled_layers = [
+            "REGISTRAR", "DNS", "HOSTING", "MAIL", "CDN", "TLS", "ANALYTICS",
+            "STORAGE", "MONITORING", "OTHER",
+        ]
+        settings.save()
+
+    def stack(self):
+        response = self.client.get(
+            reverse("estate-property-stack", args=[self.property.pk])
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return response.data
+
+    def test_the_diagram_holds_only_stack_roles(self):
+        layers = [row["layer"] for row in self.stack()["layers"]]
+        self.assertEqual(layers, list(estate.STACK_TYPE_CODES))
+
+    def test_storage_and_monitoring_are_never_gaps(self):
+        missing = self.stack()["missing_layers"]
+        for code in ("STORAGE", "MONITORING", "OTHER", "SAAS"):
+            self.assertNotIn(code, missing)
+
+    def test_gap_count_is_capped_at_the_seven_stack_roles(self):
+        self.assertEqual(self.stack()["gap_count"], len(estate.STACK_TYPE_CODES))
+
+    def test_the_gaps_endpoint_agrees_with_the_diagram(self):
+        response = self.client.get(reverse("estate_gaps"))
+        row = next(
+            item
+            for item in response.data["properties_with_gaps"]
+            if item["id"] == self.property.pk
+        )
+        self.assertEqual(row["missing_count"], len(estate.STACK_TYPE_CODES))
+        self.assertNotIn("STORAGE", row["missing_layers"])

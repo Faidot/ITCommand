@@ -93,7 +93,7 @@ export function AppSidebar() {
       items: [
         { title: "Asset Inventory", url: "/assets", icon: Box, module: "assets" },
         { title: "Asset Notes", url: "/asset-notes", icon: FileText, module: "assets" },
-        { title: "Software & Subscriptions", url: "/licenses", icon: KeyRound, module: "licenses" },
+        { title: "Digital Estate", url: "/estate/dashboard", icon: Globe, module: "estate" },
       ],
     },
     {

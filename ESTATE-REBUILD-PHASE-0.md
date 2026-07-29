@@ -515,6 +515,56 @@ read and a write against the real viewset.
 2. **`unassigned_services` changed meaning.** It was "service with no layer set", which `Service.service_type` (non-null) no longer permits. It now means "attached here but outside the stack". The key is unchanged so the current frontend keeps working.
 3. **`finance_estate.py` still reads `Subscription`** for budget-impact and vendor spend, via a clearly-marked `legacy_active_subscriptions()`. Those functions group by `budget_category` and `vendor`, which the estate spec does not give `Service`. Adding speculative finance FKs to the new model, or breaking a working module, both looked worse than an explicit legacy helper that dies with the old table in Phase 5. **The Cost Overview's property/layer slice did move to `Service`.**
 
+---
+
+## Phase 3 — delivered
+
+New route group `/estate`, replacing the tabbed `/licenses` hub. Real routing,
+not tab state: every screen is independently linkable.
+
+| Screen | Route | Notes |
+|---|---|---|
+| Dashboard | `/estate/dashboard` | 5 KPI cards, lane-packed 90-day timeline, provider donut, category bars — all from one `/api/estate/dashboard/` call |
+| Properties | `/estate/properties` | Card grid with a layer strip per property |
+| Property detail | `/estate/properties/[id]` | Connected 7-node stack diagram; gaps are drawn as empty nodes with "Attach service" |
+| Accounts | `/estate/accounts` | MFA badge, rows expand inline to list their services |
+| Services | `/estate/services` | Server-side filters, debounced search, optimistic auto-renew toggle with revert, inline property combobox |
+| Add Service | modal | 5 steps, per-step validation, Back everywhere, step 5 skippable |
+| ⌘K | global | Jump to property/account/service, run Add service, filter to expiring soon. Esc closes from anywhere |
+
+**Currency overflow — the `PKR 13...` bug.** The old `KpiCard` put `truncate` on
+a `text-2xl` value in a fixed-width card. `KpiMoney` now switches to compact
+notation above 10,000, drops a type size at narrow widths, and keeps the exact
+figure in a tooltip. **No `truncate` on any money value.** Verified at 1280 /
+1440 / 1920 via the `sm:` / `xl:` grid steps; the KPI row is 5-up only at `xl`.
+
+**Charts.** `recharts` and `cmdk` were already dependencies — no new packages.
+A single-bucket donut or bar renders a one-line sentence instead, per the brief.
+
+**Old routes redirect, verified against the running app:** `/licenses`,
+`/licenses/list`, `/licenses/my`, `/licenses/:id`, `/licenses/estate`,
+`/licenses/estate/:id`, `/subscriptions`, `/subscriptions/:id` → 307 to the
+matching estate screen. Temporary (307) on purpose: the old routes still exist
+until Phase 5, and a permanent redirect would be cached past the point of recall.
+
+### Bug found by running the app, not by the tests
+
+`STORAGE`, `MONITORING` and `OTHER` were rendering as permanent amber gap nodes
+on every property. The stored `EstateSettings.enabled_layers` holds all ten
+*pre-rework* codes, and the gap calculation treated every tracked code as a
+stack slot. Three gaps nobody can ever close is precisely how people learn to
+ignore the colour that means "fix this".
+
+Fixed with `estate_reports.tracked_stack_types()`, which intersects the org's
+tracked list with the seven stack roles. The diagram and the gap count read it;
+`tracked_layers()` still drives everything else. Four regression tests pin it.
+
+### Phase 3 deviations, flagged
+
+1. **The old `/licenses` and `/subscriptions` screens are still present**, serving redirects. Deleting them is Phase 5, per the brief's sequencing.
+2. **`ProviderAccount` JSON keys are still `login_email` / `auth_method` / `mfa_method`.** The frontend normalises them to the model vocabulary in `estate-types.ts`, so the UI reads correctly; flipping the API keys is a backend change better made when the old subscription serializers go.
+3. **Accounts are edited in a single-form dialog, not the wizard.** The 5-step flow is for services, as specified; a five-step modal for four fields would be worse.
+
 ### Consequence of the clean-drop decision, now visible
 
 The estate endpoints read `Service`, which has **0 rows**. Until Phase 4 seeds demo data or the services are re-entered, the Estate tab renders empty. The 4 old subscriptions remain only in `~/it-command-backups/legacy-subscriptions-2026-07-29.json`.

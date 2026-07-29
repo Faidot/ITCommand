@@ -30,6 +30,7 @@ const ROUTE_MODULES: Array<[string, string]> = [
   ["/seating", "seating"],
   ["/asset-notes", "assets"],
   ["/assets", "assets"],
+  ["/estate", "estate"],
   ["/licenses", "licenses"],
   ["/subscriptions", "subscriptions"],
   ["/vendors", "vendors"],

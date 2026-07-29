@@ -58,13 +58,30 @@ def estate_settings():
 
 
 def tracked_layers(settings=None):
-    """Layer codes this organisation tracks, in its configured order.
+    """Service-type codes this organisation tracks, in its configured order.
 
-    `core.estate.SERVICE_LAYERS` remains the catalog of what is possible; this
-    is what the org opted into. Everything that renders or scores a stack reads
-    this, so enabling a layer in Settings is the single switch.
+    `core.estate.SERVICE_TYPES` remains the catalog of what is possible; this
+    is what the org opted into.
     """
     return (settings or estate_settings()).tracked_layers()
+
+
+def tracked_stack_types(settings=None):
+    """Tracked codes that actually occupy a stack position.
+
+    The stack diagram and the gap count read this, never `tracked_layers`.
+    Only the seven stack roles form the chain a request travels through, so
+    only they can be *missing* from it — SaaS, Storage, Monitoring and Other
+    have no slot to be absent from.
+
+    This intersection is load-bearing rather than tidy-minded. An
+    `EstateSettings` row saved before the Phase 1 rework holds all ten
+    pre-rework codes, and without it every property renders three permanent
+    amber gaps for Storage, Monitoring and Other — which is exactly how people
+    learn to ignore the colour that is supposed to mean "fix this".
+    """
+    tracked = tracked_layers(settings)
+    return [code for code in tracked if code in estate.STACK_TYPE_CODES]
 
 
 def urgency_for(days_until, settings=None):
@@ -544,7 +561,7 @@ def property_stack(prop, *, today=None, settings=None):
     """
     today = today or timezone.localdate()
     settings = settings or estate_settings()
-    tracked = tracked_layers(settings)
+    tracked = tracked_stack_types(settings)
     services = (
         prop.services.filter(active_q(today))
         .select_related("provider", "provider_account")
@@ -629,7 +646,7 @@ def estate_gaps(*, today=None, settings=None):
     today = today or timezone.localdate()
     settings = settings or estate_settings()
     coverage = stack_coverage(today=today)
-    required = tracked_layers(settings)
+    required = tracked_stack_types(settings)
 
     properties = []
     for prop in Property.objects.filter(is_active=True).select_related(

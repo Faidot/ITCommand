@@ -212,12 +212,31 @@ class SettingsDriveReportsTests(SettingsTestCase):
         after = self._overview()["kpis"]["stack_gap_count"]
         self.assertEqual(after, 2)
 
-    def test_enabling_an_optional_layer_makes_its_absence_a_gap(self):
+    def test_enabling_a_non_stack_type_does_not_make_its_absence_a_gap(self):
+        """A deliberate behaviour change in Phase 3, and a capability removed.
+
+        Until now, enabling any tracked type in Settings made its absence count
+        as a gap, so an org could opt Monitoring into gap reporting. The Phase 1
+        taxonomy split types into seven *stack roles* — the chain a request
+        travels through — and non-stack types (SaaS, Storage, Monitoring,
+        Other), with the latter excluded from gap calculations.
+
+        Only something with a position in the chain can be missing from it.
+        Keeping the old rule was not merely inconsistent: the shipped
+        `EstateSettings` row lists all ten pre-rework codes, so every property
+        rendered three permanent amber gaps that nobody could ever close.
+
+        If Monitoring gap-tracking is wanted back, it is one line in
+        `estate_reports.tracked_stack_types` plus a migration of the stored
+        `enabled_layers` — but it is a product decision, not an accident.
+        """
         EstateSettings.objects.update_or_create(
             pk=1, defaults={"enabled_layers": ["REGISTRAR", "MONITORING"]}
         )
         gaps = self.client.get(reverse("estate_gaps")).data
-        self.assertIn("MONITORING", gaps["properties_with_gaps"][0]["missing_layers"])
+        missing = gaps["properties_with_gaps"][0]["missing_layers"]
+        self.assertNotIn("MONITORING", missing)
+        self.assertEqual(missing, ["REGISTRAR"])
 
     def test_widening_the_warning_window_changes_the_at_risk_count(self):
         today = timezone.localdate()
