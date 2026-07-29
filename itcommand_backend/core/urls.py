@@ -31,7 +31,7 @@ from .views import (
     NetworkTopologyView, NetworkExportView, NetworkDeviceLookupView,
     KBCategoryViewSet, KBTagViewSet, KBArticleViewSet, KBDashboardView, KBSuggestView,
     SubscriptionViewSet,
-    ProviderViewSet, ProviderAccountViewSet, DigitalPropertyViewSet,
+    ProviderViewSet, ProviderAccountViewSet, PropertyViewSet,
     EstateOverviewView, EstateGapsView, EstateSettingsView, ExchangeRateViewSet,
 )
 from .reports import (
@@ -108,7 +108,7 @@ router.register(r'subscriptions', SubscriptionViewSet, basename='subscription')
 # Digital Estate
 router.register(r'estate/providers', ProviderViewSet, basename='estate-provider')
 router.register(r'estate/accounts', ProviderAccountViewSet, basename='estate-account')
-router.register(r'estate/properties', DigitalPropertyViewSet, basename='estate-property')
+router.register(r'estate/properties', PropertyViewSet, basename='estate-property')
 router.register(r'exchange-rates', ExchangeRateViewSet, basename='exchange-rate')
 
 urlpatterns = [

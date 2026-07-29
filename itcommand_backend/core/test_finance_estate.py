@@ -22,7 +22,7 @@ from core.models import (
     AuditLog,
     Budget,
     BudgetCategory,
-    DigitalProperty,
+    Property,
     Expense,
     ExchangeRate,
     FinancialYear,
@@ -456,7 +456,7 @@ class VendorSpendTests(FinanceEstateTestCase):
 
 class CostOverviewTests(FinanceEstateTestCase):
     def test_subscription_spend_appears_by_property_and_layer(self):
-        prop = DigitalProperty.objects.create(name="example.com", kind="CORPORATE")
+        prop = Property.objects.create(name="example.com", kind="CORPORATE")
         self._subscription(
             digital_property=prop, service_layer="HOSTING",
             cost=Decimal("120.00"), billing_cycle="YEARLY",

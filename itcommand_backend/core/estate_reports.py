@@ -480,7 +480,7 @@ def _service_row(subscription, settings=None):
         "provider_name": provider.name if provider else None,
         "brand_color": provider.brand_color if provider else "",
         "account_login": (
-            subscription.provider_account.login_email
+            subscription.provider_account.account_email
             if subscription.provider_account_id
             else None
         ),
@@ -574,7 +574,7 @@ def stack_coverage(*, today=None):
 
 def estate_gaps(*, today=None, settings=None):
     """Properties missing a tracked layer, and services attached to nothing."""
-    from core.models import DigitalProperty
+    from core.models import Property
 
     today = today or timezone.localdate()
     settings = settings or estate_settings()
@@ -582,7 +582,7 @@ def estate_gaps(*, today=None, settings=None):
     required = tracked_layers(settings)
 
     properties = []
-    for prop in DigitalProperty.objects.filter(is_active=True).select_related(
+    for prop in Property.objects.filter(is_active=True).select_related(
         "owner", "department"
     ):
         entry = coverage.get(prop.id, {"present": set(), "count": 0})
@@ -629,7 +629,7 @@ def estate_gaps(*, today=None, settings=None):
 # ───────────────────────────────── overview ─────────────────────────────────
 
 def overview(*, to_currency=None, timeline_days=None, today=None):
-    from core.models import DigitalProperty, ProviderAccount
+    from core.models import Property, ProviderAccount
 
     today = today or timezone.localdate()
     settings = estate_settings()
@@ -652,7 +652,7 @@ def overview(*, to_currency=None, timeline_days=None, today=None):
 
     accounts = ProviderAccount.objects.filter(is_active=True)
     mfa_counts = defaultdict(int)
-    for method in accounts.values_list("mfa_method", flat=True):
+    for method in accounts.values_list("mfa_type", flat=True):
         mfa_counts[method] += 1
     no_mfa = mfa_counts.get("NONE", 0)
     weak_mfa = mfa_counts.get("SMS", 0)
@@ -677,7 +677,7 @@ def overview(*, to_currency=None, timeline_days=None, today=None):
         ),
         "kpis": {
             "service_count": active.count(),
-            "property_count": DigitalProperty.objects.filter(is_active=True).count(),
+            "property_count": Property.objects.filter(is_active=True).count(),
             "account_count": accounts.count(),
             "provider_count": accounts.values("provider_id").distinct().count(),
             "orphan_count": gaps["orphan_count"],

@@ -400,10 +400,10 @@ def subscription_spend_by_property_and_layer(*, to_currency=None):
     currency = to_currency or _company_currency()
 
     property_spend = estate_reports.spend_by_property(active, to_currency=currency)
-    from core.models import DigitalProperty
+    from core.models import Property
 
     names = dict(
-        DigitalProperty.objects.filter(id__in=property_spend).values_list("id", "name")
+        Property.objects.filter(id__in=property_spend).values_list("id", "name")
     )
     by_property = [
         {

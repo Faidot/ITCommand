@@ -10,7 +10,7 @@ from core.currencies import is_current_iso_4217_code
 # distinction stays visible at the call site.
 from core.estate import SERVICE_LAYERS, is_at_risk as estate_is_at_risk
 
-from .estate import DigitalProperty, ProviderAccount
+from .estate import Property, ProviderAccount
 from .finance import BudgetCategory
 from .licenses import SoftwareLicense
 from .users import Department, User
@@ -145,7 +145,7 @@ class Subscription(models.Model):
         help_text="The provider login this service is bought through.",
     )
     digital_property = models.ForeignKey(
-        DigitalProperty,
+        Property,
         on_delete=models.SET_NULL,
         null=True,
         blank=True,

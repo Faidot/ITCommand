@@ -19,7 +19,7 @@ from io import StringIO
 
 from core import estate
 from core.models import (
-    DigitalProperty,
+    Property,
     Provider,
     ProviderAccount,
     Subscription,
@@ -76,7 +76,7 @@ class ServiceLayerTaxonomyTests(TestCase):
         self.assertEqual(estate.mfa_severity("NONE"), "critical")
         self.assertEqual(estate.mfa_severity("SMS"), "warning")
         self.assertEqual(estate.mfa_severity("APP"), "ok")
-        self.assertEqual(estate.mfa_severity("KEY"), "ok")
+        self.assertEqual(estate.mfa_severity("SECURITY_KEY"), "ok")
         self.assertEqual(estate.mfa_severity("UNKNOWN"), "muted")
 
 
@@ -140,18 +140,18 @@ class OrphanDetectionTests(TestCase):
         self.assertTrue(make_subscription().is_orphan)
 
     def test_subscription_bound_to_a_property_is_not_an_orphan(self):
-        prop = DigitalProperty.objects.create(name="example.com", kind="CORPORATE")
+        prop = Property.objects.create(name="example.com", kind="CORPORATE")
         self.assertFalse(make_subscription(digital_property=prop).is_orphan)
 
     def test_orphan_check_does_not_need_the_related_row_loaded(self):
-        prop = DigitalProperty.objects.create(name="example.com", kind="CORPORATE")
+        prop = Property.objects.create(name="example.com", kind="CORPORATE")
         make_subscription(digital_property=prop)
         fetched = Subscription.objects.only("id", "digital_property").first()
         with self.assertNumQueries(0):
             self.assertFalse(fetched.is_orphan)
 
     def test_property_deletion_orphans_rather_than_deletes_the_subscription(self):
-        prop = DigitalProperty.objects.create(name="example.com", kind="CORPORATE")
+        prop = Property.objects.create(name="example.com", kind="CORPORATE")
         subscription = make_subscription(digital_property=prop)
         prop.delete()
         subscription.refresh_from_db()
@@ -254,7 +254,7 @@ class ProviderAccountTests(TestCase):
 
     def test_console_url_falls_back_to_the_provider(self):
         account = ProviderAccount.objects.create(
-            provider=self.provider, login_email="root@example.com"
+            provider=self.provider, account_email="root@example.com"
         )
         self.assertEqual(
             account.effective_console_url, "https://console.aws.amazon.com"
@@ -263,7 +263,7 @@ class ProviderAccountTests(TestCase):
     def test_account_console_url_overrides_the_provider(self):
         account = ProviderAccount.objects.create(
             provider=self.provider,
-            login_email="tenant@example.com",
+            account_email="tenant@example.com",
             console_url="https://tenant.example.awsapps.com",
         )
         self.assertEqual(
@@ -273,39 +273,39 @@ class ProviderAccountTests(TestCase):
     def test_mfa_defaults_to_unknown_not_none(self):
         # "Nobody has checked" must not be reported as "confirmed insecure".
         account = ProviderAccount.objects.create(
-            provider=self.provider, login_email="root@example.com"
+            provider=self.provider, account_email="root@example.com"
         )
-        self.assertEqual(account.mfa_method, "UNKNOWN")
+        self.assertEqual(account.mfa_type, "UNKNOWN")
         self.assertEqual(account.mfa_severity, "muted")
         self.assertFalse(account.has_mfa)
 
     def test_account_with_no_mfa_is_critical(self):
         account = ProviderAccount.objects.create(
-            provider=self.provider, login_email="legacy@example.com", mfa_method="NONE"
+            provider=self.provider, account_email="legacy@example.com", mfa_type="NONE"
         )
         self.assertEqual(account.mfa_severity, "critical")
         self.assertFalse(account.has_mfa)
 
     def test_same_login_cannot_be_registered_twice_at_one_provider(self):
         ProviderAccount.objects.create(
-            provider=self.provider, login_email="root@example.com"
+            provider=self.provider, account_email="root@example.com"
         )
         with self.assertRaises(IntegrityError), transaction.atomic():
             ProviderAccount.objects.create(
-                provider=self.provider, login_email="root@example.com"
+                provider=self.provider, account_email="root@example.com"
             )
 
     def test_same_login_is_allowed_at_a_different_provider(self):
         other = Provider.objects.create(name="Cloudflare", slug="cloudflare")
         ProviderAccount.objects.create(
-            provider=self.provider, login_email="ops@example.com"
+            provider=self.provider, account_email="ops@example.com"
         )
-        ProviderAccount.objects.create(provider=other, login_email="ops@example.com")
+        ProviderAccount.objects.create(provider=other, account_email="ops@example.com")
         self.assertEqual(ProviderAccount.objects.count(), 2)
 
     def test_deleting_a_provider_that_still_has_accounts_is_blocked(self):
         ProviderAccount.objects.create(
-            provider=self.provider, login_email="root@example.com"
+            provider=self.provider, account_email="root@example.com"
         )
         from django.db.models import ProtectedError
 
@@ -317,25 +317,25 @@ class ProviderAccountTests(TestCase):
             email="owner@example.com", password="EstateTestPassword!1", full_name="Owner"
         )
         account = ProviderAccount.objects.create(
-            provider=self.provider, login_email="root@example.com", owner=owner
+            provider=self.provider, account_email="root@example.com", owner=owner
         )
         owner.delete()
         account.refresh_from_db()
         self.assertIsNone(account.owner_id)
 
 
-class DigitalPropertyTests(TestCase):
+class PropertyTests(TestCase):
     def test_name_is_normalised_to_lowercase(self):
-        prop = DigitalProperty.objects.create(name="  Example.COM  ", kind="CORPORATE")
+        prop = Property.objects.create(name="  Example.COM  ", kind="CORPORATE")
         self.assertEqual(prop.name, "example.com")
 
     def test_name_is_unique_after_normalisation(self):
-        DigitalProperty.objects.create(name="example.com", kind="CORPORATE")
+        Property.objects.create(name="example.com", kind="CORPORATE")
         with self.assertRaises(IntegrityError), transaction.atomic():
-            DigitalProperty.objects.create(name="EXAMPLE.COM", kind="MARKETING")
+            Property.objects.create(name="EXAMPLE.COM", kind="MARKETING")
 
     def test_subscriptions_reverse_accessor_is_named_for_the_property(self):
-        prop = DigitalProperty.objects.create(name="example.com", kind="CORPORATE")
+        prop = Property.objects.create(name="example.com", kind="CORPORATE")
         make_subscription(digital_property=prop)
         self.assertEqual(prop.subscriptions.count(), 1)
 
@@ -343,7 +343,7 @@ class DigitalPropertyTests(TestCase):
 class SeedEstateCommandTests(TestCase):
     def _run(self, *args):
         out = StringIO()
-        call_command("seed_estate", *args, stdout=out)
+        call_command("seed_providers", *args, stdout=out)
         return out.getvalue()
 
     def test_seeds_the_catalog(self):
@@ -359,7 +359,7 @@ class SeedEstateCommandTests(TestCase):
     def test_creates_no_accounts_properties_or_services(self):
         self._run()
         self.assertEqual(ProviderAccount.objects.count(), 0)
-        self.assertEqual(DigitalProperty.objects.count(), 0)
+        self.assertEqual(Property.objects.count(), 0)
         self.assertEqual(Subscription.objects.count(), 0)
 
     def test_local_edits_survive_a_re_run(self):

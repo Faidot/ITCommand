@@ -20,7 +20,7 @@ from rest_framework.views import APIView
 from core import estate, estate_reports, fx
 from core.mixins import AuditLogMixin
 from core.models import (
-    DigitalProperty,
+    Property,
     EstateSettings,
     ExchangeRate,
     Provider,
@@ -28,7 +28,7 @@ from core.models import (
 )
 from core.permissions import HasModulePermission, IsSuperadmin
 from core.serializers import (
-    DigitalPropertySerializer,
+    PropertySerializer,
     EstateSettingsSerializer,
     ExchangeRateSerializer,
     ProviderAccountSerializer,
@@ -55,7 +55,7 @@ def _reporting_currency(request):
 # ───────────────────────────────── catalog CRUD ─────────────────────────────
 
 class ProviderViewSet(AuditLogMixin, viewsets.ModelViewSet):
-    """The provider catalog. Seeded by `manage.py seed_estate`, admin-editable."""
+    """The provider catalog. Seeded by `manage.py seed_providers`, admin-editable."""
 
     serializer_class = ProviderSerializer
     permission_classes = [HasModulePermission]
@@ -125,13 +125,13 @@ class ProviderAccountViewSet(AuditLogMixin, viewsets.ModelViewSet):
                 "provider", "owner", "vault_credential", "account_workspace"
             )
             .annotate(service_count=Count("subscriptions", distinct=True))
-            .order_by("provider__name", "login_email")
+            .order_by("provider__name", "account_email")
         )
         params = self.request.query_params
         search = (params.get("search") or "").strip()
         if search:
             queryset = queryset.filter(
-                Q(login_email__icontains=search)
+                Q(account_email__icontains=search)
                 | Q(provider__name__icontains=search)
                 | Q(notes__icontains=search)
             )
@@ -141,15 +141,18 @@ class ProviderAccountViewSet(AuditLogMixin, viewsets.ModelViewSet):
         owner = params.get("owner")
         if owner:
             queryset = queryset.filter(owner_id=owner)
-        for field in ("auth_method", "mfa_method"):
-            value = (params.get(field) or "").strip().upper()
+        # Query-param name -> model field. The params keep the pre-Phase-1
+        # spelling until Phase 3 moves the frontend; the columns behind them
+        # are already `auth_type` / `mfa_type`.
+        for param, field in (("auth_method", "auth_type"), ("mfa_method", "mfa_type")):
+            value = (params.get(param) or "").strip().upper()
             if value:
                 queryset = queryset.filter(**{field: value})
         if "is_active" in params:
             queryset = queryset.filter(is_active=_bool_param(params, "is_active"))
         # The headline filter for this table.
         if _bool_param(params, "missing_mfa"):
-            queryset = queryset.filter(mfa_method__in=["NONE", "UNKNOWN"])
+            queryset = queryset.filter(mfa_type__in=["NONE", "UNKNOWN"])
         if _bool_param(params, "unowned"):
             queryset = queryset.filter(owner__isnull=True)
         return queryset
@@ -159,7 +162,7 @@ class ProviderAccountViewSet(AuditLogMixin, viewsets.ModelViewSet):
         """Counts per MFA method, with the severity the UI must colour by."""
         counts = dict(
             ProviderAccount.objects.filter(is_active=True)
-            .values_list("mfa_method")
+            .values_list("mfa_type")
             .annotate(total=Count("id"))
         )
         return Response(
@@ -171,7 +174,7 @@ class ProviderAccountViewSet(AuditLogMixin, viewsets.ModelViewSet):
                         "severity": estate.mfa_severity(code),
                         "count": counts.get(code, 0),
                     }
-                    for code, label in estate.MFA_METHODS
+                    for code, label in estate.MFA_TYPES
                 ],
                 "total": sum(counts.values()),
                 "unprotected": counts.get("NONE", 0),
@@ -180,17 +183,17 @@ class ProviderAccountViewSet(AuditLogMixin, viewsets.ModelViewSet):
         )
 
 
-class DigitalPropertyViewSet(AuditLogMixin, viewsets.ModelViewSet):
+class PropertyViewSet(AuditLogMixin, viewsets.ModelViewSet):
     """Domains, apps and sites we own."""
 
-    serializer_class = DigitalPropertySerializer
+    serializer_class = PropertySerializer
     permission_classes = [HasModulePermission]
     rbac_module = "subscriptions"
     pagination_class = EstatePagination
 
     def get_queryset(self):
         queryset = (
-            DigitalProperty.objects.select_related("owner", "department")
+            Property.objects.select_related("owner", "department")
             .annotate(service_count=Count("subscriptions", distinct=True))
             .order_by("name")
         )
@@ -243,7 +246,7 @@ class DigitalPropertyViewSet(AuditLogMixin, viewsets.ModelViewSet):
         payload = estate_reports.property_stack(prop)
         return Response(
             {
-                "property": DigitalPropertySerializer(
+                "property": PropertySerializer(
                     prop, context=self.get_serializer_context()
                 ).data,
                 **payload,

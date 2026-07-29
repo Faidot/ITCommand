@@ -21,7 +21,7 @@ from core import estate, rbac
 from core.estate_reports import active_q, spend_by_currency
 from core.models import (
     AppSettings,
-    DigitalProperty,
+    Property,
     ExchangeRate,
     Provider,
     ProviderAccount,
@@ -108,7 +108,7 @@ class EstatePermissionTests(EstateApiTestCase):
     def setUp(self):
         super().setUp()
         self.provider = Provider.objects.create(name="AWS", slug="aws")
-        self.property = DigitalProperty.objects.create(
+        self.property = Property.objects.create(
             name="example.com", kind="CORPORATE"
         )
 
@@ -320,7 +320,7 @@ class FxTruncationTests(EstateApiTestCase):
     def test_per_provider_spend_carries_its_own_completeness_flag(self):
         provider = Provider.objects.create(name="AWS", slug="aws")
         account = ProviderAccount.objects.create(
-            provider=provider, login_email="root@example.com"
+            provider=provider, account_email="root@example.com"
         )
         Subscription.objects.filter(name="Cloud").update(provider_account=account)
 
@@ -335,7 +335,7 @@ class FxTruncationTests(EstateApiTestCase):
     def test_a_provider_priced_only_in_an_unconvertible_currency_is_still_listed(self):
         provider = Provider.objects.create(name="AWS", slug="aws")
         account = ProviderAccount.objects.create(
-            provider=provider, login_email="root@example.com"
+            provider=provider, account_email="root@example.com"
         )
         Subscription.objects.filter(name="Cloud").update(provider_account=account)
         response = self.client.get(reverse("estate_overview"))
@@ -350,9 +350,9 @@ class StackGapTests(EstateApiTestCase):
         super().setUp()
         self.provider = Provider.objects.create(name="Cloudflare", slug="cloudflare")
         self.account = ProviderAccount.objects.create(
-            provider=self.provider, login_email="devops@example.com"
+            provider=self.provider, account_email="devops@example.com"
         )
-        self.property = DigitalProperty.objects.create(
+        self.property = Property.objects.create(
             name="example.com", kind="CORPORATE"
         )
 
@@ -465,7 +465,7 @@ class StackGapTests(EstateApiTestCase):
 
         def add_properties(start, stop):
             for index in range(start, stop):
-                prop = DigitalProperty.objects.create(name=f"p{index}.io", kind="APP")
+                prop = Property.objects.create(name=f"p{index}.io", kind="APP")
                 make_subscription(
                     name=f"svc-{index}", digital_property=prop, service_layer="DNS"
                 )
@@ -495,8 +495,8 @@ class StackGapTests(EstateApiTestCase):
         )
 
     def test_stacks_list_returns_one_row_per_active_property(self):
-        other = DigitalProperty.objects.create(name="second.io", kind="APP")
-        DigitalProperty.objects.create(name="retired.io", kind="PARKED", is_active=False)
+        other = Property.objects.create(name="second.io", kind="APP")
+        Property.objects.create(name="retired.io", kind="PARKED", is_active=False)
         self._attach("REGISTRAR")
         response = self.client.get(reverse("estate-property-stacks"))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
@@ -512,7 +512,7 @@ class StackGapTests(EstateApiTestCase):
 class EstateGapsEndpointTests(EstateApiTestCase):
     def setUp(self):
         super().setUp()
-        self.property = DigitalProperty.objects.create(
+        self.property = Property.objects.create(
             name="example.com", kind="CORPORATE"
         )
 
@@ -547,12 +547,12 @@ class EstateGapsEndpointTests(EstateApiTestCase):
         self.assertEqual(response.data["property_gap_count"], 0)
 
     def test_inactive_property_is_not_reported_as_a_gap(self):
-        DigitalProperty.objects.filter(pk=self.property.pk).update(is_active=False)
+        Property.objects.filter(pk=self.property.pk).update(is_active=False)
         response = self.client.get(reverse("estate_gaps"))
         self.assertEqual(response.data["property_gap_count"], 0)
 
     def test_worst_property_is_listed_first(self):
-        worse = DigitalProperty.objects.create(name="bare.io", kind="APP")
+        worse = Property.objects.create(name="bare.io", kind="APP")
         for layer in estate.REQUIRED_LAYERS[:-1]:
             make_subscription(
                 name=layer, digital_property=self.property, service_layer=layer
@@ -584,7 +584,7 @@ class VaultCredentialExposureTests(EstateApiTestCase):
         credential = self._make_credential()
         ProviderAccount.objects.create(
             provider=self.provider,
-            login_email="root@example.com",
+            account_email="root@example.com",
             vault_credential=credential,
         )
         response = self.client.get(reverse("estate-account-list"))
@@ -603,7 +603,7 @@ class VaultCredentialExposureTests(EstateApiTestCase):
         credential = self._make_credential()
         ProviderAccount.objects.create(
             provider=self.provider,
-            login_email="root@example.com",
+            account_email="root@example.com",
             vault_credential=credential,
         )
         response = self.client.get(reverse("estate-account-list"))
@@ -617,7 +617,7 @@ class VaultCredentialExposureTests(EstateApiTestCase):
         )
         ProviderAccount.objects.create(
             provider=self.provider,
-            login_email="root@example.com",
+            account_email="root@example.com",
             vault_credential=credential,
         )
         response = self.client.get(reverse("estate-account-list"))
@@ -633,7 +633,7 @@ class VaultCredentialExposureTests(EstateApiTestCase):
         )
         ProviderAccount.objects.create(
             provider=self.provider,
-            login_email="root@example.com",
+            account_email="root@example.com",
             vault_credential=credential,
         )
         response = self.client.get(reverse("estate-account-list"))
@@ -680,7 +680,7 @@ class ProviderCrudTests(EstateApiTestCase):
     def test_deleting_a_provider_with_accounts_is_a_409_not_a_500(self):
         provider = Provider.objects.create(name="AWS", slug="aws")
         ProviderAccount.objects.create(
-            provider=provider, login_email="root@example.com"
+            provider=provider, account_email="root@example.com"
         )
         response = self.client.delete(
             reverse("estate-provider-detail", args=[provider.pk])
@@ -707,8 +707,8 @@ class ProviderCrudTests(EstateApiTestCase):
 
     def test_account_count_is_annotated(self):
         provider = Provider.objects.create(name="AWS", slug="aws")
-        ProviderAccount.objects.create(provider=provider, login_email="a@example.com")
-        ProviderAccount.objects.create(provider=provider, login_email="b@example.com")
+        ProviderAccount.objects.create(provider=provider, account_email="a@example.com")
+        ProviderAccount.objects.create(provider=provider, account_email="b@example.com")
         response = self.client.get(reverse("estate-provider-list"))
         self.assertEqual(response.data["results"][0]["account_count"], 2)
 
@@ -728,7 +728,7 @@ class ProviderAccountCrudTests(EstateApiTestCase):
         so the Phase 3 form knows where to look for the message.
         """
         ProviderAccount.objects.create(
-            provider=self.provider, login_email="root@example.com"
+            provider=self.provider, account_email="root@example.com"
         )
         response = self.client.post(
             reverse("estate-account-list"),
@@ -741,7 +741,7 @@ class ProviderAccountCrudTests(EstateApiTestCase):
 
     def test_mfa_severity_travels_with_the_row(self):
         ProviderAccount.objects.create(
-            provider=self.provider, login_email="legacy@example.com", mfa_method="NONE"
+            provider=self.provider, account_email="legacy@example.com", mfa_type="NONE"
         )
         response = self.client.get(reverse("estate-account-list"))
         row = response.data["results"][0]
@@ -750,7 +750,7 @@ class ProviderAccountCrudTests(EstateApiTestCase):
 
     def test_effective_console_url_falls_back_to_the_provider(self):
         ProviderAccount.objects.create(
-            provider=self.provider, login_email="root@example.com"
+            provider=self.provider, account_email="root@example.com"
         )
         response = self.client.get(reverse("estate-account-list"))
         self.assertEqual(
@@ -760,13 +760,13 @@ class ProviderAccountCrudTests(EstateApiTestCase):
 
     def test_missing_mfa_filter_finds_none_and_unknown(self):
         ProviderAccount.objects.create(
-            provider=self.provider, login_email="a@example.com", mfa_method="NONE"
+            provider=self.provider, account_email="a@example.com", mfa_type="NONE"
         )
         ProviderAccount.objects.create(
-            provider=self.provider, login_email="b@example.com", mfa_method="UNKNOWN"
+            provider=self.provider, account_email="b@example.com", mfa_type="UNKNOWN"
         )
         ProviderAccount.objects.create(
-            provider=self.provider, login_email="c@example.com", mfa_method="APP"
+            provider=self.provider, account_email="c@example.com", mfa_type="APP"
         )
         response = self.client.get(
             reverse("estate-account-list"), {"missing_mfa": "true"}
@@ -775,10 +775,10 @@ class ProviderAccountCrudTests(EstateApiTestCase):
 
     def test_mfa_summary_counts_and_severities(self):
         ProviderAccount.objects.create(
-            provider=self.provider, login_email="a@example.com", mfa_method="NONE"
+            provider=self.provider, account_email="a@example.com", mfa_type="NONE"
         )
         ProviderAccount.objects.create(
-            provider=self.provider, login_email="b@example.com", mfa_method="SMS"
+            provider=self.provider, account_email="b@example.com", mfa_type="SMS"
         )
         response = self.client.get(reverse("estate-account-mfa-summary"))
         by_method = {row["mfa_method"]: row for row in response.data["methods"]}
@@ -790,14 +790,14 @@ class ProviderAccountCrudTests(EstateApiTestCase):
 
     def test_service_count_is_annotated(self):
         account = ProviderAccount.objects.create(
-            provider=self.provider, login_email="root@example.com"
+            provider=self.provider, account_email="root@example.com"
         )
         make_subscription(provider_account=account)
         response = self.client.get(reverse("estate-account-list"))
         self.assertEqual(response.data["results"][0]["service_count"], 1)
 
 
-class DigitalPropertyCrudTests(EstateApiTestCase):
+class PropertyCrudTests(EstateApiTestCase):
     def test_name_is_normalised_on_create(self):
         response = self.client.post(
             reverse("estate-property-list"),
@@ -808,7 +808,7 @@ class DigitalPropertyCrudTests(EstateApiTestCase):
         self.assertEqual(response.data["name"], "example.com")
 
     def test_duplicate_name_is_a_400_not_an_integrity_error(self):
-        DigitalProperty.objects.create(name="example.com", kind="CORPORATE")
+        Property.objects.create(name="example.com", kind="CORPORATE")
         response = self.client.post(
             reverse("estate-property-list"),
             {"name": "EXAMPLE.COM", "kind": "APP"},
@@ -818,7 +818,7 @@ class DigitalPropertyCrudTests(EstateApiTestCase):
         self.assertIn("name", response.data)
 
     def test_deleting_a_property_orphans_its_services_and_says_how_many(self):
-        prop = DigitalProperty.objects.create(name="example.com", kind="CORPORATE")
+        prop = Property.objects.create(name="example.com", kind="CORPORATE")
         subscription = make_subscription(digital_property=prop)
         response = self.client.delete(
             reverse("estate-property-detail", args=[prop.pk])
@@ -829,8 +829,8 @@ class DigitalPropertyCrudTests(EstateApiTestCase):
         self.assertTrue(subscription.is_orphan)
 
     def test_kind_filter(self):
-        DigitalProperty.objects.create(name="game.gg", kind="MOBILE_GAME")
-        DigitalProperty.objects.create(name="corp.com", kind="CORPORATE")
+        Property.objects.create(name="game.gg", kind="MOBILE_GAME")
+        Property.objects.create(name="corp.com", kind="CORPORATE")
         response = self.client.get(
             reverse("estate-property-list"), {"kind": "MOBILE_GAME"}
         )
@@ -847,9 +847,9 @@ class OverviewTests(EstateApiTestCase):
             name="Namecheap", slug="namecheap", brand_color="#ff6c2c"
         )
         self.account = ProviderAccount.objects.create(
-            provider=self.provider, login_email="domains@example.com", mfa_method="NONE"
+            provider=self.provider, account_email="domains@example.com", mfa_type="NONE"
         )
-        self.property = DigitalProperty.objects.create(
+        self.property = Property.objects.create(
             name="example.com", kind="CORPORATE"
         )
 

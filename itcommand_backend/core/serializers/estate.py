@@ -19,7 +19,7 @@ from rest_framework import serializers
 
 from core import estate
 from core.models import (
-    DigitalProperty,
+    Property,
     EstateSettings,
     ExchangeRate,
     Provider,
@@ -97,11 +97,24 @@ class ProviderAccountSerializer(serializers.ModelSerializer):
     owner_email = serializers.EmailField(
         source="owner.email", read_only=True, default=None
     )
+    # ── transitional field mapping ──────────────────────────────────────────
+    # The model fields are `account_email` / `auth_type` / `mfa_type` as of
+    # Phase 1, but the JSON keys stay `login_email` / `auth_method` /
+    # `mfa_method` until Phase 3 rewrites the frontend. Flipping the model and
+    # the API in the same commit would break the live Accounts tab for the
+    # phases in between, for no gain — both sides move together in Phase 3.
+    login_email = serializers.CharField(source="account_email", max_length=255)
+    auth_method = serializers.ChoiceField(
+        source="auth_type", choices=estate.AUTH_TYPES, required=False
+    )
+    mfa_method = serializers.ChoiceField(
+        source="mfa_type", choices=estate.MFA_TYPES, required=False
+    )
     auth_method_label = serializers.CharField(
-        source="get_auth_method_display", read_only=True
+        source="get_auth_type_display", read_only=True
     )
     mfa_method_label = serializers.CharField(
-        source="get_mfa_method_display", read_only=True
+        source="get_mfa_type_display", read_only=True
     )
     mfa_severity = serializers.CharField(read_only=True)
     has_mfa = serializers.BooleanField(read_only=True)
@@ -185,7 +198,7 @@ class ProviderAccountSerializer(serializers.ModelSerializer):
     # database constraint where it cannot drift.
 
 
-class DigitalPropertySerializer(serializers.ModelSerializer):
+class PropertySerializer(serializers.ModelSerializer):
     # Override the model's ChoiceField: kinds are admin-managed under Settings →
     # Lists of values, so the model's frozen `choices` must not be the gate.
     # `validate_kind` below checks against the LOV instead. Same reason
@@ -201,7 +214,7 @@ class DigitalPropertySerializer(serializers.ModelSerializer):
     service_count = serializers.IntegerField(read_only=True)
 
     class Meta:
-        model = DigitalProperty
+        model = Property
         fields = [
             "id",
             "name",
@@ -225,7 +238,7 @@ class DigitalPropertySerializer(serializers.ModelSerializer):
         name = (value or "").strip().lower()
         if not name:
             raise serializers.ValidationError("A property needs a name.")
-        clash = DigitalProperty.objects.filter(name=name)
+        clash = Property.objects.filter(name=name)
         if self.instance:
             clash = clash.exclude(pk=self.instance.pk)
         if clash.exists():

@@ -9,8 +9,8 @@ Safe to re-run: matched on slug, and an existing row is left alone unless
 never overwritten by accident.
 
 Usage:
-    python manage.py seed_estate
-    python manage.py seed_estate --refresh
+    python manage.py seed_providers
+    python manage.py seed_providers --refresh
 """
 from django.core.management.base import BaseCommand
 from django.db import transaction
@@ -27,7 +27,10 @@ PROVIDERS = (
     ("godaddy", "GoDaddy", "#1bb8ba", "https://dcc.godaddy.com", "GD"),
     ("hostinger", "Hostinger", "#8b6df0", "https://hpanel.hostinger.com", "H"),
     ("digitalocean", "DigitalOcean", "#0080ff", "https://cloud.digitalocean.com", "DO"),
-    ("vercel", "Vercel", "#000000", "https://vercel.com/dashboard", "V"),
+    ("vercel", "Vercel", "#111111", "https://vercel.com/dashboard", "V"),
+    # Beyond the eight the estate spec names. Both were already seeded and are
+    # in use as provider chips, so dropping them would orphan existing accounts
+    # for no gain; the catalog is a superset, not a contradiction.
     ("firebase", "Firebase", "#ffca28", "https://console.firebase.google.com", "F"),
     ("sentry", "Sentry", "#362d59", "https://sentry.io", "S"),
 )

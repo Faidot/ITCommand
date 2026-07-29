@@ -19,7 +19,7 @@ from rest_framework.test import APIClient
 from core import estate, rbac
 from core.models import (
     AppSettings,
-    DigitalProperty,
+    Property,
     EstateSettings,
     ExchangeRate,
     Integration,
@@ -200,7 +200,7 @@ class EstateSettingsApiTests(SettingsTestCase):
 class SettingsDriveReportsTests(SettingsTestCase):
     def setUp(self):
         super().setUp()
-        self.property = DigitalProperty.objects.create(
+        self.property = Property.objects.create(
             name="example.com", kind="CORPORATE"
         )
 
