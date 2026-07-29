@@ -439,31 +439,54 @@ export function AccountsTab() {
 
   if (loading) return <AccountsSkeleton />;
 
+  // Defined once and rendered by both branches below. The empty state has its
+  // own "Add account" button, so it needs the dialog mounted just as much as
+  // the table does — leaving it out of that branch made the very first account
+  // unaddable, the one moment the button matters most.
+  const accountDialog = (
+    <AccountDialog
+      open={dialogOpen}
+      onOpenChange={setDialogOpen}
+      account={editing}
+      providers={providers}
+      users={users}
+      onSaved={() => {
+        setDialogOpen(false);
+        setEditing(null);
+        void loadData(true);
+      }}
+    />
+  );
+
   if (accounts.length === 0) {
     return (
-      <Card>
-        <CardContent className="pt-1">
-          <div className="flex flex-col items-center justify-center gap-3 px-6 py-10 text-center">
-            <div className={`rounded-xl p-2.5 ${SEVERITY_TONE.muted}`}>
-              <KeyRound className="h-5 w-5" />
+      <div className="space-y-3">
+        <Card>
+          <CardContent className="pt-1">
+            <div className="flex flex-col items-center justify-center gap-3 px-6 py-10 text-center">
+              <div className={`rounded-xl p-2.5 ${SEVERITY_TONE.muted}`}>
+                <KeyRound className="h-5 w-5" />
+              </div>
+              <p className="text-sm font-medium">
+                No provider accounts yet. Add the logins you hold at AWS, Cloudflare and the rest
+                so services can be traced back to a person.
+              </p>
+              {canAdd && (
+                <Button
+                  onClick={() => {
+                    setEditing(null);
+                    setDialogOpen(true);
+                  }}
+                >
+                  <Plus className="mr-2 h-4 w-4" /> Add account
+                </Button>
+              )}
             </div>
-            <p className="text-sm font-medium">
-              No provider accounts yet. Add the logins you hold at AWS, Cloudflare and the rest
-              so services can be traced back to a person.
-            </p>
-            {canAdd && (
-              <Button
-                onClick={() => {
-                  setEditing(null);
-                  setDialogOpen(true);
-                }}
-              >
-                <Plus className="mr-2 h-4 w-4" /> Add account
-              </Button>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+          </CardContent>
+        </Card>
+
+        {accountDialog}
+      </div>
     );
   }
 
@@ -661,18 +684,7 @@ export function AccountsTab() {
         </CardContent>
       </Card>
 
-      <AccountDialog
-        open={dialogOpen}
-        onOpenChange={setDialogOpen}
-        account={editing}
-        providers={providers}
-        users={users}
-        onSaved={() => {
-          setDialogOpen(false);
-          setEditing(null);
-          void loadData(true);
-        }}
-      />
+      {accountDialog}
     </div>
   );
 }
