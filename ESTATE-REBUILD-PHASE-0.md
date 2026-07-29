@@ -565,6 +565,60 @@ tracked list with the seven stack roles. The diagram and the gap count read it;
 2. **`ProviderAccount` JSON keys are still `login_email` / `auth_method` / `mfa_method`.** The frontend normalises them to the model vocabulary in `estate-types.ts`, so the UI reads correctly; flipping the API keys is a backend change better made when the old subscription serializers go.
 3. **Accounts are edited in a single-form dialog, not the wizard.** The 5-step flow is for services, as specified; a five-step modal for four fields would be worse.
 
-### Consequence of the clean-drop decision, now visible
+---
 
-The estate endpoints read `Service`, which has **0 rows**. Until Phase 4 seeds demo data or the services are re-entered, the Estate tab renders empty. The 4 old subscriptions remain only in `~/it-command-backups/legacy-subscriptions-2026-07-29.json`.
+## Phase 4 — delivered
+
+`manage.py seed_estate_demo`, development only.
+
+```bash
+python manage.py seed_estate_demo           # idempotent
+python manage.py seed_estate_demo --clear   # removes only what it created
+python manage.py seed_estate_demo --force   # required outside DEBUG
+```
+
+Seeds **8 properties, 6 provider accounts, 26 services**. Re-running adds
+nothing. Verified on the live database: `--clear` removed exactly its own 26
+services, 8 properties and 6 accounts, leaving `terafort.com`, the real provider
+account and all 10 catalog providers untouched.
+
+**Demo rows are marked by a `[seed_estate_demo]` sentinel in `notes`.** A marker
+beats a hardcoded name list because a renamed demo row is still removable, and
+beats a dedicated column because three production models should not carry a
+field that exists only for a dev command. The trade-off, documented in the
+command: `--clear` will miss a row whose notes have been rewritten by hand.
+
+`--clear` also **refuses to delete an account that has since acquired a real
+service** — deleting it would either fail on the `PROTECT` or take the real
+record with it. It reports which account it kept and why.
+
+### Acceptance criteria — verified against the seeded data
+
+| Criterion | Result |
+|---|---|
+| Timeline shows red / amber / neutral simultaneously | **3 / 5 / 6** |
+| Accounts shows at least one red and one amber MFA badge | 1 critical, 1 warning, 2 muted, 4 ok |
+| Property detail shows all 7 stack nodes, gaps included | every property renders 7 |
+| At least one complete stack | `pixelforge-arena.example` — 7/7 |
+| At least one genuine stack gap | 7 of 8 properties, 2–6 gaps each |
+| ≥2 at-risk services | `quillbox.example`, `stellar-drift.example` |
+| ≥2 orphans | design suite, issue tracker |
+| All 8 service types | REGISTRAR·DNS·HOSTING·MAIL·CDN·TLS·ANALYTICS·SAAS |
+| All 4 billing cycles | MONTHLY·YEARLY·USAGE·FREE |
+| Fictional only | all domains `.example`, all logins `@example.invalid` |
+
+22 tests in `test_estate_demo_seed.py`, covering the DEBUG guard, `--force`,
+idempotency, and that `--clear` leaves real rows alone.
+
+### Two deliberate additions beyond the brief's list
+
+1. **SaaS attached to a property as well as orphaned.** With SaaS only ever orphaned, the property page's "other services" panel was empty on all eight properties and read as broken rather than unused. Two attached SaaS rows fix that.
+2. **A service renewing in 6 days *with* auto-renew on.** Red on the timeline and deliberately not at-risk — the dataset has to show that "renews soon" and "at risk" are different questions, or the distinction cannot be judged from the demo.
+
+### Consequence of the clean-drop decision
+
+The estate endpoints read `Service`. Before this phase it had **0 rows** and
+every screen showed an empty state. The demo seeder now fills it for
+development; **the 4 original subscriptions were not restored** and remain only
+in `~/it-command-backups/legacy-subscriptions-2026-07-29.json`. Re-entering the
+real services is manual, and the demo data should be cleared first.
