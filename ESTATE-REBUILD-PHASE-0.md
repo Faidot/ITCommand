@@ -622,3 +622,73 @@ every screen showed an empty state. The demo seeder now fills it for
 development; **the 4 original subscriptions were not restored** and remain only
 in `~/it-command-backups/legacy-subscriptions-2026-07-29.json`. Re-entering the
 real services is manual, and the demo data should be cleared first.
+
+
+---
+
+## Phase 5 — delivered, in two commits
+
+Split deliberately: **5a** moves every consumer off the old models and changes
+no data; **5b** is the one-way step. The brief asked for the deletion to stand
+alone, and it does — 5b can be reviewed, deferred or reverted without dragging
+the repointing with it.
+
+### 5a — nothing deleted from the database
+
+`Service` gained four fields beyond the estate spec's list. Each is here
+because retiring `Subscription` without it would have deleted a working feature
+by omission:
+
+| Field | Without it |
+|---|---|
+| `budget_category` | the Cost Overview's budget-impact panel stops working |
+| `vendor` | vendor annual-commitment reporting stops working |
+| `billing_descriptor` | Brex loses its authoritative card-charge match |
+| `payment_card` | "which card is this on" — the question Brex exists to answer |
+
+Repointed: `finance_estate`, `calendar_feed`, `brex`, `reports`, `lov`,
+`vendors`. `SubscriptionPayment` became `ServicePayment`.
+
+### 5b — eleven models dropped
+
+`SubscriptionAlertLog`, `SubscriptionAssignment`, `SubscriptionRenewal`,
+`SubscriptionCategoryBudget`, `SubscriptionSettings`, `Subscription`,
+`LicenseAlert`, `LicenseAssignment`, `LicenseRenewal`, `SoftwareLicense`,
+`SoftwareProduct` — children before parents. Plus the `licenses` and
+`subscriptions` RBAC keys.
+
+**Reverse executed, not assumed.** `migrate core 0068` restored the eight
+tables and both role keys (from each role's `estate` grants — the exact inverse
+of 0067). It restored **zero rows**: `DeleteModel` cannot. Row recovery is the
+snapshot and JSON dump in `~/it-command-backups/`, and nothing else.
+
+### Capabilities removed, flagged not silent
+
+1. **The renewal → Expense / RecurringBill write path.** It booked into the ledger when a `Subscription` auto-renewed, and was reachable only from the subscription viewset and its command. `Service` has no renewal record. `EstateSettings.create_expense_on_renewal` is retained, **defaulted off**, for whenever it is rebuilt.
+2. **Per-user licence and subscription seats in the Master Report.** A Service is bought through a provider account, not assigned to a person. Reporting an empty list under the old heading would be worse than reporting nothing.
+3. **Licence spend in the Cost Overview's grand total.** Estate services are a recurring commitment, not an unbooked purchase, and are reported separately under `budget_impact` for exactly that reason.
+4. **Renewal alerting.** `subscription_alerts.py` and its scheduled command are gone; the estate has no alerting pipeline yet.
+5. **Cancellation-deadline calendar events.** `Service` has no cancellation window.
+
+### On the four subscription rows
+
+They were already gone before any Phase 5 migration ran. The audit log records
+`user_id=1` deleting subscriptions 8–11 and licence 11 through the UI at
+**07:36–07:37 UTC on 2026-07-29** — while Phase 2 was in progress. The
+11:59-local snapshot predates that and still contains all four
+(`Rapid API`, `Calude`, `Registrar — WWW`, `Hosting — WWW`), as does
+`legacy-subscriptions-2026-07-29.json`.
+
+### Verification
+
+`makemigrations --check`: no changes detected — model state and migrations
+agree. `manage.py test`: **398 tests, OK**. Frontend: `tsc`, `eslint` and
+`next build` all clean, with no `/licenses` or `/subscriptions` routes left in
+the build output.
+
+Manual walkthrough: `DIGITAL-ESTATE-TESTING.md`.
+
+### Still outstanding
+
+The five tracked `db.sqlite3.bak-pre-*` snapshots (~8.4 MB, live vault
+ciphertext). Raised in Phase 0 as decision 5; never answered.
