@@ -329,9 +329,10 @@ class ExpenseViewSet(AuditLogMixin, viewsets.ModelViewSet):
                 paid_to=e.get('paid_to') or shared_paid_to,
                 source_id=e.get('source') or shared_source,
                 linked_asset_id=e.get('linked_asset') or None,
-                linked_license_id=e.get('linked_license') or None,
                 linked_purchase_request_id=e.get('linked_purchase_request') or None,
-                linked_subscription_id=e.get('linked_subscription') or None,
+                # `linked_license` went with the licences module; the estate
+                # equivalent of `linked_subscription` is `linked_service`.
+                linked_service_id=e.get('linked_service') or None,
                 receipt_number=bill_number or e.get('receipt_number', ''),
                 description=e.get('description', ''),
                 bill=bill,

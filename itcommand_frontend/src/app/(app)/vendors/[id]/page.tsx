@@ -29,7 +29,7 @@ export default function VendorDetailPage() {
   const [vendor, setVendor] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [assets, setAssets] = useState<any[]>([]);
-  const [licenses, setLicenses] = useState<any[]>([]);
+  const [services, setServices] = useState<any[]>([]);
   const [bills, setBills] = useState<any[]>([]);
   const [newNote, setNewNote] = useState("");
 
@@ -73,7 +73,7 @@ export default function VendorDetailPage() {
         api.get(`/vendors/${vendorId}/bills/`)
       ]);
       setAssets(assRes.data);
-      setLicenses(licRes.data);
+      setServices(licRes.data?.results ?? licRes.data ?? []);
       setBills(bilRes.data);
     } catch {
       console.error("Failed to load related data");
@@ -241,8 +241,8 @@ export default function VendorDetailPage() {
               <TabsTrigger value="assets" className="rounded-none border-b-2 border-transparent data-[state=active]:border-violet-600 data-[state=active]:bg-transparent py-3 px-4">
                 Assets ({assets.length})
               </TabsTrigger>
-              <TabsTrigger value="licenses" className="rounded-none border-b-2 border-transparent data-[state=active]:border-violet-600 data-[state=active]:bg-transparent py-3 px-4">
-                Licenses ({licenses.length})
+              <TabsTrigger value="services" className="rounded-none border-b-2 border-transparent data-[state=active]:border-violet-600 data-[state=active]:bg-transparent py-3 px-4">
+                Services ({services.length})
               </TabsTrigger>
               <TabsTrigger value="notes" className="rounded-none border-b-2 border-transparent data-[state=active]:border-violet-600 data-[state=active]:bg-transparent py-3 px-4">
                 Notes
@@ -397,33 +397,33 @@ export default function VendorDetailPage() {
               </Card>
             </TabsContent>
 
-            <TabsContent value="licenses" className="mt-4">
+            <TabsContent value="services" className="mt-4">
               <Card>
                 <div className="p-4 border-b">
                   <h3 className="font-semibold text-lg flex items-center gap-2">
-                    <KeyRound className="w-5 h-5 text-violet-500" /> Supplied Licenses
+                    <KeyRound className="w-5 h-5 text-violet-500" /> Estate Services
                   </h3>
                 </div>
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Product</TableHead>
+                      <TableHead>Service</TableHead>
                       <TableHead>Type</TableHead>
-                      <TableHead>Seats</TableHead>
+                      <TableHead>Cost</TableHead>
                       <TableHead>Status</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {licenses.length === 0 ? (
-                      <TableRow><TableCell colSpan={4} className="text-center py-8 text-neutral-500">No licenses linked to this vendor.</TableCell></TableRow>
+                    {services.length === 0 ? (
+                      <TableRow><TableCell colSpan={4} className="text-center py-8 text-neutral-500">No estate services linked to this vendor.</TableCell></TableRow>
                     ) : (
-                      licenses.map((l: any) => (
-                        <TableRow key={l.id}>
-                          <TableCell className="font-medium text-sm text-violet-600">{l.product_name}</TableCell>
-                          <TableCell className="text-sm"><Badge variant="outline">{l.license_type}</Badge></TableCell>
-                          <TableCell className="text-sm">{l.seats_used} / {l.seats_total || '∞'}</TableCell>
+                      services.map((sv: any) => (
+                        <TableRow key={sv.id}>
+                          <TableCell className="font-medium text-sm text-violet-600">{sv.identifier}</TableCell>
+                          <TableCell className="text-sm"><Badge variant="outline">{sv.service_type_label}</Badge></TableCell>
+                          <TableCell className="text-sm tabular-nums">{sv.currency} {sv.cost}</TableCell>
                           <TableCell>
-                            {l.is_expired ? <Badge variant="destructive">Expired</Badge> : <Badge className="bg-emerald-100 text-emerald-800">Active</Badge>}
+                            {sv.is_at_risk ? <Badge variant="destructive">At risk</Badge> : <Badge className="bg-emerald-100 text-emerald-800">{sv.status_label}</Badge>}
                           </TableCell>
                         </TableRow>
                       ))

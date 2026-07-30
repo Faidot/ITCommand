@@ -281,3 +281,35 @@ class RetiredWritePathTests(FinanceEstateTestCase):
             "renewal_expense_amount",
         ):
             self.assertFalse(hasattr(finance_estate, name), name)
+
+
+class BulkExpenseLinkTests(FinanceEstateTestCase):
+    """The bulk-create path had no coverage, which is how it kept setting
+    `linked_license_id` and `linked_subscription_id` through Phase 5 while the
+    suite stayed green. Those columns are gone; this pins the replacement."""
+
+    def test_a_bulk_expense_can_link_to_an_estate_service(self):
+        service = self.service(cost=Decimal("1000.00"))
+        response = self.client.post(
+            reverse("finance-expense-upload"),
+            {
+                "expense_date": timezone.localdate().isoformat(),
+                "category": self.category.pk,
+                "financial_year": self.year.pk,
+                "entries": [
+                    {
+                        "title": "Hosting renewal",
+                        "amount": "1000.00",
+                        "linked_service": service.pk,
+                    }
+                ],
+            },
+            format="json",
+        )
+        self.assertIn(
+            response.status_code,
+            (status.HTTP_200_OK, status.HTTP_201_CREATED),
+            response.data,
+        )
+        expense = Expense.objects.get(title="Hosting renewal")
+        self.assertEqual(expense.linked_service_id, service.pk)
