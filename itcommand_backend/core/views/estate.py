@@ -161,6 +161,32 @@ class ProviderAccountViewSet(AuditLogMixin, viewsets.ModelViewSet):
             queryset = queryset.filter(owner__isnull=True)
         return queryset
 
+    def destroy(self, request, *args, **kwargs):
+        """An account with services is PROTECTed. Say why, don't 500.
+
+        Same 409 pattern as deleting a provider that still has accounts. The
+        protection is the point — deleting the login would orphan the money
+        records that were bought through it — so the answer is a sentence
+        telling you what to move first, not a stack trace.
+        """
+        account = self.get_object()
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ProtectedError:
+            in_use = account.services.count()
+            return Response(
+                {
+                    "detail": (
+                        f'Cannot delete "{account.account_email}": {in_use} '
+                        f"service(s) are bought through it. Move them to another "
+                        f"account first, or mark this one inactive to hide it "
+                        f"from pickers."
+                    ),
+                    "service_count": in_use,
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+
     @action(detail=False, methods=["get"], url_path="mfa-summary")
     def mfa_summary(self, request):
         """Counts per MFA method, with the severity the UI must colour by."""

@@ -1,7 +1,13 @@
 "use client";
 
 /**
- * The Digital Estate shell: a header, the sub-nav, and the ⌘K palette.
+ * The Digital Estate shell: a header and the sub-nav.
+ *
+ * No command palette here. The top bar already binds ⌘K globally and searches
+ * /api/search/; the estate's properties, accounts and services were added to
+ * that endpoint instead. A second binding meant two dialogs opened on one
+ * keypress, and a search that only worked inside /estate is a worse answer
+ * than one that works everywhere.
  *
  * The sub-nav is real routing rather than tab state. Each screen fetches its
  * own data and is independently linkable, which the previous tabbed version
@@ -16,7 +22,6 @@ import { can } from "@/lib/permissions";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
 
-import { EstateCommandPalette } from "./command-palette";
 import { AddServiceProvider, useAddServiceDialog } from "./add-service-context";
 
 const TABS = [
@@ -72,9 +77,6 @@ function EstateShell({ children }: { children: React.ReactNode }) {
           </p>
         </div>
         <div className="flex items-center gap-2">
-          <kbd className="hidden rounded border bg-muted px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline-block">
-            ⌘K
-          </kbd>
           {canAdd && (
             <Button size="sm" onClick={() => openAddService()}>
               <Plus className="mr-2 h-4 w-4" /> Add service
@@ -85,8 +87,6 @@ function EstateShell({ children }: { children: React.ReactNode }) {
 
       <SubNav />
       {children}
-
-      <EstateCommandPalette onAddService={canAdd ? () => openAddService() : undefined} />
     </div>
   );
 }

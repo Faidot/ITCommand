@@ -591,3 +591,135 @@ class StackGapScopeTests(Phase2TestCase):
         )
         self.assertEqual(row["missing_count"], len(estate.STACK_TYPE_CODES))
         self.assertNotIn("STORAGE", row["missing_layers"])
+
+
+# ───────────────────────── delete paths and global search ─────────────────────
+
+class DeleteTests(Phase2TestCase):
+    """Every estate screen offers delete, so every refusal has to be a
+    sentence rather than a stack trace."""
+
+    def test_deleting_an_account_with_services_is_a_409_not_a_500(self):
+        """The PROTECT is the point — deleting the login would orphan the money
+        records bought through it. The answer must say what to move first."""
+        self.make(name="a service", currency="PKR")
+        response = self.client.delete(
+            reverse("estate-account-detail", args=[self.account.pk])
+        )
+        self.assertEqual(response.status_code, status.HTTP_409_CONFLICT)
+        self.assertEqual(response.data["service_count"], 1)
+        self.assertIn("Move them to another account", response.data["detail"])
+        self.assertTrue(ProviderAccount.objects.filter(pk=self.account.pk).exists())
+
+    def test_deleting_an_unused_account_works(self):
+        spare = ProviderAccount.objects.create(
+            provider=self.provider, account_email="spare@example.invalid"
+        )
+        response = self.client.delete(reverse("estate-account-detail", args=[spare.pk]))
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+    def test_deleting_a_property_orphans_its_services_and_says_how_many(self):
+        """Losing the money record because someone tidied a domain would be
+        far worse than an orphan row, so SET_NULL is deliberate — but the
+        number moves a KPI, so it is reported."""
+        service = self.make(name="attached", digital_property=self.property,
+                            currency="PKR")
+        response = self.client.delete(
+            reverse("estate-property-detail", args=[self.property.pk])
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data["orphaned_count"], 1)
+        service.refresh_from_db()
+        self.assertTrue(service.is_orphan)
+
+    def test_deleting_a_service_removes_it_from_spend(self):
+        service = self.make(name="going away", currency="PKR",
+                            cost=Decimal("5000.00"))
+        before = self.client.get(reverse("estate_dashboard")).data["kpis"]
+        self.assertEqual(before["active_services"], 1)
+
+        response = self.client.delete(
+            reverse("estate-service-detail", args=[service.pk])
+        )
+        self.assertEqual(response.status_code, status.HTTP_204_NO_CONTENT)
+
+        after = self.client.get(reverse("estate_dashboard")).data["kpis"]
+        self.assertEqual(after["active_services"], 0)
+        self.assertEqual(Decimal(after["monthly_spend"]), Decimal("0.00"))
+
+    def test_a_delete_writes_an_audit_row(self):
+        service = self.make(name="audited", currency="PKR")
+        AuditLog.objects.all().delete()
+        self.client.delete(reverse("estate-service-detail", args=[service.pk]))
+        self.assertTrue(
+            AuditLog.objects.filter(model_name="Service", action="DELETE").exists()
+        )
+
+    def test_edit_permission_alone_does_not_allow_delete(self):
+        """`estate.edit` and `estate.delete` are separate grants, and the UI
+        hides the action — but the API is the real gate."""
+        editor_role = rbac.blank_permissions()
+        editor_role["estate"] = {
+            "view": True, "add": True, "edit": True, "delete": False,
+        }
+        Role.objects.create(slug="EDIT_NO_DELETE", name="Editor",
+                            permissions=editor_role)
+        user = create_user("editor@example.com", "EDIT_NO_DELETE")
+        service = self.make(name="protected", currency="PKR")
+
+        self.client.force_authenticate(user)
+        # It can edit …
+        self.assertEqual(
+            self.client.patch(
+                reverse("estate-service-detail", args=[service.pk]),
+                {"identifier": "renamed"},
+                format="json",
+            ).status_code,
+            status.HTTP_200_OK,
+        )
+        # … but not delete.
+        self.assertEqual(
+            self.client.delete(
+                reverse("estate-service-detail", args=[service.pk])
+            ).status_code,
+            status.HTTP_403_FORBIDDEN,
+        )
+        self.assertTrue(Service.objects.filter(pk=service.pk).exists())
+
+
+class GlobalSearchTests(Phase2TestCase):
+    """The estate is reachable from the top bar's ⌘K, not a second palette
+    bound to the same key inside /estate."""
+
+    def setUp(self):
+        super().setUp()
+        self.make(name="pixelforge zone", digital_property=self.property,
+                  currency="PKR")
+
+    def search(self, query):
+        response = self.client.get("/api/search/", {"q": query})
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        return response.data
+
+    def test_a_property_is_findable(self):
+        rows = [r for r in self.search("example") if r["category"] == "Properties"]
+        self.assertTrue(rows)
+        self.assertTrue(rows[0]["link"].startswith("/estate/properties/"))
+
+    def test_a_service_is_findable(self):
+        rows = [r for r in self.search("pixelforge") if r["category"] == "Services"]
+        self.assertEqual(rows[0]["title"], "pixelforge zone")
+
+    def test_an_account_is_findable_by_provider_name(self):
+        rows = [
+            r for r in self.search("cloudflare")
+            if r["category"] == "Provider accounts"
+        ]
+        self.assertTrue(rows)
+
+    def test_a_role_without_estate_view_finds_no_estate_rows(self):
+        self.client.force_authenticate(self.blocked)
+        categories = {r["category"] for r in self.search("pixelforge")}
+        self.assertNotIn("Services", categories)
+        self.assertNotIn("Properties", categories)
+        self.assertNotIn("Provider accounts", categories)

@@ -48,6 +48,8 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 import { useAddServiceDialog } from "../add-service-context";
+import { RowActions } from "../row-actions";
+import { ServiceDialog } from "./service-dialog";
 import {
   ConsoleLink,
   CredentialCopyButton,
@@ -86,6 +88,7 @@ export default function EstateServicesPage() {
   const user = useAuthStore((state) => state.user);
   const canEdit = can(user, "estate", "edit");
   const canAdd = can(user, "estate", "add");
+  const canDelete = can(user, "estate", "delete");
   const { open: openAddService, version } = useAddServiceDialog();
 
   const [services, setServices] = useState<Service[]>([]);
@@ -95,6 +98,7 @@ export default function EstateServicesPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [savingIds, setSavingIds] = useState<Set<number>>(new Set());
+  const [editing, setEditing] = useState<Service | null>(null);
 
   // Seeded from the URL so the dashboard KPIs and the ⌘K palette can deep-link
   // into a filtered view.
@@ -370,7 +374,8 @@ export default function EstateServicesPage() {
                     <TableHead className="text-center">Auto</TableHead>
                     <TableHead className="text-right">Cost</TableHead>
                     <TableHead>Secret</TableHead>
-                    <TableHead className="pr-4 text-right">Console</TableHead>
+                    <TableHead className="text-right">Console</TableHead>
+                    <TableHead className="w-10 pr-4" />
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -500,8 +505,23 @@ export default function EstateServicesPage() {
                             serviceId={service.id}
                           />
                         </TableCell>
-                        <TableCell className="pr-4 text-right">
+                        <TableCell className="text-right">
                           <ConsoleLink url={service.console_url} />
+                        </TableCell>
+                        <TableCell className="pr-4 text-right">
+                          <RowActions
+                            canEdit={canEdit}
+                            canDelete={canDelete}
+                            onEdit={() => setEditing(service)}
+                            deleteUrl={`/estate/services/${service.id}/`}
+                            deleteTitle={service.identifier}
+                            deleteBody={
+                              service.property_name
+                                ? `This removes it from ${service.property_name}'s stack and from every spend total. Its cost stops being counted.`
+                                : "This removes it from every spend total. Its cost stops being counted."
+                            }
+                            onDeleted={() => void loadServices(filters, true)}
+                          />
                         </TableCell>
                       </TableRow>
                     );
@@ -512,6 +532,16 @@ export default function EstateServicesPage() {
           </CardContent>
         </Card>
       )}
+
+      <ServiceDialog
+        open={editing !== null}
+        onOpenChange={(next) => !next && setEditing(null)}
+        service={editing}
+        onSaved={() => {
+          setEditing(null);
+          void loadServices(filters, true);
+        }}
+      />
 
       {services.length > 0 && (
         <p className="px-1 text-xs text-muted-foreground">

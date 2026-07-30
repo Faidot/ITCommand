@@ -23,6 +23,7 @@ import { Input } from "@/components/ui/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 
 import { PropertyDialog } from "./property-dialog";
+import { RowActions } from "../row-actions";
 import { useAddServiceDialog } from "../add-service-context";
 import { CardGridSkeleton, EmptyState } from "../estate-ui";
 import {
@@ -84,6 +85,8 @@ export default function EstatePropertiesPage() {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
   const canAdd = can(user, "estate", "add");
+  const canEdit = can(user, "estate", "edit");
+  const canDelete = can(user, "estate", "delete");
   const { version } = useAddServiceDialog();
 
   const [cards, setCards] = useState<PropertyCard[]>([]);
@@ -92,6 +95,7 @@ export default function EstatePropertiesPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editing, setEditing] = useState<EstateProperty | null>(null);
 
   const load = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
@@ -166,10 +170,14 @@ export default function EstatePropertiesPage() {
   const dialog = (
     <PropertyDialog
       open={dialogOpen}
-      onOpenChange={setDialogOpen}
-      property={null}
+      onOpenChange={(next) => {
+        setDialogOpen(next);
+        if (!next) setEditing(null);
+      }}
+      property={editing}
       onSaved={() => {
         setDialogOpen(false);
+        setEditing(null);
         void load(true);
       }}
     />
@@ -187,7 +195,12 @@ export default function EstatePropertiesPage() {
               title="No properties yet. Add a domain, app or site, then attach the services that keep it running."
               action={
                 canAdd ? (
-                  <Button onClick={() => setDialogOpen(true)}>
+                  <Button
+                    onClick={() => {
+                      setEditing(null);
+                      setDialogOpen(true);
+                    }}
+                  >
                     <Plus className="mr-2 h-4 w-4" /> Add property
                   </Button>
                 ) : undefined
@@ -223,7 +236,13 @@ export default function EstatePropertiesPage() {
             Refresh
           </Button>
           {canAdd && (
-            <Button size="sm" onClick={() => setDialogOpen(true)}>
+            <Button
+              size="sm"
+              onClick={() => {
+                setEditing(null);
+                setDialogOpen(true);
+              }}
+            >
               <Plus className="mr-2 h-4 w-4" /> Add property
             </Button>
           )}
@@ -263,9 +282,27 @@ export default function EstatePropertiesPage() {
                         {card.owner_name || "No owner"}
                       </p>
                     </div>
-                    <Badge variant="outline" className="shrink-0 text-[10px]">
-                      {card.kind_label}
-                    </Badge>
+                    <div className="flex shrink-0 items-center gap-1">
+                      <Badge variant="outline" className="text-[10px]">
+                        {card.kind_label}
+                      </Badge>
+                      <RowActions
+                        canEdit={canEdit}
+                        canDelete={canDelete}
+                        onEdit={() => {
+                          setEditing(card);
+                          setDialogOpen(true);
+                        }}
+                        deleteUrl={`/estate/properties/${card.id}/`}
+                        deleteTitle={card.name}
+                        deleteBody={
+                          card.service_count > 0
+                            ? `Its ${card.service_count} service${card.service_count === 1 ? "" : "s"} are not deleted — they become orphans and will need reassigning.`
+                            : "It has no services attached, so nothing else changes."
+                        }
+                        onDeleted={() => void load(true)}
+                      />
+                    </div>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">

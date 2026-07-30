@@ -50,6 +50,7 @@ import {
 } from "@/components/ui/table";
 
 import { AccountDialog } from "./account-dialog";
+import { RowActions } from "../row-actions";
 import { useAddServiceDialog } from "../add-service-context";
 import {
   ConsoleLink,
@@ -82,6 +83,7 @@ export default function EstateAccountsPage() {
   const user = useAuthStore((state) => state.user);
   const canAdd = can(user, "estate", "add");
   const canEdit = can(user, "estate", "edit");
+  const canDelete = can(user, "estate", "delete");
   const { version } = useAddServiceDialog();
 
   const [accounts, setAccounts] = useState<ProviderAccount[]>([]);
@@ -378,20 +380,22 @@ export default function EstateAccountsPage() {
                           <TableCell className="pr-4 text-right">
                             <span className="flex items-center justify-end gap-2">
                               <ConsoleLink url={account.effective_console_url} />
-                              {canEdit && (
-                                <Button
-                                  variant="ghost"
-                                  size="sm"
-                                  className="h-7 px-2 text-xs"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    setEditing(account);
-                                    setDialogOpen(true);
-                                  }}
-                                >
-                                  Edit
-                                </Button>
-                              )}
+                              <RowActions
+                                canEdit={canEdit}
+                                canDelete={canDelete}
+                                onEdit={() => {
+                                  setEditing(account);
+                                  setDialogOpen(true);
+                                }}
+                                deleteUrl={`/estate/accounts/${account.id}/`}
+                                deleteTitle={account.account_email}
+                                deleteBody={
+                                  account.service_count > 0
+                                    ? `${account.service_count} service${account.service_count === 1 ? " is" : "s are"} bought through this login, so the server will refuse. Move them to another account first, or mark this one inactive.`
+                                    : "Nothing is bought through this login, so nothing else changes."
+                                }
+                                onDeleted={() => void load(true)}
+                              />
                             </span>
                           </TableCell>
                         </TableRow>

@@ -32,6 +32,9 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Skeleton } from "@/components/ui/skeleton";
 
 import { useAddServiceDialog } from "../../add-service-context";
+import { RowActions } from "../../row-actions";
+import { PropertyDialog } from "../property-dialog";
+import { ServiceDialog } from "../../services/service-dialog";
 import {
   ConsoleLink,
   CredentialCopyButton,
@@ -55,10 +58,33 @@ function urgencyOf(days: number | null) {
 }
 
 /** One service inside a stack node. */
-function ServiceBody({ service }: { service: Service }) {
+function ServiceBody({
+  service,
+  canEdit,
+  canDelete,
+  onEdit,
+  onChanged,
+}: {
+  service: Service;
+  canEdit: boolean;
+  canDelete: boolean;
+  onEdit: (service: Service) => void;
+  onChanged: () => void;
+}) {
   return (
     <div className="space-y-1.5">
-      <p className="truncate text-sm font-medium">{service.identifier}</p>
+      <div className="flex items-start justify-between gap-1">
+        <p className="truncate text-sm font-medium">{service.identifier}</p>
+        <RowActions
+          canEdit={canEdit}
+          canDelete={canDelete}
+          onEdit={() => onEdit(service)}
+          deleteUrl={`/estate/services/${service.id}/`}
+          deleteTitle={service.identifier}
+          deleteBody="This removes it from the stack and from every spend total. Its cost stops being counted."
+          onDeleted={onChanged}
+        />
+      </div>
       <ProviderChip
         name={service.provider_name}
         color={service.brand_color}
@@ -101,11 +127,19 @@ function ServiceBody({ service }: { service: Service }) {
 function StackNode({
   layer,
   canAdd,
+  canEdit,
+  canDelete,
   onAttach,
+  onEditService,
+  onChanged,
 }: {
   layer: StackLayer;
   canAdd: boolean;
+  canEdit: boolean;
+  canDelete: boolean;
   onAttach: (serviceType: string) => void;
+  onEditService: (service: Service) => void;
+  onChanged: () => void;
 }) {
   const filled = layer.services.length > 0;
   return (
@@ -123,7 +157,14 @@ function StackNode({
         {filled ? (
           <div className="space-y-3">
             {layer.services.map((service) => (
-              <ServiceBody key={service.id} service={service} />
+              <ServiceBody
+                key={service.id}
+                service={service}
+                canEdit={canEdit}
+                canDelete={canDelete}
+                onEdit={onEditService}
+                onChanged={onChanged}
+              />
             ))}
           </div>
         ) : (
@@ -157,12 +198,16 @@ export default function PropertyDetailPage() {
   const router = useRouter();
   const user = useAuthStore((state) => state.user);
   const canAdd = can(user, "estate", "add");
+  const canEdit = can(user, "estate", "edit");
+  const canDelete = can(user, "estate", "delete");
   const { open: openAddService, version } = useAddServiceDialog();
 
   const propertyId = Number(params?.id);
   const [stack, setStack] = useState<PropertyStack | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [editingProperty, setEditingProperty] = useState(false);
+  const [editingService, setEditingService] = useState<Service | null>(null);
 
   const load = useCallback(
     async (silent = false) => {
@@ -252,16 +297,51 @@ export default function PropertyDetailPage() {
             </p>
           </div>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void load(true)}
-          disabled={refreshing}
-        >
-          <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void load(true)}
+            disabled={refreshing}
+          >
+            <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+            Refresh
+          </Button>
+          <RowActions
+            canEdit={canEdit}
+            canDelete={canDelete}
+            onEdit={() => setEditingProperty(true)}
+            deleteUrl={`/estate/properties/${property.id}/`}
+            deleteTitle={property.name}
+            deleteBody={
+              property.service_count > 0
+                ? `Its ${property.service_count} service${property.service_count === 1 ? "" : "s"} are not deleted — they become orphans and will need reassigning.`
+                : "It has no services attached, so nothing else changes."
+            }
+            onDeleted={() => router.push("/estate/properties")}
+          />
+        </div>
       </div>
+
+      <PropertyDialog
+        open={editingProperty}
+        onOpenChange={setEditingProperty}
+        property={property}
+        onSaved={() => {
+          setEditingProperty(false);
+          void load(true);
+        }}
+      />
+
+      <ServiceDialog
+        open={editingService !== null}
+        onOpenChange={(next) => !next && setEditingService(null)}
+        service={editingService}
+        onSaved={() => {
+          setEditingService(null);
+          void load(true);
+        }}
+      />
 
       <Card>
         <CardContent className="pt-1">
@@ -273,9 +353,13 @@ export default function PropertyDetailPage() {
                   key={layer.layer}
                   layer={layer}
                   canAdd={canAdd}
+                  canEdit={canEdit}
+                  canDelete={canDelete}
                   onAttach={(serviceType) =>
                     openAddService({ property: property.id, service_type: serviceType })
                   }
+                  onEditService={setEditingService}
+                  onChanged={() => void load(true)}
                 />
               ))}
             </div>
@@ -313,7 +397,13 @@ export default function PropertyDetailPage() {
                       </Badge>
                     )}
                   </div>
-                  <ServiceBody service={service} />
+                  <ServiceBody
+                    service={service}
+                    canEdit={canEdit}
+                    canDelete={canDelete}
+                    onEdit={setEditingService}
+                    onChanged={() => void load(true)}
+                  />
                 </div>
               ))}
             </div>
