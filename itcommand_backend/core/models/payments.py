@@ -62,8 +62,11 @@ class PaymentCard(models.Model):
         return f"•••• {self.last_four}"
 
 
-class SubscriptionPayment(models.Model):
-    """One charge on a card, optionally tied to a subscription.
+class ServicePayment(models.Model):
+    """One charge on a card, optionally tied to an estate service.
+
+    Renamed from `SubscriptionPayment` in Phase 5 along with the module it was
+    named after. Model and column renames, so no row moves.
 
     `match_source` records *how* the link was made, so an automatic guess can
     be told apart from a human decision and corrected without being re-guessed.
@@ -88,8 +91,8 @@ class SubscriptionPayment(models.Model):
         PaymentCard, on_delete=models.SET_NULL, null=True, blank=True,
         related_name="payments",
     )
-    subscription = models.ForeignKey(
-        "Subscription", on_delete=models.SET_NULL, null=True, blank=True,
+    service = models.ForeignKey(
+        "Service", on_delete=models.SET_NULL, null=True, blank=True,
         related_name="payments",
     )
     match_source = models.CharField(max_length=8, choices=MATCH_CHOICES, default="NONE")
@@ -105,7 +108,7 @@ class SubscriptionPayment(models.Model):
             ),
         ]
         indexes = [
-            models.Index(fields=["subscription", "-posted_at"], name="payment_sub_date_idx"),
+            models.Index(fields=["service", "-posted_at"], name="payment_svc_date_idx"),
         ]
 
     def __str__(self):

@@ -85,9 +85,8 @@ class Expense(models.Model):
     bill = models.ForeignKey('Bill', on_delete=models.SET_NULL, null=True, blank=True, related_name='expenses')
     # Optional links to costs originating in other modules
     linked_asset = models.ForeignKey('Asset', on_delete=models.SET_NULL, null=True, blank=True, related_name='expenses')
-    linked_license = models.ForeignKey('SoftwareLicense', on_delete=models.SET_NULL, null=True, blank=True, related_name='expenses')
     linked_purchase_request = models.ForeignKey('PurchaseRequest', on_delete=models.SET_NULL, null=True, blank=True, related_name='expenses')
-    linked_subscription = models.ForeignKey('Subscription', on_delete=models.SET_NULL, null=True, blank=True, related_name='expenses')
+    linked_service = models.ForeignKey('Service', on_delete=models.SET_NULL, null=True, blank=True, related_name='expenses')
     # Approval workflow — only APPROVED expenses count against the IT budget
     status = models.CharField(max_length=10, choices=STATUS_CHOICES, default='PENDING')
     approved_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name='approved_expenses')
@@ -158,17 +157,17 @@ class RecurringBill(models.Model):
     #: Soft link to the subscription this bill was raised from.
     #
     #: Deliberately a link and not a generator. Auto-creating a RecurringBill for
-    #: every subscription was considered and rejected: this table has no currency
-    #: column, so a USD subscription would land here as a bare number in the
+    #: every service was considered and rejected: this table has no currency
+    #: column, so a USD service would land here as a bare number in the
     #: company currency and silently misstate the commitment. A human creates the
     #: bill once, in the right currency, and finance owns it from then on.
-    linked_subscription = models.ForeignKey(
-        'Subscription',
+    linked_service = models.ForeignKey(
+        'Service',
         on_delete=models.SET_NULL,
         null=True,
         blank=True,
         related_name='recurring_bills',
-        help_text='The subscription this bill was raised from, if any.',
+        help_text='The estate service this bill was raised from, if any.',
     )
     created_by = models.ForeignKey(User, on_delete=models.SET_NULL, null=True)
     created_at = models.DateTimeField(auto_now_add=True)

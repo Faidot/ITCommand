@@ -8,9 +8,9 @@ from rest_framework.test import APIClient
 
 from core import rbac
 from core.calendar_feed import build_ics
-from core.models import CalendarFeedToken, Integration, Role, Subscription
-from core.test_subscription_assignments import make_subscription
-from core.test_subscriptions import create_user
+from core.models import CalendarFeedToken, Integration, Role, Service
+from core.test_estate_api import make_subscription
+from core.test_helpers import create_user
 
 
 def role_with(slug, **modules):
@@ -25,15 +25,13 @@ def role_with(slug, **modules):
 class CalendarFeedTests(TestCase):
     def setUp(self):
         self.client = APIClient()
-        self.role = role_with("CAL_VIEWER", subscriptions=True, licenses=True)
+        self.role = role_with("CAL_VIEWER", subscriptions=True, estate=True)
         self.user = create_user("cal@example.com", self.role.slug)
         self.client.force_authenticate(self.user)
         self.today = timezone.localdate()
         self.subscription = make_subscription(
             name="Figma Org",
             expiry_date=self.today + timedelta(days=20),
-            cancellation_deadline=self.today + timedelta(days=10),
-            cancellation_reminder_enabled=True,
         )
 
     def feed_for(self, user):
@@ -68,10 +66,19 @@ class CalendarFeedTests(TestCase):
         body = build_ics(self.user)
         self.assertIn("Comma\\, semicolon\\; backslash\\\\ test", body)
 
-    def test_renewals_and_cancellation_deadlines_both_appear(self):
+    def test_service_renewals_appear(self):
+        """Cancellation-deadline events went with the subscriptions module —
+        `Service` has no cancellation window. Renewals are what remains."""
         body = build_ics(self.user)
         self.assertIn("Renews: Figma Org", body)
-        self.assertIn("Last day to cancel: Figma Org", body)
+
+    def test_a_service_that_does_not_auto_renew_says_so(self):
+        make_subscription(
+            name="Lapsing domain",
+            expiry_date=self.today + timedelta(days=8),
+            auto_renew=False,
+        )
+        self.assertIn("Does NOT auto-renew.", build_ics(self.user))
 
     def test_every_event_carries_a_day_before_reminder(self):
         body = build_ics(self.user)
@@ -80,14 +87,10 @@ class CalendarFeedTests(TestCase):
 
     def test_events_far_outside_the_window_are_excluded(self):
         make_subscription(
-            name="Ancient",
-            start_date=self.today - timedelta(days=800),
-            expiry_date=self.today - timedelta(days=400),
+            name="Ancient", expiry_date=self.today - timedelta(days=400)
         )
         make_subscription(
-            name="Distant",
-            start_date=self.today,
-            expiry_date=self.today + timedelta(days=900),
+            name="Distant", expiry_date=self.today + timedelta(days=900)
         )
         body = build_ics(self.user)
         self.assertNotIn("Ancient", body)

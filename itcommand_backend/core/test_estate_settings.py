@@ -25,7 +25,6 @@ from core.models import (
     Integration,
     ListOfValues,
     Role,
-    Subscription,
     Vendor,
     VendorContract,
 )

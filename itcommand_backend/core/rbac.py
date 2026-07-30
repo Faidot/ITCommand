@@ -32,12 +32,9 @@ MODULES = [
     {"key": "onboarding", "label": "Onboarding", "group": "People"},
     {"key": "seating", "label": "Seating Plan", "group": "People"},
     {"key": "assets", "label": "Asset Inventory", "group": "Assets"},
-    {"key": "licenses", "label": "Software Licenses", "group": "Assets"},
-    {"key": "subscriptions", "label": "Software Subscriptions", "group": "Assets"},
-    # Replaces licenses + subscriptions once those modules are retired in
-    # Phase 5. Until then all three coexist: migration 0067 copies each role's
-    # `subscriptions` grants onto `estate`, so nobody gains or loses access on
-    # the day the estate views switch over.
+    # Replaced `licenses` and `subscriptions`, both retired in Phase 5.
+    # Migration 0067 copied each role's `subscriptions` grants here first, so
+    # no role's access changed on the way through.
     {"key": "estate", "label": "Digital Estate", "group": "Assets"},
     {"key": "vendors", "label": "Vendors", "group": "Procurement"},
     {"key": "procurement", "label": "Purchase Requests", "group": "Procurement"},
@@ -73,7 +70,7 @@ def _grant(perms, module, actions):
 # refine in the UI.
 def _viewer():
     p = blank_permissions()
-    for m in ["dashboard", "assets", "licenses", "subscriptions", "estate", "kb", "helpdesk",
+    for m in ["dashboard", "assets", "estate", "kb", "helpdesk",
               "reports", "users", "departments", "vendors", "network", "seating"]:
         _grant(p, m, ["view"])
     return p
@@ -81,7 +78,7 @@ def _viewer():
 
 def _manager():
     p = _viewer()
-    for m in ["assets", "licenses", "subscriptions", "estate", "vendors", "procurement",
+    for m in ["assets", "estate", "vendors", "procurement",
               "network", "kb", "helpdesk", "onboarding", "seating", "vault", "finance"]:
         _grant(p, m, ["view", "add", "edit"])
     return p
@@ -108,7 +105,7 @@ def _hr():
 def _accounts():
     p = blank_permissions()
     _grant(p, "dashboard", ["view"])
-    for m in ["finance", "subscriptions", "estate", "vendors", "procurement", "reports"]:
+    for m in ["finance", "estate", "vendors", "procurement", "reports"]:
         _grant(p, m, ["view", "add", "edit"])
     _grant(p, "assets", ["view"])
     return p

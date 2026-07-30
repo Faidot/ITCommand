@@ -15,7 +15,6 @@ const REPORTS = [
   { title: "Financial", desc: "Budgets, spend & cash flow", href: "/reports/financial", icon: TrendingUp, color: "text-emerald-500", module: "finance" },
   { title: "Assets", desc: "Inventory, value & warranties", href: "/reports/assets", icon: MonitorSmartphone, color: "text-blue-500", module: "assets" },
   { title: "Helpdesk", desc: "Tickets, SLA & agents", href: "/reports/helpdesk", icon: Headset, color: "text-sky-500", module: "helpdesk" },
-  { title: "Licenses", desc: "Software spend & seats", href: "/reports/licenses", icon: KeyRound, color: "text-amber-500", module: "licenses" },
   { title: "Procurement", desc: "Requests, approvals & spend", href: "/reports/procurement", icon: ShoppingCart, color: "text-indigo-500", module: "procurement" },
   { title: "Vendors", desc: "Contracts & payments", href: "/reports/vendors", icon: Building, color: "text-teal-500", module: "vendors" },
   { title: "Seating", desc: "Office occupancy", href: "/reports/seating", icon: Map, color: "text-rose-500", module: "seating" },

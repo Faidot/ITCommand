@@ -15,7 +15,7 @@ from core.models import (
 )
 from core.network_sources import fetch_hosts
 from core.test_calendar_feed import role_with
-from core.test_subscriptions import create_user
+from core.test_helpers import create_user
 
 
 class ScannerPrimitiveTests(TestCase):

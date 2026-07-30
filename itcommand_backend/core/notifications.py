@@ -4,7 +4,7 @@ from rest_framework.response import Response
 from django.utils import timezone
 from datetime import timedelta
 from django.db.models import Sum
-from .models import Notification, Asset, RecurringBill, FinancialYear, Budget, Expense, Ticket, User, SoftwareLicense
+from .models import Notification, Asset, RecurringBill, FinancialYear, Budget, Expense, Ticket, User
 from .serializers import NotificationSerializer
 from .permissions import has_role_permission
 

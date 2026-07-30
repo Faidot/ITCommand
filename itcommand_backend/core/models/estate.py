@@ -359,6 +359,16 @@ class Service(models.Model):
     )
 
     console_url = models.URLField(blank=True, default="")
+    #: What this charge looks like on a card statement. Brex reconciliation
+    #: treats a recorded descriptor as authoritative — matching on the
+    #: provider name alone is a guess, and a wrongly attached charge is harder
+    #: to notice than an unattached one.
+    billing_descriptor = models.CharField(
+        max_length=160,
+        blank=True,
+        default="",
+        help_text="How this appears on the card statement, for payment matching.",
+    )
     vault_credential = models.ForeignKey(
         VaultCredential,
         on_delete=models.SET_NULL,
@@ -367,6 +377,41 @@ class Service(models.Model):
         related_name="estate_services",
         help_text="The vault entry for this service. Only its id and title are ever exposed.",
     )
+    #: Which card this renews on. Written back by the Brex sync when a charge
+    #: matches, because "which card is this on" is the question the integration
+    #: exists to answer.
+    payment_card = models.ForeignKey(
+        "core.PaymentCard",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="estate_services",
+    )
+
+    # ── finance links ───────────────────────────────────────────────────────
+    #
+    # Not in the estate spec's field list, and added in Phase 5 rather than
+    # Phase 1 for a specific reason: `Subscription` carried them, the Cost
+    # Overview's budget-impact and vendor-spend panels are built on them, and
+    # retiring `Subscription` without them would have deleted a working feature
+    # by omission. Both nullable — a service does not have to be budgeted.
+    budget_category = models.ForeignKey(
+        "core.BudgetCategory",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="estate_services",
+        help_text="Rolls this service's cost into the budget view.",
+    )
+    vendor = models.ForeignKey(
+        "core.Vendor",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="estate_services",
+        help_text="Link when the provider is also invoiced as a vendor.",
+    )
+
     notes = models.TextField(blank=True, default="")
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
@@ -531,6 +576,14 @@ class EstateSettings(models.Model):
     alert_on_new_orphan = models.BooleanField(
         default=True,
         help_text="Warn when a service is billed but tied to no property.",
+    )
+    #: Moved here from `SubscriptionSettings` in Phase 5, when that model was
+    #: retired. Defaults to off: writing to a finance table is
+    #: high-blast-radius, and an org that never opted in must not start
+    #: creating expenses because a module was renamed.
+    create_expense_on_renewal = models.BooleanField(
+        default=False,
+        help_text="Record an Expense against the budget category when a service renews.",
     )
     updated_by = models.ForeignKey(
         User,

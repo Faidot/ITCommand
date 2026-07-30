@@ -1,7 +1,6 @@
 from rest_framework import serializers
 from core.models.vendors import Vendor, VendorContract, VendorPayment, VendorNote
 from core.serializers.assets import AssetSerializer
-from core.serializers.licenses import SoftwareLicenseListSerializer
 from core.serializers.finance import RecurringBillSerializer
 from django.db.models import Sum
 from datetime import timedelta

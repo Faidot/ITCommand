@@ -7,7 +7,7 @@ from datetime import timedelta
 
 from core.models.vendors import Vendor, VendorContract, VendorPayment, VendorNote
 from core.models.assets import Asset
-from core.models.licenses import SoftwareLicense
+from core.models.estate import Service
 from core.models.finance import RecurringBill
 
 from core.serializers.vendors import (
@@ -15,7 +15,7 @@ from core.serializers.vendors import (
     VendorContractSerializer, VendorPaymentSerializer, VendorNoteSerializer
 )
 from core.serializers.assets import AssetSerializer
-from core.serializers.licenses import SoftwareLicenseListSerializer
+from core.serializers.estate import ServiceSerializer
 from core.serializers.finance import RecurringBillSerializer
 from core.permissions import IsAdminOrSuperadmin, ReadOnlyViewerOrHigher, HasModulePermission
 
@@ -36,8 +36,8 @@ class VendorViewSet(viewsets.ModelViewSet):
             parts.append(f'{vendor.assets.count()} asset(s)')
         if hasattr(vendor, 'contracts') and vendor.contracts.exists():
             parts.append(f'{vendor.contracts.count()} contract(s)')
-        if vendor.software_licenses.exists():
-            parts.append(f'{vendor.software_licenses.count()} license(s)')
+        if vendor.estate_services.exists():
+            parts.append(f'{vendor.estate_services.count()} estate service(s)')
         if parts:
             return 'linked to ' + ', '.join(parts)
         return None
@@ -147,10 +147,23 @@ class VendorViewSet(viewsets.ModelViewSet):
         return Response(AssetSerializer(assets, many=True).data)
 
     @action(detail=True, methods=['get'])
-    def licenses(self, request, pk=None):
+    def services(self, request, pk=None):
+        """Estate services invoiced through this vendor.
+
+        Replaces the `licenses` action, which went with the licences module in
+        Phase 5. A vendor's exposure is now its estate spend.
+        """
         vendor = self.get_object()
-        licenses = SoftwareLicense.objects.filter(vendor=vendor)
-        return Response(SoftwareLicenseListSerializer(licenses, many=True).data)
+        services = (
+            Service.objects.filter(vendor=vendor)
+            .select_related('provider', 'provider_account', 'property')
+            .order_by('property__name', 'service_type', 'identifier')
+        )
+        return Response(
+            ServiceSerializer(
+                services, many=True, context=self.get_serializer_context()
+            ).data
+        )
 
     @action(detail=True, methods=['get'])
     def bills(self, request, pk=None):

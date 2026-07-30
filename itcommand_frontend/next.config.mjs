@@ -12,24 +12,25 @@ const nextConfig = {
    * bookmarked, pasted into tickets and linked from old emails. A 404 would
    * read as "the feature is gone" rather than "it moved".
    *
-   * Deliberately temporary (307, the default): the old routes are still
-   * present until Phase 5 deletes them, and a permanent redirect would be
-   * cached by browsers past the point where we could take it back.
+   * Permanent (308) as of Phase 5: the old routes and their API are gone, so
+   * there is nothing left to take back. Until then these were 307, because a
+   * permanent redirect would have been cached past the point of recall.
    */
   async redirects() {
     return [
-      { source: "/licenses/estate", destination: "/estate/dashboard", permanent: false },
+      { source: "/licenses/estate", destination: "/estate/dashboard", permanent: true },
       {
         source: "/licenses/estate/:id",
         destination: "/estate/properties/:id",
-        permanent: false,
+        permanent: true,
       },
-      { source: "/licenses", destination: "/estate/dashboard", permanent: false },
-      { source: "/licenses/list", destination: "/estate/services", permanent: false },
-      { source: "/licenses/my", destination: "/estate/services", permanent: false },
-      { source: "/licenses/:id", destination: "/estate/services", permanent: false },
-      { source: "/subscriptions", destination: "/estate/services", permanent: false },
-      { source: "/subscriptions/:id", destination: "/estate/services", permanent: false },
+      { source: "/licenses", destination: "/estate/dashboard", permanent: true },
+      { source: "/licenses/list", destination: "/estate/services", permanent: true },
+      { source: "/licenses/my", destination: "/estate/services", permanent: true },
+      { source: "/licenses/:id", destination: "/estate/services", permanent: true },
+      { source: "/subscriptions", destination: "/estate/services", permanent: true },
+      { source: "/subscriptions/:id", destination: "/estate/services", permanent: true },
+      { source: "/reports/licenses", destination: "/estate/dashboard", permanent: true },
     ];
   },
 };

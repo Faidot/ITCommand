@@ -22,28 +22,18 @@ from core.models import (
     Property,
     Provider,
     ProviderAccount,
-    Subscription,
+    Service,
 )
 
 
 User = get_user_model()
 
 
-def make_subscription(**overrides):
-    today = timezone.localdate()
-    fields = {
-        "name": "Test service",
-        "platform": "Test platform",
-        "cost": Decimal("100.00"),
-        "currency": "USD",
-        "billing_cycle": "MONTHLY",
-        "start_date": today - timedelta(days=30),
-        "expiry_date": today + timedelta(days=365),
-        "status": "ACTIVE",
-        "auto_renew": False,
-    }
-    fields.update(overrides)
-    return Subscription.objects.create(**fields)
+# `make_subscription` and four classes that used it were removed in Phase 5.
+# They exercised the estate fields bolted onto `Subscription` in Phase 1 —
+# monthly equivalents, orphan detection, at-risk boundaries, layer
+# normalisation. `Service` owns all of that now, and `test_estate_service.py`
+# tests it there, against a model that still exists.
 
 
 class ServiceLayerTaxonomyTests(TestCase):
@@ -78,150 +68,6 @@ class ServiceLayerTaxonomyTests(TestCase):
         self.assertEqual(estate.mfa_severity("APP"), "ok")
         self.assertEqual(estate.mfa_severity("SECURITY_KEY"), "ok")
         self.assertEqual(estate.mfa_severity("UNKNOWN"), "muted")
-
-
-class MonthlyEquivalentTests(TestCase):
-    """`monthly_cost` *is* the monthly equivalent. It must stay Decimal."""
-
-    def test_monthly_cycle_returns_cost_unchanged_as_decimal(self):
-        subscription = make_subscription(cost=Decimal("500.00"), billing_cycle="MONTHLY")
-        self.assertEqual(subscription.monthly_cost, Decimal("500.00"))
-        self.assertIsInstance(subscription.monthly_cost, Decimal)
-        self.assertNotIsInstance(subscription.monthly_cost, float)
-
-    def test_yearly_cycle_divides_by_twelve_as_decimal(self):
-        subscription = make_subscription(cost=Decimal("1200.00"), billing_cycle="YEARLY")
-        self.assertEqual(subscription.monthly_cost, Decimal("100.00"))
-        self.assertIsInstance(subscription.monthly_cost, Decimal)
-
-    def test_annual_equivalent_for_both_cycles(self):
-        monthly = make_subscription(cost=Decimal("100.00"), billing_cycle="MONTHLY")
-        yearly = make_subscription(
-            name="Yearly", cost=Decimal("1200.00"), billing_cycle="YEARLY"
-        )
-        self.assertEqual(monthly.annual_cost, Decimal("1200.00"))
-        self.assertEqual(yearly.annual_cost, Decimal("1200.00"))
-
-    def test_recurring_third_is_quantised_once_and_does_not_drift(self):
-        # 100/12 is non-terminating. The rounded property must be 2dp, while the
-        # unrounded one keeps full precision for aggregation.
-        subscription = make_subscription(cost=Decimal("100.00"), billing_cycle="YEARLY")
-        self.assertEqual(subscription.monthly_cost, Decimal("8.33"))
-        self.assertEqual(subscription.monthly_cost.as_tuple().exponent, -2)
-        self.assertGreater(
-            subscription.monthly_cost_unrounded, subscription.monthly_cost
-        )
-
-    def test_summing_unrounded_avoids_the_error_that_summing_rounded_introduces(self):
-        # Twelve yearly-billed services at 100 each is 100/month in total.
-        # Rounding each to 8.33 before summing loses 4 paisa; summing the
-        # unrounded property and quantising once is accurate to 26 decimal
-        # places. Aggregation must therefore use monthly_cost_unrounded.
-        subs = [
-            make_subscription(
-                name=f"S{i}", cost=Decimal("100.00"), billing_cycle="YEARLY"
-            )
-            for i in range(12)
-        ]
-        target = Decimal("100")
-        rounded_total = sum(s.monthly_cost for s in subs)
-        unrounded_total = sum(s.monthly_cost_unrounded for s in subs)
-
-        self.assertEqual(rounded_total, Decimal("99.96"))
-        self.assertEqual(abs(target - rounded_total), Decimal("0.04"))
-        # Not exact — Decimal division is bounded by context precision — but off
-        # by ~1e-26 rather than 4e-2, and it quantises back to the right answer.
-        self.assertLess(abs(target - unrounded_total), Decimal("0.0000001"))
-        self.assertEqual(unrounded_total.quantize(Decimal("0.01")), target)
-
-
-class OrphanDetectionTests(TestCase):
-    def test_subscription_with_no_property_is_an_orphan(self):
-        self.assertTrue(make_subscription().is_orphan)
-
-    def test_subscription_bound_to_a_property_is_not_an_orphan(self):
-        prop = Property.objects.create(name="example.com", kind="CORPORATE")
-        self.assertFalse(make_subscription(digital_property=prop).is_orphan)
-
-    def test_orphan_check_does_not_need_the_related_row_loaded(self):
-        prop = Property.objects.create(name="example.com", kind="CORPORATE")
-        make_subscription(digital_property=prop)
-        fetched = Subscription.objects.only("id", "digital_property").first()
-        with self.assertNumQueries(0):
-            self.assertFalse(fetched.is_orphan)
-
-    def test_property_deletion_orphans_rather_than_deletes_the_subscription(self):
-        prop = Property.objects.create(name="example.com", kind="CORPORATE")
-        subscription = make_subscription(digital_property=prop)
-        prop.delete()
-        subscription.refresh_from_db()
-        self.assertTrue(subscription.is_orphan)
-        self.assertTrue(Subscription.objects.filter(pk=subscription.pk).exists())
-
-
-class AtRiskBoundaryTests(TestCase):
-    """The window is inclusive at both ends and forward-looking only."""
-
-    def setUp(self):
-        self.today = timezone.localdate()
-
-    def _expiring_in(self, days, **overrides):
-        return make_subscription(
-            start_date=self.today - timedelta(days=400),
-            expiry_date=self.today + timedelta(days=days),
-            **overrides,
-        )
-
-    def test_auto_renew_on_is_never_at_risk_however_close(self):
-        self.assertFalse(self._expiring_in(1, auto_renew=True).is_at_risk)
-
-    def test_exactly_at_the_window_edge_is_at_risk(self):
-        subscription = self._expiring_in(estate.AT_RISK_WINDOW_DAYS)
-        self.assertTrue(subscription.is_at_risk)
-
-    def test_one_day_past_the_window_is_not_at_risk(self):
-        subscription = self._expiring_in(estate.AT_RISK_WINDOW_DAYS + 1)
-        self.assertFalse(subscription.is_at_risk)
-
-    def test_expiring_today_is_at_risk(self):
-        self.assertTrue(self._expiring_in(0).is_at_risk)
-
-    def test_already_expired_is_not_at_risk_it_is_a_different_problem(self):
-        subscription = self._expiring_in(-1)
-        self.assertEqual(subscription.effective_status, "EXPIRED")
-        self.assertFalse(subscription.is_at_risk)
-
-    def test_cancelled_subscription_is_not_at_risk(self):
-        self.assertFalse(self._expiring_in(5, status="CANCELLED").is_at_risk)
-
-    def test_paused_subscription_is_not_at_risk(self):
-        self.assertFalse(self._expiring_in(5, status="PAUSED").is_at_risk)
-
-    def test_not_yet_started_subscription_is_not_at_risk(self):
-        subscription = make_subscription(
-            start_date=self.today + timedelta(days=10),
-            expiry_date=self.today + timedelta(days=20),
-        )
-        self.assertEqual(subscription.effective_status, "SCHEDULED")
-        self.assertFalse(subscription.is_at_risk)
-
-
-class ServiceLayerNormalisationTests(TestCase):
-    def test_blank_layer_is_stored_as_null_not_empty_string(self):
-        subscription = make_subscription(service_layer="")
-        subscription.refresh_from_db()
-        self.assertIsNone(subscription.service_layer)
-
-    def test_a_real_layer_survives_the_round_trip(self):
-        subscription = make_subscription(service_layer="REGISTRAR")
-        subscription.refresh_from_db()
-        self.assertEqual(subscription.service_layer, "REGISTRAR")
-
-    def test_null_layers_are_findable_with_a_single_isnull_filter(self):
-        make_subscription(name="A", service_layer="")
-        make_subscription(name="B", service_layer=None)
-        make_subscription(name="C", service_layer="DNS")
-        self.assertEqual(Subscription.objects.filter(service_layer__isnull=True).count(), 2)
 
 
 class ProviderTests(TestCase):
@@ -334,10 +180,12 @@ class PropertyTests(TestCase):
         with self.assertRaises(IntegrityError), transaction.atomic():
             Property.objects.create(name="EXAMPLE.COM", kind="MARKETING")
 
-    def test_subscriptions_reverse_accessor_is_named_for_the_property(self):
+    def test_services_reverse_accessor_is_named_for_the_property(self):
+        from core.test_estate_api import make_subscription
+
         prop = Property.objects.create(name="example.com", kind="CORPORATE")
         make_subscription(digital_property=prop)
-        self.assertEqual(prop.subscriptions.count(), 1)
+        self.assertEqual(prop.services.count(), 1)
 
 
 class SeedEstateCommandTests(TestCase):
@@ -360,7 +208,7 @@ class SeedEstateCommandTests(TestCase):
         self._run()
         self.assertEqual(ProviderAccount.objects.count(), 0)
         self.assertEqual(Property.objects.count(), 0)
-        self.assertEqual(Subscription.objects.count(), 0)
+        self.assertEqual(Service.objects.count(), 0)
 
     def test_local_edits_survive_a_re_run(self):
         self._run()

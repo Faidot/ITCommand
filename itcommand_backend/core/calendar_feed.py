@@ -94,8 +94,7 @@ def collect_events(user, sources):
         Asset,
         OnboardingTask,
         RecurringBill,
-        SoftwareLicense,
-        Subscription,
+        Service,
         Ticket,
         VendorContract,
     )
@@ -106,41 +105,30 @@ def collect_events(user, sources):
     def in_window(value):
         return value and start <= value <= end
 
-    if "subscriptions" in sources and _may(user, "subscriptions"):
-        for sub in Subscription.objects.filter(
-            status="ACTIVE", expiry_date__range=(start, end)
-        ).select_related("vendor"):
+    # `subscriptions` is kept as the source key so existing calendar
+    # subscriptions — the URL is in people's calendar clients, not ours to
+    # change — keep working. What it emits is estate service renewals.
+    if "subscriptions" in sources and _may(user, "estate"):
+        for service in Service.objects.filter(
+            status__in=("ACTIVE", "AT_RISK"), renewal_date__range=(start, end)
+        ).select_related("provider", "property"):
+            cycle = {
+                "MONTHLY": "per month",
+                "YEARLY": "per year",
+                "USAGE": "usage-based",
+                "FREE": "free",
+            }.get(service.billing_cycle, service.billing_cycle.lower())
+            attached = (
+                service.property.name if service.property_id else "not attached to a property"
+            )
             events.append((
-                f"sub-renew-{sub.pk}@itcommand",
-                sub.expiry_date,
-                f"Renews: {sub.name}",
-                f"{sub.platform} · {sub.currency} {sub.cost} per "
-                f"{'month' if sub.billing_cycle == 'MONTHLY' else 'year'}"
-                + ("\nAuto-renews." if sub.auto_renew else "\nDoes not auto-renew."),
-                f"/subscriptions/{sub.pk}",
-            ))
-        for sub in Subscription.objects.filter(
-            status="ACTIVE", cancellation_deadline__range=(start, end)
-        ):
-            events.append((
-                f"sub-cancel-{sub.pk}@itcommand",
-                sub.cancellation_deadline,
-                f"Last day to cancel: {sub.name}",
-                f"Cancel before this date to avoid renewing on {sub.expiry_date}.",
-                f"/subscriptions/{sub.pk}",
-            ))
-
-    if "licenses" in sources and _may(user, "licenses"):
-        for lic in SoftwareLicense.objects.filter(
-            expiry_date__range=(start, end)
-        ).select_related("product"):
-            name = lic.product.name if lic.product else f"Licence #{lic.pk}"
-            events.append((
-                f"lic-{lic.pk}@itcommand",
-                lic.expiry_date,
-                f"Licence expires: {name}",
-                f"{lic.get_license_type_display()} licence.",
-                f"/licenses/{lic.pk}",
+                f"svc-renew-{service.pk}@itcommand",
+                service.renewal_date,
+                f"Renews: {service.identifier}",
+                f"{service.get_service_type_display()} · {service.provider.name} · "
+                f"{service.currency} {service.cost} {cycle}\n{attached}"
+                + ("\nAuto-renews." if service.auto_renew else "\nDoes NOT auto-renew."),
+                f"/estate/services?q={service.identifier}",
             ))
 
     if "contracts" in sources and _may(user, "vendors"):

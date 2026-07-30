@@ -579,7 +579,7 @@ class StackGapTests(EstateApiTestCase):
         self.assertEqual(row["gap_count"], len(estate.REQUIRED_LAYERS) - 1)
         self.assertEqual(len(row["layers"]), len(estate.SERVICE_LAYERS))
         self.assertIn("is_complete", row["spend"])
-        self.assertEqual(other.subscriptions.count(), 0)
+        self.assertEqual(other.services.count(), 0)
 
 
 class EstateGapsEndpointTests(EstateApiTestCase):

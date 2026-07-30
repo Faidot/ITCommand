@@ -44,7 +44,7 @@ export default function VendorDetailPage() {
       toast.success("Vendor deleted.");
       router.push("/vendors");
     } catch (err: any) {
-      // 409 from server when vendor has linked assets/contracts/licenses.
+      // 409 from server when vendor has linked assets/contracts/services.
       toast.error(err.response?.data?.detail || "Failed to delete vendor.");
     }
   };
@@ -69,7 +69,7 @@ export default function VendorDetailPage() {
     try {
       const [assRes, licRes, bilRes] = await Promise.all([
         api.get(`/vendors/${vendorId}/assets/`),
-        api.get(`/vendors/${vendorId}/licenses/`),
+        api.get(`/vendors/${vendorId}/services/`),
         api.get(`/vendors/${vendorId}/bills/`)
       ]);
       setAssets(assRes.data);

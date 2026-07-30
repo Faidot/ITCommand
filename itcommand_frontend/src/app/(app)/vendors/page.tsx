@@ -31,7 +31,7 @@ export default function VendorsPage() {
 
   const bulkDelete = async () => {
     if (sel.count === 0) return;
-    if (!confirm(`Delete ${sel.count} vendor(s)? Vendors linked to assets/contracts/licenses will be skipped.`)) return;
+    if (!confirm(`Delete ${sel.count} vendor(s)? Vendors linked to assets/contracts/services will be skipped.`)) return;
     setBulkDeleting(true);
     try {
       const res = await api.post("/vendors/bulk_delete/", { ids: sel.ids });

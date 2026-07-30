@@ -1,0 +1,1060 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Geist+Mono:wght@400;500&amp;display=swap" rel="stylesheet">
+<style>
+:root{--bg:#08090b;--panel:#0c0e11;--panel2:#101318;--elev:#15181e;--hover:#181c23;--border:#1e222a;--border2:#2a3039;--text:#e9ebef;--muted:#8b929f;--faint:#5b6270;--accent:#7c8cff;--red:#f2555a;--amber:#efa72f;--green:#3ecf8e;--rowpad:11px 14px;--shadow:0 8px 30px rgba(0,0,0,.55)}
+[data-theme="light"]{--bg:#f6f6f7;--panel:#ffffff;--panel2:#fafafb;--elev:#ffffff;--hover:#f2f3f5;--border:#e5e6ea;--border2:#d5d7dd;--text:#15171b;--muted:#5f6675;--faint:#8d94a1;--red:#d93a41;--amber:#b8770d;--green:#12855c;--shadow:0 8px 30px rgba(16,18,22,.12)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);font-family:Geist,-apple-system,"Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased}
+a{color:var(--accent);text-decoration:none}
+a:hover{color:var(--text)}
+input,select,button{font-family:inherit;font-size:inherit;color:inherit}
+::selection{background:var(--accent);color:#0b0c0f}
+@keyframes shim{0%{background-position:-380px 0}100%{background-position:380px 0}}
+@keyframes fadeup{from{opacity:0;transform:translateY(10px) scale(.99)}to{opacity:1;transform:none}}
+@keyframes rise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+@keyframes slidex{from{opacity:0;transform:translateX(-10px)}to{opacity:1;transform:none}}
+@keyframes grow{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@keyframes pop{0%{opacity:0;transform:scale(.9)}60%{transform:scale(1.03)}100%{opacity:1;transform:scale(1)}}
+@keyframes breathe{0%,100%{opacity:.55;transform:scale(1)}50%{opacity:1;transform:scale(1.5)}}
+@keyframes sweep{from{transform:rotate(-90deg) scale(.86);opacity:0}to{transform:rotate(0) scale(1);opacity:1}}
+button,select,input,a{transition:background-color .18s cubic-bezier(.2,.7,.3,1),border-color .18s ease,color .18s ease,transform .18s cubic-bezier(.2,.7,.3,1),box-shadow .22s ease}
+button:active{transform:scale(.985)}
+::-webkit-scrollbar{width:9px;height:9px}
+::-webkit-scrollbar-thumb{background:var(--border2);border-radius:99px}
+::-webkit-scrollbar-track{background:transparent}
+</style>
+</helmet>
+<div data-theme="{{ theme }}" style="--rowpad: {{ rowPad }}; --accent: {{ accent }}; min-height:100vh; display:flex; background:var(--bg); color:var(--text); font-size:13px; letter-spacing:-0.005em">
+
+  <aside style="width: 238px; flex: 0 0 238px; background: var(--panel); border-right: 1px solid var(--border); display: flex; flex-direction: column; position: sticky; top: 0; height: 100vh; border-radius: 0px; overflow: auto">
+    <div style="padding:16px 16px 14px; border-bottom:1px solid var(--border); display:flex; flex-direction:column; gap:10px">
+      <div style="display:flex; align-items:center; gap:8px; font-size:11px; color:var(--faint); text-transform:uppercase; letter-spacing:.09em">
+        <div style="width:6px; height:6px; background:var(--accent); border-radius:2px"></div>
+        Rocketmint · IT Platform
+      </div>
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:8px">
+        <div style="font-size:15px; font-weight:600">Digital Estate</div>
+        <div style="font-size:10px; font-family:'Geist Mono',monospace; color:var(--muted); border:1px solid var(--border); border-radius:5px; padding:2px 5px">v2.4</div>
+      </div>
+    </div>
+
+    <nav style="padding:10px 8px; display:flex; flex-direction:column; gap:2px">
+      <sc-for list="{{ nav }}" as="n" hint-placeholder-count="4">
+        <button onClick="{{ n.go }}" style="display:flex; align-items:center; gap:10px; width:100%; text-align:left; padding:8px 10px; border:0; border-radius:999px; cursor:pointer; background: {{ n.bg }}; color: {{ n.fg }}; font-size:13px; font-weight:500" style-hover="background:var(--hover)">
+          <span style="width:16px; font-size:12px; color: {{ n.iconColor }}; font-family:'Geist Mono',monospace">{{ n.icon }}</span>
+          <span style="flex:1">{{ n.label }}</span>
+          <span style="font-size:11px; font-family:'Geist Mono',monospace; color:var(--faint)">{{ n.count }}</span>
+        </button>
+      </sc-for>
+    </nav>
+
+    <div style="margin-top:auto; padding:12px; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:10px">
+      <button onClick="{{ openModal }}" style="width:100%; padding:8px 10px; border-radius:999px; border:1px solid var(--border2); background:var(--elev); cursor:pointer; font-weight:500; display:flex; align-items:center; justify-content:center; gap:6px" style-hover="border-color:var(--accent)">
+        <span style="color:var(--accent)">+</span> Add service
+      </button>
+      <div style="display:flex; align-items:center; gap:9px; padding:4px 2px">
+        <div style="width:24px; height:24px; border-radius:999px; background:var(--panel2); border:1px solid var(--border); display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:600; color:var(--muted)">SA</div>
+        <div style="flex:1; min-width:0">
+          <div style="font-size:12px; font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">Sana Aftab</div>
+          <div style="font-size:10.5px; color:var(--faint)">IT Lead</div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <main style="flex:1; min-width:0; display:flex; flex-direction:column">
+    <header style="position:sticky; top:0; z-index:20; background:var(--bg); border-bottom:1px solid var(--border); padding:0 22px; height:52px; display:flex; align-items:center; gap:14px">
+      <div style="display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--muted)">
+        <span>Digital Estate</span>
+        <span style="color:var(--faint)">/</span>
+        <span style="color:var(--text); font-weight:500">{{ crumb }}</span>
+      </div>
+      <button onClick="{{ openPalette }}" style="margin-left:auto; display:flex; align-items:center; gap:10px; height:30px; padding:0 8px 0 10px; border-radius:999px; border:1px solid var(--border); background:var(--panel); color:var(--faint); cursor:pointer; min-width:268px" style-hover="border-color:var(--border2); color:var(--muted)">
+        <span style="font-family:'Geist Mono',monospace; font-size:12px">⌕</span>
+        <span style="flex:1; text-align:left; font-size:12.5px">Search estate, jump to service…</span>
+        <span style="font-family:'Geist Mono',monospace; font-size:10.5px; border:1px solid var(--border2); border-radius:4px; padding:1px 5px">⌘K</span>
+      </button>
+      <button onClick="{{ toggleTheme }}" title="Toggle theme" style="width:30px; height:30px; border-radius:999px; border:1px solid var(--border); background:var(--panel); cursor:pointer; color:var(--muted); font-family:'Geist Mono',monospace; font-size:12px" style-hover="color:var(--text)">{{ themeGlyph }}</button>
+      <button onClick="{{ openModal }}" style="height:30px; padding:0 12px; border-radius:999px; border:1px solid var(--accent); background:var(--accent); color:#0b0c0f; font-weight:600; cursor:pointer" style-hover="opacity:.9">Add service</button>
+    </header>
+
+    <sc-if value="{{ isDash }}" hint-placeholder-val="{{ true }}">
+      <div style="padding:24px 26px; animation:fadeup .34s cubic-bezier(.2,.7,.3,1) both; display:flex; flex-direction:column; gap:18px">
+        <div style="display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px">
+          <sc-for list="{{ kpis }}" as="k" hint-placeholder-count="5">
+            <div style="background:var(--panel); border:1px solid var(--border); border-radius:18px; padding:15px 17px; display:flex; flex-direction:column; gap:9px; min-height:108px; animation:rise .55s cubic-bezier(.2,.7,.3,1) both; animation-delay: {{ k.delay }}; transition:transform .22s cubic-bezier(.2,.7,.3,1), border-color .22s ease, box-shadow .22s ease" style-hover="transform:translateY(-3px); border-color:var(--border2); box-shadow:0 10px 26px rgba(0,0,0,.28)">
+              <div style="display:flex; align-items:center; gap:7px">
+                <div style="width:5px; height:5px; border-radius:99px; background: {{ k.tone }}; animation:breathe 3.4s ease-in-out infinite"></div>
+                <div style="font-size:11.5px; color:var(--muted); font-weight:500">{{ k.label }}</div>
+              </div>
+              <div style="font-size:25px; font-weight:600; letter-spacing:-0.02em; font-variant-numeric:tabular-nums">{{ k.value }}</div>
+              <div style="font-size:11px; color:var(--faint); margin-top:auto">{{ k.sub }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="background:var(--panel); border:1px solid var(--border); border-radius:18px">
+          <div style="padding:13px 16px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px">
+            <div style="font-size:13px; font-weight:600">Renewals timeline</div>
+            <div style="font-size:11.5px; color:var(--faint)">next 90 days</div>
+            <div style="margin-left:auto; display:flex; align-items:center; gap:14px; font-size:11px; color:var(--muted)">
+              <span style="display:flex; align-items:center; gap:6px"><i style="width:6px; height:6px; border-radius:99px; background:var(--red); display:block"></i>&lt; 7 days</span>
+              <span style="display:flex; align-items:center; gap:6px"><i style="width:6px; height:6px; border-radius:99px; background:var(--amber); display:block"></i>&lt; 30 days</span>
+              <span style="display:flex; align-items:center; gap:6px"><i style="width:6px; height:6px; border-radius:99px; background:var(--faint); display:block"></i>beyond</span>
+            </div>
+          </div>
+          <div style="padding:18px 16px 10px">
+            <div style="position:relative; height: {{ laneH }}">
+              <sc-for list="{{ ticks }}" as="t" hint-placeholder-count="3">
+                <div style="position:absolute; top:0; bottom:0; left: {{ t.left }}; width:1px; background:var(--border)"></div>
+              </sc-for>
+              <sc-for list="{{ timeline }}" as="r" hint-placeholder-count="5">
+                <div style="position:absolute; left: {{ r.left }}; top: {{ r.top }}; display:flex; align-items:center; gap:7px; height:28px; padding:0 11px 0 9px; border-radius:999px; background:var(--panel2); border:1px solid var(--border2); box-shadow:inset 3px 0 0 {{ r.color }}; white-space:nowrap; max-width:280px; animation:pop .5s cubic-bezier(.2,.7,.3,1) both; animation-delay: {{ r.delay }}; transition:transform .2s ease" style-hover="transform:translateY(-2px)">
+                  <span style="width:5px; height:5px; border-radius:2px; background: {{ r.provColor }}"></span>
+                  <span style="font-size:11.5px; font-weight:500; overflow:hidden; text-overflow:ellipsis">{{ r.name }}</span>
+                  <span style="font-size:10.5px; font-family:'Geist Mono',monospace; color: {{ r.color }}">{{ r.in }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <div style="position:relative; height:22px; border-top:1px solid var(--border); margin-top:6px">
+              <sc-for list="{{ ticks }}" as="t" hint-placeholder-count="3">
+                <div style="position:absolute; left: {{ t.left }}; top:6px; font-size:10.5px; font-family:'Geist Mono',monospace; color:var(--faint); transform:translateX(-2px)">{{ t.label }}</div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+
+        <div style="display:grid; grid-template-columns:340px minmax(0,1fr); gap:14px">
+          <div style="background:var(--panel); border:1px solid var(--border); border-radius:18px; padding:15px 16px">
+            <div style="font-size:13px; font-weight:600; margin-bottom:2px">Spend by provider</div>
+            <div style="font-size:11.5px; color:var(--faint)">monthly, normalised to PKR</div>
+            <div style="display:flex; align-items:center; gap:18px; margin-top:16px">
+              <div style="position:relative; width:136px; height:136px; flex:0 0 136px; border-radius:99px; animation:sweep .7s cubic-bezier(.2,.7,.3,1) both; background: conic-gradient({{ donut }})">
+                <div style="position:absolute; inset:19px; border-radius:99px; background:var(--panel); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:1px">
+                  <div style="font-size:9.5px; color:var(--faint); text-transform:uppercase; letter-spacing:.08em">total</div>
+                  <div style="font-size:14px; font-weight:600; font-variant-numeric:tabular-nums">{{ totalShort }}</div>
+                </div>
+              </div>
+              <div style="flex:1; display:flex; flex-direction:column; gap:7px">
+                <sc-for list="{{ byProvider }}" as="p" hint-placeholder-count="6">
+                  <div style="display:flex; align-items:center; gap:8px; font-size:11.5px">
+                    <span style="width:7px; height:7px; border-radius:2px; background: {{ p.color }}"></span>
+                    <span style="flex:1; color:var(--muted)">{{ p.name }}</span>
+                    <span style="font-family:'Geist Mono',monospace; font-variant-numeric:tabular-nums">{{ p.pctLabel }}</span>
+                  </div>
+                </sc-for>
+              </div>
+            </div>
+          </div>
+
+          <div style="background:var(--panel); border:1px solid var(--border); border-radius:18px; padding:15px 16px">
+            <div style="display:flex; align-items:baseline; gap:10px">
+              <div style="font-size:13px; font-weight:600">Spend by category</div>
+              <div style="font-size:11.5px; color:var(--faint)">PKR / month</div>
+            </div>
+            <div style="margin-top:16px; display:flex; flex-direction:column; gap:11px">
+              <sc-for list="{{ byCategory }}" as="c" hint-placeholder-count="6">
+                <div style="display:flex; align-items:center; gap:12px">
+                  <div style="width:78px; font-size:11.5px; color:var(--muted)">{{ c.label }}</div>
+                  <div style="flex:1; height:20px; background:var(--panel2); border-radius:999px; overflow:hidden">
+                    <div style="height:100%; border-radius:999px; transform-origin:left; animation:grow .65s cubic-bezier(.2,.7,.3,1) both; animation-delay: {{ c.delay }}; width: {{ c.pct }}; background: {{ c.color }}"></div>
+                  </div>
+                  <div style="width:96px; text-align:right; font-family:'Geist Mono',monospace; font-size:11.5px; font-variant-numeric:tabular-nums">{{ c.amount }}</div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isProps }}" hint-placeholder-val="{{ false }}">
+      <div style="padding:24px 26px; animation:fadeup .34s cubic-bezier(.2,.7,.3,1) both; display:flex; flex-direction:column; gap:14px">
+        <div style="display:flex; align-items:flex-end; gap:12px">
+          <div>
+            <div style="font-size:16px; font-weight:600">Properties</div>
+            <div style="font-size:12px; color:var(--faint); margin-top:3px">8 properties · every layer of the stack mapped to an owning account</div>
+          </div>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px">
+          <sc-for list="{{ propRows }}" as="p" hint-placeholder-count="4">
+            <button onClick="{{ p.open }}" style="text-align:left; background:var(--panel); border:1px solid var(--border); border-radius:18px; padding:16px 17px; cursor:pointer; display:flex; flex-direction:column; gap:13px; animation:rise .5s cubic-bezier(.2,.7,.3,1) both; animation-delay: {{ p.delay }}" style-hover="border-color:var(--border2); background:var(--panel2); transform:translateY(-3px); box-shadow:0 12px 30px rgba(0,0,0,.26)">
+              <div style="display:flex; align-items:center; gap:10px">
+                <div style="font-size:13.5px; font-weight:600; font-family:'Geist Mono',monospace">{{ p.name }}</div>
+                <div style="font-size:10.5px; color:var(--muted); border:1px solid var(--border); border-radius:99px; padding:1px 7px">{{ p.kind }}</div>
+                <div style="margin-left:auto; display:flex; align-items:center; gap:6px; font-size:11px; color: {{ p.healthColor }}">
+                  <i style="width:6px; height:6px; border-radius:99px; background: {{ p.healthColor }}; display:block"></i>{{ p.health }}
+                </div>
+              </div>
+              <div style="display:flex; align-items:center; flex-wrap:wrap; gap:5px; row-gap:6px; min-width:0">
+                <sc-for list="{{ p.chips }}" as="c" hint-placeholder-count="5">
+                  <span title="{{ c.title }}" style="height:22px; padding:0 7px; border-radius:5px; display:flex; align-items:center; gap:5px; background: {{ c.bg }}; border:1px solid {{ c.border }}; font-size:10.5px; color: {{ c.fg }}">
+                    <i style="width:5px; height:5px; border-radius:99px; background: {{ c.dot }}; display:block"></i>{{ c.label }}
+                  </span>
+                </sc-for>
+              </div>
+              <div style="display:flex; align-items:center; gap:22px; border-top:1px solid var(--border); padding-top:11px">
+                <div>
+                  <div style="font-size:10px; color:var(--faint); text-transform:uppercase; letter-spacing:.07em">monthly</div>
+                  <div style="font-size:12.5px; font-family:'Geist Mono',monospace; margin-top:3px; font-variant-numeric:tabular-nums">{{ p.monthly }}</div>
+                </div>
+                <div>
+                  <div style="font-size:10px; color:var(--faint); text-transform:uppercase; letter-spacing:.07em">next renewal</div>
+                  <div style="font-size:12.5px; font-family:'Geist Mono',monospace; margin-top:3px; color: {{ p.renewColor }}">{{ p.renew }}</div>
+                </div>
+                <div>
+                  <div style="font-size:10px; color:var(--faint); text-transform:uppercase; letter-spacing:.07em">layers</div>
+                  <div style="font-size:12.5px; font-family:'Geist Mono',monospace; margin-top:3px">{{ p.layers }}</div>
+                </div>
+                <div style="margin-left:auto; font-size:11.5px; color:var(--accent)">Open stack →</div>
+              </div>
+            </button>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isDetail }}" hint-placeholder-val="{{ false }}">
+      <div style="padding:24px 26px; animation:fadeup .34s cubic-bezier(.2,.7,.3,1) both; display:flex; flex-direction:column; gap:16px">
+        <div style="display:flex; align-items:center; gap:12px">
+          <button onClick="{{ goProps }}" style="height:28px; padding:0 10px; border-radius:999px; border:1px solid var(--border); background:var(--panel); color:var(--muted); cursor:pointer; font-size:12px" style-hover="color:var(--text)">← Properties</button>
+          <div style="font-size:17px; font-weight:600; font-family:'Geist Mono',monospace">{{ detail.name }}</div>
+          <div style="font-size:10.5px; color:var(--muted); border:1px solid var(--border); border-radius:99px; padding:2px 8px">{{ detail.kind }}</div>
+          <div style="margin-left:auto; display:flex; gap:18px">
+            <div><div style="font-size:10px; color:var(--faint); text-transform:uppercase; letter-spacing:.07em">monthly cost</div><div style="font-size:13px; font-family:'Geist Mono',monospace; margin-top:3px">{{ detail.monthly }}</div></div>
+            <div><div style="font-size:10px; color:var(--faint); text-transform:uppercase; letter-spacing:.07em">next renewal</div><div style="font-size:13px; font-family:'Geist Mono',monospace; margin-top:3px; color: {{ detail.renewColor }}">{{ detail.renew }}</div></div>
+          </div>
+        </div>
+
+        <div style="background:var(--panel); border:1px solid var(--border); border-radius:18px; padding:16px 18px 20px">
+          <div style="display:flex; align-items:center; gap:10px; margin-bottom:16px">
+            <div style="font-size:13px; font-weight:600">Service stack</div>
+            <div style="font-size:11.5px; color:var(--faint)">Registrar → DNS → Hosting → Mail → CDN → TLS → Analytics</div>
+          </div>
+          <div style="position:relative; padding-left:26px">
+            <div style="position:absolute; left:5px; top:10px; bottom:10px; width:1.5px; background:var(--border)"></div>
+            <div style="display:flex; flex-direction:column; gap:10px">
+              <sc-for list="{{ detail.stack }}" as="s" hint-placeholder-count="7">
+                <div style="position:relative">
+                  <div style="position:absolute; left:-24px; top:19px; width:11px; height:11px; border-radius:99px; background:var(--panel); border:2px solid {{ s.dot }}"></div>
+                  <div style="border-radius:16px; padding:13px 15px; display:flex; align-items:center; flex-wrap:wrap; row-gap:10px; gap:14px; animation:slidex .5s cubic-bezier(.2,.7,.3,1) both; transition:transform .2s ease, border-color .2s ease; animation-delay: {{ s.delay }}; border:1px solid {{ s.border }}; background: {{ s.bg }}" style-hover="transform:translateX(3px); border-color:var(--border2)">
+                    <div style="width:74px; flex:0 0 74px">
+                      <div style="font-size:9.5px; color:var(--faint); text-transform:uppercase; letter-spacing:.09em">{{ s.layer }}</div>
+                      <div style="font-size:12px; font-weight:600; margin-top:4px; color: {{ s.titleColor }}">{{ s.provider }}</div>
+                    </div>
+                    <div style="width:8px; height:8px; border-radius:2px; background: {{ s.provColor }}; flex:0 0 8px"></div>
+                    <div style="flex:1 1 190px; min-width:190px; display:flex; flex-direction:column; gap:3px">
+                      <div style="font-size:12.5px; font-family:'Geist Mono',monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ s.identifier }}</div>
+                      <div style="font-size:11px; color:var(--faint)">{{ s.account }}</div>
+                    </div>
+                    <div style="width:88px; flex:0 0 88px; text-align:right; white-space:nowrap">
+                      <div style="font-size:9.5px; color:var(--faint); text-transform:uppercase; letter-spacing:.07em">renews</div>
+                      <div style="font-size:11.5px; font-family:'Geist Mono',monospace; margin-top:3px; color: {{ s.renewColor }}">{{ s.renew }}</div>
+                    </div>
+                    <div style="width:96px; flex:0 0 96px; text-align:right; white-space:nowrap">
+                      <div style="font-size:9.5px; color:var(--faint); text-transform:uppercase; letter-spacing:.07em">cost</div>
+                      <div style="font-size:11.5px; font-family:'Geist Mono',monospace; margin-top:3px; font-variant-numeric:tabular-nums">{{ s.cost }}</div>
+                    </div>
+                    <sc-if value="{{ s.configured }}" hint-placeholder-val="{{ true }}">
+                      <div style="display:flex; align-items:center; gap:7px; margin-left:auto; flex-wrap:wrap">
+                        <div style="display:flex; align-items:center; gap:6px; height:26px; padding:0 8px; border-radius:999px; border:1px dashed var(--border2); font-family:'Geist Mono',monospace; font-size:11px; color:var(--faint); letter-spacing:.14em">••••••••</div>
+                        <button onClick="{{ s.copy }}" title="Reveals from vault" style="height:26px; padding:0 9px; border-radius:999px; border:1px solid var(--border2); background:var(--elev); cursor:pointer; display:flex; align-items:center; gap:6px; font-size:11.5px; color:var(--muted)" style-hover="color:var(--text); border-color:var(--accent)">
+                          <svg width="10" height="12" viewBox="0 0 10 12" fill="none"><rect x="0.5" y="5" width="9" height="6.5" rx="1.5" fill="currentColor" opacity="0.85"></rect><path d="M2.6 5V3.4a2.4 2.4 0 0 1 4.8 0V5" stroke="currentColor" stroke-width="1.2"></path></svg>
+                          Copy
+                        </button>
+                        <button onClick="{{ s.console }}" style="height:26px; padding:0 9px; border-radius:999px; border:1px solid var(--border2); background:var(--elev); cursor:pointer; font-size:11.5px; color:var(--muted)" style-hover="color:var(--text); border-color:var(--accent)">Open console ↗</button>
+                      </div>
+                    </sc-if>
+                    <sc-if value="{{ s.missing }}" hint-placeholder-val="{{ false }}">
+                      <button onClick="{{ openModal }}" style="height:26px; padding:0 10px; border-radius:999px; border:1px dashed var(--border2); background:transparent; cursor:pointer; font-size:11.5px; color:var(--faint)" style-hover="color:var(--accent); border-color:var(--accent)">+ Configure layer</button>
+                    </sc-if>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isAccounts }}" hint-placeholder-val="{{ false }}">
+      <div style="padding:24px 26px; animation:fadeup .34s cubic-bezier(.2,.7,.3,1) both; display:flex; flex-direction:column; gap:14px">
+        <div>
+          <div style="font-size:16px; font-weight:600">Provider accounts</div>
+          <div style="font-size:12px; color:var(--faint); margin-top:3px">6 accounts · expand a row to see everything billed under it</div>
+        </div>
+        <div style="background:var(--panel); border:1px solid var(--border); border-radius:18px; overflow:auto">
+          <div style="display:grid; grid-template-columns:22px 120px minmax(160px,1fr) 112px 104px 60px 104px; gap:10px; min-width:820px; padding:9px 14px; border-bottom:1px solid var(--border); background:var(--panel2); font-size:10.5px; color:var(--faint); text-transform:uppercase; letter-spacing:.07em">
+            <div></div><div>Provider</div><div>Account email</div><div>Auth type</div><div>MFA</div><div>Services</div><div>Owner</div>
+          </div>
+          <sc-for list="{{ accountRows }}" as="a" hint-placeholder-count="6">
+            <div style="border-bottom:1px solid var(--border)">
+              <button onClick="{{ a.toggle }}" style="width:100%; text-align:left; display:grid; grid-template-columns:22px 120px minmax(160px,1fr) 112px 104px 60px 104px; gap:10px; min-width:820px; align-items:center; padding:var(--rowpad); border:0; background:transparent; cursor:pointer" style-hover="background:var(--hover)">
+                <div style="font-family:'Geist Mono',monospace; font-size:10px; color:var(--faint)">{{ a.caret }}</div>
+                <div style="display:flex; align-items:center; gap:8px">
+                  <span style="width:16px; height:16px; border-radius:4px; background: {{ a.color }}; display:flex; align-items:center; justify-content:center; font-size:9px; font-weight:700; color:#0b0c0f">{{ a.initial }}</span>
+                  <span style="font-size:12.5px; font-weight:500">{{ a.provider }}</span>
+                </div>
+                <div style="font-family:'Geist Mono',monospace; font-size:12px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ a.email }}</div>
+                <div style="font-size:12px; color:var(--muted)">{{ a.auth }}</div>
+                <div><span style="display:inline-flex; align-items:center; gap:6px; height:21px; padding:0 8px; border-radius:99px; font-size:10.5px; background: {{ a.mfaBg }}; color: {{ a.mfaColor }}; border:1px solid {{ a.mfaBorder }}"><i style="width:5px; height:5px; border-radius:99px; background: {{ a.mfaColor }}; display:block"></i>{{ a.mfa }}</span></div>
+                <div style="font-family:'Geist Mono',monospace; font-size:12px">{{ a.count }}</div>
+                <div style="font-size:12px; color:var(--muted)">{{ a.owner }}</div>
+              </button>
+              <sc-if value="{{ a.expanded }}" hint-placeholder-val="{{ false }}">
+                <div style="background:var(--panel2); border-top:1px solid var(--border); padding:10px 14px 12px 52px; display:flex; flex-direction:column; gap:1px">
+                  <div style="display:grid; grid-template-columns:80px minmax(150px,1fr) 118px 96px 96px; gap:10px; min-width:620px; font-size:10px; color:var(--faint); text-transform:uppercase; letter-spacing:.07em; padding:4px 0 7px">
+                    <div>Type</div><div>Identifier</div><div>Property</div><div>Renews</div><div>Cost</div>
+                  </div>
+                  <sc-for list="{{ a.services }}" as="s" hint-placeholder-count="3">
+                    <div style="display:grid; grid-template-columns:80px minmax(150px,1fr) 118px 96px 96px; gap:10px; min-width:620px; padding:6px 0; border-top:1px solid var(--border); font-size:12px; align-items:center">
+                      <div style="color:var(--muted)">{{ s.type }}</div>
+                      <div style="font-family:'Geist Mono',monospace; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ s.identifier }}</div>
+                      <div style="font-family:'Geist Mono',monospace; color:var(--muted); font-size:11.5px">{{ s.property }}</div>
+                      <div style="font-family:'Geist Mono',monospace; font-size:11.5px; color: {{ s.renewColor }}">{{ s.renew }}</div>
+                      <div style="font-family:'Geist Mono',monospace; font-size:11.5px; font-variant-numeric:tabular-nums">{{ s.cost }}</div>
+                    </div>
+                  </sc-for>
+                  <div style="display:flex; gap:8px; margin-top:9px">
+                    <button onClick="{{ a.console }}" style="height:26px; padding:0 9px; border-radius:999px; border:1px solid var(--border2); background:var(--elev); cursor:pointer; font-size:11.5px; color:var(--muted)" style-hover="color:var(--text)">Open provider console ↗</button>
+                    <button onClick="{{ a.copy }}" style="height:26px; padding:0 9px; border-radius:999px; border:1px solid var(--border2); background:var(--elev); cursor:pointer; font-size:11.5px; color:var(--muted); display:flex; align-items:center; gap:6px" style-hover="color:var(--text)">
+                      <svg width="10" height="12" viewBox="0 0 10 12" fill="none"><rect x="0.5" y="5" width="9" height="6.5" rx="1.5" fill="currentColor" opacity="0.85"></rect><path d="M2.6 5V3.4a2.4 2.4 0 0 1 4.8 0V5" stroke="currentColor" stroke-width="1.2"></path></svg>
+                      Copy credential from vault
+                    </button>
+                  </div>
+                </div>
+              </sc-if>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-if>
+
+    <sc-if value="{{ isServices }}" hint-placeholder-val="{{ false }}">
+      <div style="padding:24px 26px; animation:fadeup .34s cubic-bezier(.2,.7,.3,1) both; display:flex; flex-direction:column; gap:14px">
+        <div style="display:flex; align-items:flex-end; gap:14px">
+          <div>
+            <div style="font-size:16px; font-weight:600">Services</div>
+            <div style="font-size:12px; color:var(--faint); margin-top:3px">{{ svcCountLabel }}</div>
+          </div>
+          <button onClick="{{ reload }}" style="margin-left:auto; height:28px; padding:0 10px; border-radius:999px; border:1px solid var(--border); background:var(--panel); color:var(--muted); cursor:pointer; font-size:12px" style-hover="color:var(--text)">↻ Sync providers</button>
+        </div>
+
+        <div style="display:flex; align-items:center; gap:8px; flex-wrap:wrap">
+          <select value="{{ f.type }}" onChange="{{ setType }}" style="height:30px; padding:0 8px; border-radius:999px; border:1px solid var(--border); background:var(--panel); font-size:12px">
+            <sc-for list="{{ typeOpts }}" as="o" hint-placeholder-count="4"><option value="{{ o.v }}">{{ o.l }}</option></sc-for>
+          </select>
+          <select value="{{ f.provider }}" onChange="{{ setProvider }}" style="height:30px; padding:0 8px; border-radius:999px; border:1px solid var(--border); background:var(--panel); font-size:12px">
+            <sc-for list="{{ provOpts }}" as="o" hint-placeholder-count="4"><option value="{{ o.v }}">{{ o.l }}</option></sc-for>
+          </select>
+          <button onClick="{{ toggleSoon }}" style="height:30px; padding:0 11px; border-radius:999px; cursor:pointer; font-size:12px; border:1px solid {{ soonBorder }}; background: {{ soonBg }}; color: {{ soonFg }}">Expiring &lt; 30 days</button>
+          <button onClick="{{ toggleNoauto }}" style="height:30px; padding:0 11px; border-radius:999px; cursor:pointer; font-size:12px; border:1px solid {{ noautoBorder }}; background: {{ noautoBg }}; color: {{ noautoFg }}">Auto-renew off</button>
+          <div style="flex:1"></div>
+          <button onClick="{{ clearFilters }}" style="height:30px; padding:0 10px; border-radius:999px; border:1px solid transparent; background:transparent; color:var(--faint); cursor:pointer; font-size:12px" style-hover="color:var(--text)">Clear filters</button>
+        </div>
+
+        <div style="background:var(--panel); border:1px solid var(--border); border-radius:18px; overflow:auto">
+          <div style="display:grid; grid-template-columns:70px minmax(150px,1.5fr) 106px minmax(150px,1.2fr) 76px 96px 56px 96px; gap:8px; min-width:860px; padding:9px 14px; border-bottom:1px solid var(--border); background:var(--panel2); font-size:10.5px; color:var(--faint); text-transform:uppercase; letter-spacing:.07em">
+            <div>Type</div><div>Identifier</div><div>Provider</div><div>Account</div><div>Status</div><div>Renews</div><div>Auto</div><div style="text-align:right">Cost</div>
+          </div>
+
+          <sc-if value="{{ loading }}" hint-placeholder-val="{{ true }}">
+            <div>
+              <sc-for list="{{ skeleton }}" as="s" hint-placeholder-count="8">
+                <div style="display:grid; grid-template-columns:70px minmax(150px,1.5fr) 106px minmax(150px,1.2fr) 76px 96px 56px 96px; gap:8px; min-width:860px; padding:var(--rowpad); border-bottom:1px solid var(--border); align-items:center">
+                  <sc-for list="{{ s.cells }}" as="c" hint-placeholder-count="8">
+                    <div style="height:10px; border-radius:4px; width: {{ c.w }}; background:linear-gradient(90deg, var(--panel2) 0%, var(--hover) 40%, var(--panel2) 80%); background-size:380px 100%; animation:shim 1.3s infinite linear"></div>
+                  </sc-for>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ showRows }}" hint-placeholder-val="{{ false }}">
+            <div>
+              <sc-for list="{{ svcRows }}" as="s" hint-placeholder-count="8">
+                <div style="display:grid; grid-template-columns:70px minmax(150px,1.5fr) 106px minmax(150px,1.2fr) 76px 96px 56px 96px; gap:8px; min-width:860px; padding:var(--rowpad); border-bottom:1px solid var(--border); align-items:center; transition:background-color .16s ease, box-shadow .16s ease" style-hover="background:var(--hover); box-shadow:inset 2px 0 0 var(--accent)">
+                  <div style="font-size:11px; color:var(--muted); text-transform:uppercase; letter-spacing:.05em">{{ s.type }}</div>
+                  <div style="font-family:'Geist Mono',monospace; font-size:12px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ s.identifier }}</div>
+                  <div><span style="display:inline-flex; align-items:center; gap:6px; height:21px; padding:0 8px; border-radius:5px; font-size:10.5px; background: {{ s.provBg }}; border:1px solid {{ s.provBorder }}; color: {{ s.provFg }}"><i style="width:5px; height:5px; border-radius:2px; background: {{ s.provColor }}; display:block"></i>{{ s.provider }}</span></div>
+                  <div style="font-family:'Geist Mono',monospace; font-size:11.5px; color:var(--muted); overflow:hidden; text-overflow:ellipsis; white-space:nowrap">{{ s.account }}</div>
+                  <div style="font-size:11.5px; color: {{ s.statusColor }}">{{ s.status }}</div>
+                  <div style="font-family:'Geist Mono',monospace; font-size:11.5px; color: {{ s.renewColor }}">{{ s.renew }}</div>
+                  <div>
+                    <button onClick="{{ s.toggle }}" style="width:34px; height:19px; border-radius:99px; border:1px solid {{ s.swBorder }}; background: {{ s.swBg }}; position:relative; cursor:pointer; padding:0">
+                      <span style="position:absolute; top:2px; left: {{ s.knob }}; width:13px; height:13px; border-radius:99px; background: {{ s.knobColor }}; transition:left .15s ease"></span>
+                    </button>
+                  </div>
+                  <div style="text-align:right; font-family:'Geist Mono',monospace; font-size:11.5px; font-variant-numeric:tabular-nums">
+                    {{ s.cost }}
+                    <div style="font-size:10px; color:var(--faint)">{{ s.cycle }}</div>
+                  </div>
+                </div>
+              </sc-for>
+            </div>
+          </sc-if>
+
+          <sc-if value="{{ isEmpty }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:56px 20px; display:flex; flex-direction:column; align-items:center; gap:12px">
+              <div style="width:34px; height:34px; border-radius:16px; border:1px dashed var(--border2); display:flex; align-items:center; justify-content:center; color:var(--faint); font-family:'Geist Mono',monospace">∅</div>
+              <div style="font-size:13.5px; font-weight:600">No services match these filters</div>
+              <div style="font-size:12px; color:var(--faint); max-width:340px; text-align:center">Nothing in the estate matches that combination. Widen the filters, or register the service if a provider bill arrived without a record.</div>
+              <div style="display:flex; gap:8px; margin-top:4px">
+                <button onClick="{{ clearFilters }}" style="height:29px; padding:0 12px; border-radius:999px; border:1px solid var(--border2); background:var(--elev); cursor:pointer; font-size:12px">Clear filters</button>
+                <button onClick="{{ openModal }}" style="height:29px; padding:0 12px; border-radius:999px; border:1px solid var(--accent); background:var(--accent); color:#0b0c0f; font-weight:600; cursor:pointer; font-size:12px">Add service</button>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+      </div>
+    </sc-if>
+  </main>
+
+  <sc-if value="{{ modal }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed; inset:0; z-index:60; background:rgba(4,5,7,.66); display:flex; align-items:center; justify-content:center; padding:32px">
+      <div style="width:660px; max-height:88vh; overflow:auto; background:var(--panel); border:1px solid var(--border2); border-radius:12px; box-shadow:var(--shadow); animation:fadeup .16s ease">
+        <div style="padding:15px 18px; border-bottom:1px solid var(--border); display:flex; align-items:center; gap:12px">
+          <div style="font-size:14px; font-weight:600">Add service to estate</div>
+          <div style="font-size:11.5px; color:var(--faint)">step {{ stepLabel }}</div>
+          <button onClick="{{ closeModal }}" style="margin-left:auto; width:26px; height:26px; border-radius:999px; border:1px solid var(--border); background:transparent; color:var(--muted); cursor:pointer">✕</button>
+        </div>
+        <div style="display:flex; gap:6px; padding:14px 18px 0">
+          <sc-for list="{{ steps }}" as="st" hint-placeholder-count="5">
+            <div style="flex:1; display:flex; flex-direction:column; gap:6px">
+              <div style="height:3px; border-radius:99px; background: {{ st.bar }}"></div>
+              <div style="font-size:10.5px; color: {{ st.fg }}">{{ st.label }}</div>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="padding:20px 18px 6px; min-height:230px">
+          <sc-if value="{{ s1 }}" hint-placeholder-val="{{ true }}">
+            <div style="display:flex; flex-direction:column; gap:10px">
+              <div style="font-size:12.5px; color:var(--muted)">Which provider account will this be billed to?</div>
+              <sc-for list="{{ accountPick }}" as="a" hint-placeholder-count="6">
+                <button onClick="{{ a.pick }}" style="display:flex; align-items:center; gap:10px; padding:10px 12px; border-radius:14px; cursor:pointer; text-align:left; border:1px solid {{ a.border }}; background: {{ a.bg }}">
+                  <span style="width:16px; height:16px; border-radius:4px; background: {{ a.color }}; display:flex; align-items:center; justify-content:center; font-size:9px; font-weight:700; color:#0b0c0f">{{ a.initial }}</span>
+                  <span style="font-size:12.5px; font-weight:500; width:108px">{{ a.provider }}</span>
+                  <span style="font-family:'Geist Mono',monospace; font-size:11.5px; color:var(--muted); flex:1">{{ a.email }}</span>
+                  <span style="font-size:10.5px; color: {{ a.mfaColor }}">{{ a.mfa }}</span>
+                </button>
+              </sc-for>
+              <button onClick="{{ noop }}" style="padding:10px 12px; border-radius:14px; border:1px dashed var(--border2); background:transparent; color:var(--faint); cursor:pointer; text-align:left; font-size:12.5px" style-hover="color:var(--accent); border-color:var(--accent)">+ Create new provider account…</button>
+            </div>
+          </sc-if>
+          <sc-if value="{{ s2 }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; flex-direction:column; gap:10px">
+              <div style="font-size:12.5px; color:var(--muted)">What kind of service is it?</div>
+              <div style="display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px">
+                <sc-for list="{{ typePick }}" as="t" hint-placeholder-count="6">
+                  <button onClick="{{ t.pick }}" style="padding:12px; border-radius:14px; cursor:pointer; text-align:left; border:1px solid {{ t.border }}; background: {{ t.bg }}">
+                    <div style="font-size:12.5px; font-weight:600">{{ t.label }}</div>
+                    <div style="font-size:10.5px; color:var(--faint); margin-top:4px">{{ t.hint }}</div>
+                  </button>
+                </sc-for>
+              </div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ s3 }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; flex-direction:column; gap:14px">
+              <div style="display:flex; flex-direction:column; gap:6px">
+                <label style="font-size:11.5px; color:var(--muted)">Identifier</label>
+                <input value="{{ form.identifier }}" onChange="{{ setIdent }}" placeholder="e.g. tapquest.io or vps-hostinger-02" style="height:34px; padding:0 10px; border-radius:999px; border:1px solid var(--border2); background:var(--panel2); font-family:'Geist Mono',monospace; font-size:12.5px">
+              </div>
+              <div style="display:flex; flex-direction:column; gap:6px">
+                <label style="font-size:11.5px; color:var(--muted)">Console URL</label>
+                <input value="{{ form.url }}" onChange="{{ setUrl }}" placeholder="https://ap.www.namecheap.com/domains" style="height:34px; padding:0 10px; border-radius:999px; border:1px solid var(--border2); background:var(--panel2); font-family:'Geist Mono',monospace; font-size:12.5px">
+              </div>
+              <div style="display:flex; align-items:center; gap:10px; padding:11px 12px; border-radius:14px; border:1px solid var(--border); background:var(--panel2)">
+                <svg width="11" height="13" viewBox="0 0 10 12" fill="none" style="color:var(--accent)"><rect x="0.5" y="5" width="9" height="6.5" rx="1.5" fill="currentColor" opacity="0.85"></rect><path d="M2.6 5V3.4a2.4 2.4 0 0 1 4.8 0V5" stroke="currentColor" stroke-width="1.2"></path></svg>
+                <div style="flex:1">
+                  <div style="font-size:12px; font-weight:500">Credentials stay in the vault</div>
+                  <div style="font-size:11px; color:var(--faint); margin-top:2px">Digital Estate stores a vault reference only — secrets are never rendered here.</div>
+                </div>
+                <div style="font-family:'Geist Mono',monospace; font-size:11px; color:var(--faint); letter-spacing:.14em">••••••••</div>
+              </div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ s4 }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; flex-direction:column; gap:14px">
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px">
+                <div style="display:flex; flex-direction:column; gap:6px">
+                  <label style="font-size:11.5px; color:var(--muted)">Cost (PKR)</label>
+                  <input value="{{ form.cost }}" onChange="{{ setCost }}" placeholder="9800" style="height:34px; padding:0 10px; border-radius:999px; border:1px solid var(--border2); background:var(--panel2); font-family:'Geist Mono',monospace; font-size:12.5px">
+                </div>
+                <div style="display:flex; flex-direction:column; gap:6px">
+                  <label style="font-size:11.5px; color:var(--muted)">Billing cycle</label>
+                  <select value="{{ form.cycle }}" onChange="{{ setCycle }}" style="height:34px; padding:0 8px; border-radius:999px; border:1px solid var(--border2); background:var(--panel2); font-size:12.5px">
+                    <option value="monthly">Monthly</option>
+                    <option value="yearly">Yearly</option>
+                    <option value="usage">Usage-based</option>
+                  </select>
+                </div>
+              </div>
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px">
+                <div style="display:flex; flex-direction:column; gap:6px">
+                  <label style="font-size:11.5px; color:var(--muted)">Next renewal</label>
+                  <input value="{{ form.renew }}" onChange="{{ setRenew }}" placeholder="2026-09-01" style="height:34px; padding:0 10px; border-radius:999px; border:1px solid var(--border2); background:var(--panel2); font-family:'Geist Mono',monospace; font-size:12.5px">
+                </div>
+                <div style="display:flex; flex-direction:column; gap:6px">
+                  <label style="font-size:11.5px; color:var(--muted)">Auto-renew</label>
+                  <button onClick="{{ toggleFormAuto }}" style="height:34px; border-radius:999px; border:1px solid var(--border2); background:var(--panel2); cursor:pointer; display:flex; align-items:center; gap:9px; padding:0 10px">
+                    <span style="width:34px; height:19px; border-radius:99px; border:1px solid {{ formSwBorder }}; background: {{ formSwBg }}; position:relative; display:block">
+                      <span style="position:absolute; top:2px; left: {{ formKnob }}; width:13px; height:13px; border-radius:99px; background: {{ formKnobColor }}"></span>
+                    </span>
+                    <span style="font-size:12px; color:var(--muted)">{{ formAutoLabel }}</span>
+                  </button>
+                </div>
+              </div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ s5 }}" hint-placeholder-val="{{ false }}">
+            <div style="display:flex; flex-direction:column; gap:14px">
+              <div style="display:grid; grid-template-columns:1fr 1fr; gap:12px">
+                <div style="display:flex; flex-direction:column; gap:6px">
+                  <label style="font-size:11.5px; color:var(--muted)">Link to property</label>
+                  <select value="{{ form.property }}" onChange="{{ setProp }}" style="height:34px; padding:0 8px; border-radius:999px; border:1px solid var(--border2); background:var(--panel2); font-size:12.5px">
+                    <sc-for list="{{ propOpts }}" as="o" hint-placeholder-count="8"><option value="{{ o.v }}">{{ o.l }}</option></sc-for>
+                  </select>
+                </div>
+                <div style="display:flex; flex-direction:column; gap:6px">
+                  <label style="font-size:11.5px; color:var(--muted)">Role in stack</label>
+                  <select value="{{ form.role }}" onChange="{{ setRole }}" style="height:34px; padding:0 8px; border-radius:999px; border:1px solid var(--border2); background:var(--panel2); font-size:12.5px">
+                    <sc-for list="{{ roleOpts }}" as="o" hint-placeholder-count="7"><option value="{{ o.v }}">{{ o.l }}</option></sc-for>
+                  </select>
+                </div>
+              </div>
+              <div style="border:1px solid var(--border); background:var(--panel2); border-radius:14px; padding:13px 14px; display:flex; flex-direction:column; gap:8px">
+                <div style="font-size:11px; color:var(--faint); text-transform:uppercase; letter-spacing:.08em">Summary</div>
+                <div style="font-size:12.5px; font-family:'Geist Mono',monospace">{{ summary }}</div>
+                <div style="font-size:11.5px; color:var(--muted)">{{ summary2 }}</div>
+              </div>
+            </div>
+          </sc-if>
+        </div>
+
+        <div style="padding:14px 18px; border-top:1px solid var(--border); display:flex; align-items:center; gap:9px">
+          <button onClick="{{ back }}" style="height:31px; padding:0 12px; border-radius:999px; border:1px solid var(--border2); background:transparent; color:var(--muted); cursor:pointer; font-size:12.5px" style-hover="color:var(--text)">Back</button>
+          <div style="flex:1; font-size:11.5px; color:var(--faint)">{{ stepHint }}</div>
+          <button onClick="{{ next }}" style="height:31px; padding:0 14px; border-radius:999px; border:1px solid var(--accent); background:var(--accent); color:#0b0c0f; font-weight:600; cursor:pointer; font-size:12.5px">{{ nextLabel }}</button>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ palette }}" hint-placeholder-val="{{ false }}">
+    <div onClick="{{ closePalette }}" style="position:fixed; inset:0; z-index:70; background:rgba(4,5,7,.6); display:flex; align-items:flex-start; justify-content:center; padding-top:14vh">
+      <div onClick="{{ stop }}" style="width:560px; background:var(--panel); border:1px solid var(--border2); border-radius:12px; box-shadow:var(--shadow); overflow:hidden; animation:fadeup .14s ease">
+        <div style="display:flex; align-items:center; gap:10px; padding:13px 15px; border-bottom:1px solid var(--border)">
+          <span style="font-family:'Geist Mono',monospace; color:var(--faint)">⌕</span>
+          <input value="{{ pq }}" onChange="{{ setPq }}" placeholder="Search domains, services, accounts or run a command…" style="flex:1; height:24px; border:0; background:transparent; outline:none; font-size:13px">
+          <span style="font-family:'Geist Mono',monospace; font-size:10.5px; color:var(--faint); border:1px solid var(--border2); border-radius:4px; padding:1px 5px">esc</span>
+        </div>
+        <div style="max-height:340px; overflow:auto; padding:8px">
+          <sc-for list="{{ paletteGroups }}" as="g" hint-placeholder-count="2">
+            <div style="margin-bottom:6px">
+              <div style="font-size:10px; color:var(--faint); text-transform:uppercase; letter-spacing:.08em; padding:7px 9px 5px">{{ g.label }}</div>
+              <sc-for list="{{ g.items }}" as="i" hint-placeholder-count="4">
+                <button onClick="{{ i.go }}" style="width:100%; display:flex; align-items:center; gap:10px; padding:8px 9px; border:0; border-radius:999px; background:transparent; cursor:pointer; text-align:left" style-hover="background:var(--hover)">
+                  <span style="width:16px; font-family:'Geist Mono',monospace; font-size:11px; color: {{ i.color }}">{{ i.icon }}</span>
+                  <span style="font-size:12.5px; flex:1">{{ i.label }}</span>
+                  <span style="font-size:11px; color:var(--faint); font-family:'Geist Mono',monospace">{{ i.meta }}</span>
+                </button>
+              </sc-for>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </sc-if>
+
+  <sc-if value="{{ toast }}" hint-placeholder-val="{{ false }}">
+    <div style="position:fixed; bottom:20px; left:50%; transform:translateX(-50%); z-index:80; display:flex; align-items:center; gap:10px; padding:10px 14px; border-radius:16px; background:var(--elev); border:1px solid var(--border2); box-shadow:var(--shadow); animation:fadeup .16s ease">
+      <svg width="11" height="13" viewBox="0 0 10 12" fill="none" style="color:var(--green)"><rect x="0.5" y="5" width="9" height="6.5" rx="1.5" fill="currentColor" opacity="0.85"></rect><path d="M2.6 5V3.4a2.4 2.4 0 0 1 4.8 0V5" stroke="currentColor" stroke-width="1.2"></path></svg>
+      <span style="font-size:12.5px">{{ toast }}</span>
+    </div>
+  </sc-if>
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;defaultTheme&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;dark&quot;,&quot;light&quot;],&quot;default&quot;:&quot;dark&quot;,&quot;tsType&quot;:&quot;'dark'|'light'&quot;},&quot;density&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;compact&quot;,&quot;comfortable&quot;],&quot;default&quot;:&quot;compact&quot;,&quot;tsType&quot;:&quot;'compact'|'comfortable'&quot;},&quot;accent&quot;:{&quot;editor&quot;:&quot;color&quot;,&quot;options&quot;:[&quot;#7c8cff&quot;,&quot;#3ecf8e&quot;,&quot;#f0a52e&quot;,&quot;#e8eaee&quot;],&quot;default&quot;:&quot;#7c8cff&quot;,&quot;tsType&quot;:&quot;string&quot;}}">
+const TODAY = new Date('2026-07-27T00:00:00Z');
+
+const PROV = {
+  namecheap: { name: 'Namecheap', color: '#ff6c2c', initial: 'N', url: 'ap.www.namecheap.com' },
+  hostinger: { name: 'Hostinger', color: '#8b6df0', initial: 'H', url: 'hpanel.hostinger.com' },
+  aws: { name: 'AWS', color: '#ff9900', initial: 'A', url: 'console.aws.amazon.com' },
+  godaddy: { name: 'GoDaddy', color: '#1bb8ba', initial: 'G', url: 'dcc.godaddy.com' },
+  cloudflare: { name: 'Cloudflare', color: '#f6821f', initial: 'C', url: 'dash.cloudflare.com' },
+  google: { name: 'Google', color: '#5a95f5', initial: 'G', url: 'admin.google.com' }
+};
+
+const ACCOUNTS = [
+  { id: 'nc', prov: 'namecheap', email: 'domains@rocketmint.pk', auth: 'Password + API key', mfa: 'app', owner: 'Sana Aftab' },
+  { id: 'cf', prov: 'cloudflare', email: 'devops@rocketmint.pk', auth: 'SSO (Google)', mfa: 'app', owner: 'Bilal Raza' },
+  { id: 'aws', prov: 'aws', email: 'aws-root@rocketmint.pk', auth: 'IAM Identity Center', mfa: 'key', owner: 'Bilal Raza' },
+  { id: 'hg', prov: 'hostinger', email: 'billing@rocketmint.pk', auth: 'Password', mfa: 'sms', owner: 'Finance (shared)' },
+  { id: 'gd', prov: 'godaddy', email: 'legacy-web@rocketmint.pk', auth: 'Password', mfa: 'none', owner: 'Unassigned' },
+  { id: 'gw', prov: 'google', email: 'admin@rocketmint.pk', auth: 'SSO + super-admin', mfa: 'app', owner: 'Sana Aftab' }
+];
+
+const PROPS = [
+  { name: 'tapquest.gg', kind: 'Mobile game' },
+  { name: 'tapquest.com', kind: 'Marketing' },
+  { name: 'blocksmash.io', kind: 'Mobile game' },
+  { name: 'pixelforge.io', kind: 'Studio site' },
+  { name: 'rocketmint.pk', kind: 'Corporate' },
+  { name: 'lootlane.app', kind: 'App' },
+  { name: 'hyperdash.app', kind: 'App (parked)' },
+  { name: 'cdn-tapquest.net', kind: 'Infra domain' }
+];
+
+const SERVICES = [
+  { id: 's1', type: 'domain', role: 'registrar', ident: 'tapquest.gg', prov: 'namecheap', acct: 'nc', prop: 'tapquest.gg', renew: '2026-08-02', auto: true, cost: 9800, cycle: 'yearly', status: 'active' },
+  { id: 's2', type: 'domain', role: 'registrar', ident: 'tapquest.com', prov: 'godaddy', acct: 'gd', prop: 'tapquest.com', renew: '2026-08-14', auto: false, cost: 4200, cycle: 'yearly', status: 'at risk' },
+  { id: 's3', type: 'domain', role: 'registrar', ident: 'pixelforge.io', prov: 'namecheap', acct: 'nc', prop: 'pixelforge.io', renew: '2026-11-09', auto: true, cost: 11500, cycle: 'yearly', status: 'active' },
+  { id: 's4', type: 'domain', role: 'registrar', ident: 'hyperdash.app', prov: 'cloudflare', acct: 'cf', prop: 'hyperdash.app', renew: '2027-01-22', auto: true, cost: 3900, cycle: 'yearly', status: 'active' },
+  { id: 's5', type: 'domain', role: 'registrar', ident: 'rocketmint.pk', prov: 'godaddy', acct: 'gd', prop: 'rocketmint.pk', renew: '2026-08-30', auto: false, cost: 6500, cycle: 'yearly', status: 'at risk' },
+  { id: 's6', type: 'domain', role: 'registrar', ident: 'blocksmash.io', prov: 'namecheap', acct: 'nc', prop: 'blocksmash.io', renew: '2026-09-18', auto: true, cost: 12200, cycle: 'yearly', status: 'active' },
+  { id: 's7', type: 'domain', role: 'registrar', ident: 'lootlane.app', prov: 'cloudflare', acct: 'cf', prop: 'lootlane.app', renew: '2026-12-03', auto: true, cost: 4100, cycle: 'yearly', status: 'active' },
+  { id: 's8', type: 'domain', role: 'registrar', ident: 'cdn-tapquest.net', prov: 'namecheap', acct: 'nc', prop: null, renew: '2026-10-27', auto: true, cost: 3600, cycle: 'yearly', status: 'orphan' },
+  { id: 's9', type: 'dns', role: 'dns', ident: 'zone: tapquest.gg', prov: 'cloudflare', acct: 'cf', prop: 'tapquest.gg', renew: null, auto: true, cost: 0, cycle: 'free', status: 'active' },
+  { id: 's10', type: 'dns', role: 'dns', ident: 'zone: blocksmash.io', prov: 'cloudflare', acct: 'cf', prop: 'blocksmash.io', renew: null, auto: true, cost: 0, cycle: 'free', status: 'active' },
+  { id: 's11', type: 'dns', role: 'dns', ident: 'zone: rocketmint.pk', prov: 'cloudflare', acct: 'cf', prop: 'rocketmint.pk', renew: null, auto: true, cost: 0, cycle: 'free', status: 'active' },
+  { id: 's12', type: 'hosting', role: 'hosting', ident: 'vps-hostinger-01 · KVM 4', prov: 'hostinger', acct: 'hg', prop: 'pixelforge.io', renew: '2026-08-05', auto: true, cost: 6200, cycle: 'monthly', status: 'active' },
+  { id: 's13', type: 'hosting', role: 'hosting', ident: 'ecs-tapquest-prod · ap-south-1', prov: 'aws', acct: 'aws', prop: 'tapquest.gg', renew: null, auto: true, cost: 128400, cycle: 'usage', status: 'active' },
+  { id: 's14', type: 'hosting', role: 'hosting', ident: 'lootlane-web · Pages', prov: 'cloudflare', acct: 'cf', prop: 'lootlane.app', renew: null, auto: true, cost: 0, cycle: 'free', status: 'active' },
+  { id: 's15', type: 'hosting', role: 'hosting', ident: 'biz-shared-04 · rocketmint.pk', prov: 'hostinger', acct: 'hg', prop: 'rocketmint.pk', renew: '2026-09-02', auto: true, cost: 3100, cycle: 'monthly', status: 'active' },
+  { id: 's16', type: 'mail', role: 'mail', ident: 'Workspace Business Plus · 14 seats', prov: 'google', acct: 'gw', prop: 'rocketmint.pk', renew: '2026-08-08', auto: true, cost: 41300, cycle: 'monthly', status: 'active' },
+  { id: 's17', type: 'mail', role: 'mail', ident: 'SES relay · no-reply@tapquest.gg', prov: 'aws', acct: 'aws', prop: 'tapquest.gg', renew: null, auto: true, cost: 2400, cycle: 'usage', status: 'active' },
+  { id: 's18', type: 'cdn', role: 'cdn', ident: 'Cloudflare Pro · tapquest.gg', prov: 'cloudflare', acct: 'cf', prop: 'tapquest.gg', renew: '2026-08-01', auto: true, cost: 5800, cycle: 'monthly', status: 'active' },
+  { id: 's19', type: 'tls', role: 'tls', ident: 'ACM · *.tapquest.gg', prov: 'aws', acct: 'aws', prop: 'tapquest.gg', renew: '2026-09-12', auto: true, cost: 0, cycle: 'free', status: 'active' },
+  { id: 's20', type: 'analytics', role: 'analytics', ident: 'Firebase Blaze · TapQuest', prov: 'google', acct: 'gw', prop: 'tapquest.gg', renew: null, auto: true, cost: 18700, cycle: 'usage', status: 'active' },
+  { id: 's21', type: 'analytics', role: 'analytics', ident: 'GA4 · legacy UA import', prov: 'google', acct: 'gw', prop: null, renew: null, auto: true, cost: 0, cycle: 'free', status: 'orphan' }
+];
+
+const LAYERS = [
+  ['registrar', 'Registrar'], ['dns', 'DNS'], ['hosting', 'Hosting'],
+  ['mail', 'Mail'], ['cdn', 'CDN'], ['tls', 'TLS'], ['analytics', 'Analytics']
+];
+
+const CAT = { hosting: 'Hosting', mail: 'Mail', analytics: 'Analytics', domain: 'Domains', cdn: 'CDN', dns: 'DNS', tls: 'TLS' };
+
+class Component extends DCLogic {
+  state = {
+    screen: 'dash', prop: null, expanded: null, loading: true,
+    f: { type: 'all', provider: 'all', soon: false, noauto: false },
+    modal: false, step: 1,
+    form: { acct: 'nc', type: 'domain', identifier: '', url: '', cost: '', cycle: 'yearly', renew: '', auto: true, property: 'tapquest.gg', role: 'registrar' },
+    palette: false, pq: '', toast: null, theme: null, autoOverride: {}
+  };
+
+  componentDidMount() {
+    this._t = setTimeout(() => this.setState({ loading: false }), 1200);
+    this._key = (e) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); this.setState({ palette: true }); }
+      if (e.key === 'Escape') this.setState({ palette: false, modal: false });
+    };
+    window.addEventListener('keydown', this._key);
+  }
+  componentWillUnmount() { clearTimeout(this._t); clearTimeout(this._toastT); window.removeEventListener('keydown', this._key); }
+
+  toast(msg) {
+    clearTimeout(this._toastT);
+    this.setState({ toast: msg });
+    this._toastT = setTimeout(() => this.setState({ toast: null }), 2600);
+  }
+  auto(s) { const o = this.state.autoOverride[s.id]; return o === undefined ? s.auto : o; }
+  days(d) { return d ? Math.round((new Date(d + 'T00:00:00Z') - TODAY) / 86400000) : null; }
+  money(n) { return 'PKR ' + Math.round(n).toLocaleString('en-US'); }
+  monthly(s) { return s.cycle === 'yearly' ? s.cost / 12 : s.cost; }
+  urgency(d) {
+    if (d === null) return { color: 'var(--faint)', label: '—' };
+    if (d < 7) return { color: 'var(--red)', label: d + 'd' };
+    if (d < 30) return { color: 'var(--amber)', label: d + 'd' };
+    return { color: 'var(--muted)', label: d + 'd' };
+  }
+  dateLabel(d) {
+    if (!d) return 'no expiry';
+    const dt = new Date(d + 'T00:00:00Z');
+    return dt.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', timeZone: 'UTC' });
+  }
+  renewCell(s) {
+    const dd = this.days(s.renew), u = this.urgency(dd);
+    return { renew: s.renew ? this.dateLabel(s.renew) + ' · ' + u.label : 'no expiry', renewColor: u.color };
+  }
+  provChip(key) {
+    const p = PROV[key];
+    return { provider: p.name, provColor: p.color, provBg: 'color-mix(in oklab, ' + p.color + ' 12%, transparent)', provBorder: 'color-mix(in oklab, ' + p.color + ' 32%, transparent)', provFg: 'var(--text)' };
+  }
+  mfaStyle(m) {
+    if (m === 'key') return { mfa: 'Hardware key', mfaColor: 'var(--green)' };
+    if (m === 'app') return { mfa: 'Authenticator', mfaColor: 'var(--green)' };
+    if (m === 'sms') return { mfa: 'SMS only', mfaColor: 'var(--amber)' };
+    return { mfa: 'No MFA', mfaColor: 'var(--red)' };
+  }
+  go(screen, prop) { return () => this.setState({ screen, prop: prop || null, palette: false }); }
+
+  filtered() {
+    const f = this.state.f;
+    return SERVICES.filter((s) => {
+      if (f.type !== 'all' && s.type !== f.type) return false;
+      if (f.provider !== 'all' && s.prov !== f.provider) return false;
+      if (f.soon) { const d = this.days(s.renew); if (d === null || d >= 30) return false; }
+      if (f.noauto && this.auto(s)) return false;
+      return true;
+    });
+  }
+
+  renderVals() {
+    const st = this.state;
+    const theme = st.theme || this.props.defaultTheme || 'dark';
+    const rowPad = (this.props.density || 'compact') === 'comfortable' ? '15px 14px' : '10px 14px';
+    const totalMonthly = SERVICES.reduce((a, s) => a + this.monthly(s), 0);
+    const renew30 = SERVICES.filter((s) => { const d = this.days(s.renew); return d !== null && d < 30; });
+    const orphans = SERVICES.filter((s) => !s.prop);
+
+    const nav = [
+      { id: 'dash', label: 'Dashboard', icon: '◱', count: '' },
+      { id: 'props', label: 'Properties', icon: '⬒', count: PROPS.length },
+      { id: 'accounts', label: 'Accounts', icon: '⬡', count: ACCOUNTS.length },
+      { id: 'services', label: 'Services', icon: '▤', count: SERVICES.length }
+    ].map((n) => {
+      const active = st.screen === n.id || (n.id === 'props' && st.screen === 'detail');
+      return Object.assign({}, n, {
+        go: this.go(n.id), bg: active ? 'var(--panel2)' : 'transparent',
+        fg: active ? 'var(--text)' : 'var(--muted)',
+        iconColor: active ? 'var(--accent)' : 'var(--faint)'
+      });
+    });
+
+    // timeline lanes
+    const win = renewalsIn(90, this);
+    const lanes = [];
+    const timeline = win.map((s, i) => {
+      const d = this.days(s.renew), u = this.urgency(d), left = Math.min(84, (d / 90) * 100);
+      const label = shortName(s.ident);
+      const estPct = ((label.length * 6.8 + 104) / 620) * 100;
+      let lane = 0;
+      while (lanes[lane] !== undefined && left < lanes[lane].end + 1.5) lane++;
+      lanes[lane] = { end: left + estPct };
+      return Object.assign({
+        name: label, left: left + '%', top: lane * 34 + 'px',
+        color: u.color, in: 'in ' + d + 'd', delay: (i * 45) + 'ms'
+      }, { provColor: PROV[s.prov].color });
+    });
+    const ticks = [
+      { label: 'Aug 1', left: (5 / 90) * 100 + '%' },
+      { label: 'Sep 1', left: (36 / 90) * 100 + '%' },
+      { label: 'Oct 1', left: (66 / 90) * 100 + '%' }
+    ];
+
+    // spend by provider
+    const provTotals = Object.keys(PROV).map((k) => ({
+      key: k, name: PROV[k].name, color: PROV[k].color,
+      amount: SERVICES.filter((s) => s.prov === k).reduce((a, s) => a + this.monthly(s), 0)
+    })).sort((a, b) => b.amount - a.amount);
+    let acc = 0;
+    const donut = provTotals.map((p) => {
+      const from = (acc / totalMonthly) * 100; acc += p.amount;
+      const to = (acc / totalMonthly) * 100;
+      return p.color + ' ' + from.toFixed(2) + '% ' + to.toFixed(2) + '%';
+    }).join(', ');
+    const byProvider = provTotals.map((p) => Object.assign({}, p, {
+      pctLabel: ((p.amount / totalMonthly) * 100).toFixed(1) + '%'
+    }));
+
+    const catTotals = {};
+    SERVICES.forEach((s) => { const c = CAT[s.type]; catTotals[c] = (catTotals[c] || 0) + this.monthly(s); });
+    const catMax = Math.max.apply(null, Object.values(catTotals));
+    const catColors = { Hosting: 'var(--accent)', Mail: '#5a95f5', Analytics: '#3ecf8e', Domains: '#ff9900', CDN: '#f6821f', DNS: 'var(--border2)', TLS: 'var(--border2)' };
+    const byCategory = Object.keys(catTotals).sort((a, b) => catTotals[b] - catTotals[a]).map((k, i) => ({
+      label: k, amount: this.money(catTotals[k]), delay: (120 + i * 70) + 'ms',
+      pct: Math.max(1.5, (catTotals[k] / catMax) * 100) + '%', color: catColors[k] || 'var(--border2)'
+    }));
+
+    // properties
+    const propRows = PROPS.map((p, pi) => {
+      const svcs = SERVICES.filter((s) => s.prop === p.name);
+      const nextD = svcs.map((s) => this.days(s.renew)).filter((d) => d !== null).sort((a, b) => a - b)[0];
+      const u = this.urgency(nextD === undefined ? null : nextD);
+      const nextS = svcs.filter((s) => this.days(s.renew) === nextD)[0];
+      const gaps = LAYERS.filter((l) => !svcs.some((s) => s.role === l[0])).length;
+      const noAuto = svcs.some((s) => !this.auto(s));
+      return {
+        name: p.name, kind: p.kind, open: this.go('detail', p.name), delay: (pi * 55) + 'ms',
+        chips: LAYERS.map((l) => {
+          const s = svcs.filter((x) => x.role === l[0])[0];
+          const c = s ? PROV[s.prov].color : 'var(--border2)';
+          return {
+            label: l[1], title: s ? l[1] + ' — ' + PROV[s.prov].name : l[1] + ' — not configured',
+            dot: c, bg: s ? 'color-mix(in oklab, ' + c + ' 10%, transparent)' : 'transparent',
+            border: s ? 'color-mix(in oklab, ' + c + ' 28%, transparent)' : 'var(--border)',
+            fg: s ? 'var(--text)' : 'var(--faint)'
+          };
+        }),
+        monthly: this.money(svcs.reduce((a, s) => a + this.monthly(s), 0)),
+        renew: nextS ? this.dateLabel(nextS.renew) + ' · ' + u.label : '—',
+        renewColor: u.color,
+        layers: (LAYERS.length - gaps) + ' / ' + LAYERS.length,
+        health: noAuto ? 'auto-renew off' : gaps > 3 ? 'sparse stack' : 'healthy',
+        healthColor: noAuto ? 'var(--red)' : gaps > 3 ? 'var(--amber)' : 'var(--green)'
+      };
+    });
+
+    // detail
+    let detail = null;
+    if (st.prop) {
+      const p = PROPS.filter((x) => x.name === st.prop)[0];
+      const svcs = SERVICES.filter((s) => s.prop === st.prop);
+      const nextD = svcs.map((s) => this.days(s.renew)).filter((d) => d !== null).sort((a, b) => a - b)[0];
+      const nextS = svcs.filter((s) => this.days(s.renew) === nextD)[0];
+      const u = this.urgency(nextD === undefined ? null : nextD);
+      detail = {
+        name: p.name, kind: p.kind,
+        monthly: this.money(svcs.reduce((a, s) => a + this.monthly(s), 0)),
+        renew: nextS ? this.dateLabel(nextS.renew) + ' · in ' + nextD + 'd' : '—',
+        renewColor: u.color,
+        stack: LAYERS.map((l, li) => {
+          const s = svcs.filter((x) => x.role === l[0])[0];
+          if (!s) return {
+            delay: (li * 60) + 'ms',
+            layer: l[1], configured: false, missing: true, provider: 'Not set',
+            titleColor: 'var(--faint)', provColor: 'var(--border2)', dot: 'var(--border2)',
+            border: 'var(--border)', bg: 'transparent', identifier: '—', account: 'no owning account',
+            renew: '—', renewColor: 'var(--faint)', cost: '—'
+          };
+          const a = ACCOUNTS.filter((x) => x.id === s.acct)[0];
+          const rc = this.renewCell(s);
+          return {
+            delay: (li * 60) + 'ms',
+            layer: l[1], configured: true, missing: false, provider: PROV[s.prov].name,
+            titleColor: 'var(--text)', provColor: PROV[s.prov].color, dot: PROV[s.prov].color,
+            border: 'var(--border)', bg: 'var(--panel2)',
+            identifier: s.ident, account: a.email + ' · ' + a.auth,
+            renew: rc.renew, renewColor: rc.renewColor,
+            cost: s.cost ? this.money(s.cost) + cycleAbbr(s.cycle) : 'included',
+            copy: () => this.toast('Credential for ' + a.email + ' copied from vault · clears in 60s'),
+            console: () => this.toast('Opening ' + PROV[s.prov].url + ' → ' + s.ident)
+          };
+        })
+      };
+    }
+
+    // accounts
+    const accountRows = ACCOUNTS.map((a) => {
+      const p = PROV[a.prov], m = this.mfaStyle(a.mfa);
+      const svcs = SERVICES.filter((s) => s.acct === a.id);
+      const expanded = st.expanded === a.id;
+      return {
+        provider: p.name, color: p.color, initial: p.initial, email: a.email, auth: a.auth,
+        mfa: m.mfa, mfaColor: m.mfaColor,
+        mfaBg: 'color-mix(in oklab, ' + m.mfaColor + ' 12%, transparent)',
+        mfaBorder: 'color-mix(in oklab, ' + m.mfaColor + ' 30%, transparent)',
+        count: svcs.length, owner: a.owner, expanded, caret: expanded ? '▾' : '▸',
+        toggle: () => this.setState({ expanded: expanded ? null : a.id }),
+        console: () => this.toast('Opening ' + p.url),
+        copy: () => this.toast('Credential for ' + a.email + ' copied from vault · clears in 60s'),
+        services: svcs.map((s) => Object.assign({
+          type: s.type, identifier: s.ident, property: s.prop || 'unlinked',
+          cost: s.cost ? this.money(s.cost) : 'included'
+        }, this.renewCell(s)))
+      };
+    });
+
+    // services table
+    const rows = this.filtered();
+    const svcRows = rows.map((s) => {
+      const a = ACCOUNTS.filter((x) => x.id === s.acct)[0];
+      const on = this.auto(s);
+      const stC = s.status === 'at risk' ? 'var(--red)' : s.status === 'orphan' ? 'var(--amber)' : 'var(--green)';
+      return Object.assign({
+        type: s.type, identifier: s.ident, account: a.email, status: s.status, statusColor: stC,
+        cost: s.cost ? this.money(s.cost) : 'included',
+        cycle: s.cost ? s.cycle : s.cycle,
+        knob: on ? '17px' : '2px',
+        swBg: on ? 'var(--accent)' : 'var(--panel2)',
+        swBorder: on ? 'var(--accent)' : 'var(--border2)',
+        knobColor: on ? '#0b0c0f' : 'var(--faint)',
+        toggle: () => {
+          const o = Object.assign({}, this.state.autoOverride); o[s.id] = !on;
+          this.setState({ autoOverride: o });
+          this.toast('Auto-renew ' + (!on ? 'enabled' : 'disabled') + ' for ' + shortName(s.ident));
+        }
+      }, this.provChip(s.prov), this.renewCell(s));
+    });
+
+    const chip = (on) => ({
+      border: on ? 'var(--accent)' : 'var(--border)',
+      bg: on ? 'color-mix(in oklab, var(--accent) 16%, transparent)' : 'var(--panel)',
+      fg: on ? 'var(--text)' : 'var(--muted)'
+    });
+    const soon = chip(st.f.soon), noauto = chip(st.f.noauto);
+
+    // modal
+    const stepNames = ['Account', 'Service type', 'Identifier', 'Billing', 'Link'];
+    const steps = stepNames.map((l, i) => ({
+      label: l,
+      bar: i + 1 <= st.step ? 'var(--accent)' : 'var(--border)',
+      fg: i + 1 <= st.step ? 'var(--text)' : 'var(--faint)'
+    }));
+    const fAcct = ACCOUNTS.filter((a) => a.id === st.form.acct)[0];
+    const accountPick = ACCOUNTS.map((a) => {
+      const sel = st.form.acct === a.id, m = this.mfaStyle(a.mfa);
+      return {
+        provider: PROV[a.prov].name, color: PROV[a.prov].color, initial: PROV[a.prov].initial,
+        email: a.email, mfa: m.mfa, mfaColor: m.mfaColor,
+        border: sel ? 'var(--accent)' : 'var(--border)',
+        bg: sel ? 'color-mix(in oklab, var(--accent) 10%, transparent)' : 'var(--panel2)',
+        pick: () => this.setForm('acct', a.id)
+      };
+    });
+    const typePick = [
+      ['domain', 'Domain', 'registrar record'], ['dns', 'DNS zone', 'authoritative zone'],
+      ['hosting', 'Hosting', 'VPS, cluster, static'], ['mail', 'Mail', 'mailbox or relay'],
+      ['cdn', 'CDN / WAF', 'edge plan'], ['analytics', 'SaaS / analytics', 'subscription']
+    ].map((t) => {
+      const sel = st.form.type === t[0];
+      return {
+        label: t[1], hint: t[2],
+        border: sel ? 'var(--accent)' : 'var(--border)',
+        bg: sel ? 'color-mix(in oklab, var(--accent) 10%, transparent)' : 'var(--panel2)',
+        pick: () => this.setForm('type', t[0])
+      };
+    });
+
+    return {
+      theme, rowPad, accent: this.props.accent || '#7c8cff',
+      themeGlyph: theme === 'dark' ? '☾' : '☀',
+      toggleTheme: () => this.setState({ theme: theme === 'dark' ? 'light' : 'dark' }),
+      nav,
+      crumb: { dash: 'Dashboard', props: 'Properties', detail: st.prop || 'Property', accounts: 'Accounts', services: 'Services' }[st.screen],
+      isDash: st.screen === 'dash', isProps: st.screen === 'props', isDetail: st.screen === 'detail' && !!detail,
+      isAccounts: st.screen === 'accounts', isServices: st.screen === 'services',
+      goProps: this.go('props'),
+
+      kpis: [
+        { label: 'Total monthly spend', value: this.money(totalMonthly).replace('PKR ', ''), sub: 'PKR · normalised across cycles', tone: 'var(--accent)' },
+        { label: 'Active services', value: SERVICES.length, sub: PROPS.length + ' properties · 6 accounts', tone: 'var(--green)' },
+        { label: 'Renewals in 30 days', value: renew30.length, sub: this.money(renew30.reduce((a, s) => a + s.cost, 0)) + ' due', tone: 'var(--amber)' },
+        { label: 'Accounts missing MFA', value: 1, sub: 'GoDaddy · +1 SMS-only', tone: 'var(--red)' },
+        { label: 'Unlinked / orphan', value: orphans.length, sub: 'billed but not on a property', tone: 'var(--amber)' }
+      ].map((k, i) => Object.assign({ delay: (i * 60) + 'ms' }, k)),
+      timeline, ticks, laneH: Math.max(3, lanes.length) * 34 + 'px',
+      donut, byProvider, byCategory, totalShort: Math.round(totalMonthly / 1000) + 'k',
+
+      propRows, detail: detail || { stack: [] },
+      accountRows,
+
+      f: st.f, loading: st.loading,
+      showRows: !st.loading && svcRows.length > 0,
+      isEmpty: !st.loading && svcRows.length === 0,
+      svcRows, skeleton: skeletonRows(),
+      svcCountLabel: svcRows.length + ' of ' + SERVICES.length + ' services · ' + this.money(rows.reduce((a, s) => a + this.monthly(s), 0)) + ' / month',
+      typeOpts: [['all', 'All types'], ['domain', 'Domains'], ['dns', 'DNS'], ['hosting', 'Hosting'], ['mail', 'Mail'], ['cdn', 'CDN'], ['tls', 'TLS'], ['analytics', 'SaaS / analytics']].map((o) => ({ v: o[0], l: o[1] })),
+      provOpts: [{ v: 'all', l: 'All providers' }].concat(Object.keys(PROV).map((k) => ({ v: k, l: PROV[k].name }))),
+      setType: (e) => this.setF('type', e.target.value),
+      setProvider: (e) => this.setF('provider', e.target.value),
+      toggleSoon: () => this.setF('soon', !st.f.soon),
+      toggleNoauto: () => this.setF('noauto', !st.f.noauto),
+      soonBorder: soon.border, soonBg: soon.bg, soonFg: soon.fg,
+      noautoBorder: noauto.border, noautoBg: noauto.bg, noautoFg: noauto.fg,
+      clearFilters: () => this.setState({ f: { type: 'all', provider: 'all', soon: false, noauto: false } }),
+      reload: () => { this.setState({ loading: true, screen: 'services' }); clearTimeout(this._t); this._t = setTimeout(() => this.setState({ loading: false }), 1100); },
+
+      modal: st.modal, openModal: () => this.setState({ modal: true, step: 1 }),
+      closeModal: () => this.setState({ modal: false }),
+      steps, stepLabel: st.step + ' of 5',
+      s1: st.step === 1, s2: st.step === 2, s3: st.step === 3, s4: st.step === 4, s5: st.step === 5,
+      accountPick, typePick, form: st.form,
+      setIdent: (e) => this.setForm('identifier', e.target.value),
+      setUrl: (e) => this.setForm('url', e.target.value),
+      setCost: (e) => this.setForm('cost', e.target.value),
+      setCycle: (e) => this.setForm('cycle', e.target.value),
+      setRenew: (e) => this.setForm('renew', e.target.value),
+      setProp: (e) => this.setForm('property', e.target.value),
+      setRole: (e) => this.setForm('role', e.target.value),
+      toggleFormAuto: () => this.setForm('auto', !st.form.auto),
+      formSwBg: st.form.auto ? 'var(--accent)' : 'var(--panel)',
+      formSwBorder: st.form.auto ? 'var(--accent)' : 'var(--border2)',
+      formKnob: st.form.auto ? '17px' : '2px',
+      formKnobColor: st.form.auto ? '#0b0c0f' : 'var(--faint)',
+      formAutoLabel: st.form.auto ? 'On — renews automatically' : 'Off — needs manual renewal',
+      propOpts: PROPS.map((p) => ({ v: p.name, l: p.name })).concat([{ v: '', l: 'Leave unlinked' }]),
+      roleOpts: LAYERS.map((l) => ({ v: l[0], l: l[1] })),
+      summary: (st.form.identifier || 'new-service') + ' → ' + (st.form.property || 'unlinked') + ' · ' + st.form.role,
+      summary2: PROV[fAcct.prov].name + ' · ' + fAcct.email + ' · ' + (st.form.cost ? this.money(Number(st.form.cost)) : 'PKR 0') + ' / ' + st.form.cycle + (st.form.renew ? ' · renews ' + st.form.renew : ''),
+      stepHint: ['Billing account determines who receives the invoice.', 'Type drives which stack role it can fill.', 'Secrets are stored as a vault reference only.', 'Costs are normalised to monthly for reporting.', 'Review before it lands in the estate.'][st.step - 1],
+      nextLabel: st.step === 5 ? 'Add to estate' : 'Continue',
+      back: () => this.setState({ step: Math.max(1, st.step - 1) }),
+      next: () => {
+        if (st.step === 5) { this.setState({ modal: false, step: 1 }); this.toast((st.form.identifier || 'Service') + ' added to the estate'); }
+        else this.setState({ step: st.step + 1 });
+      },
+      noop: () => this.toast('Provider account creation is handled in Vault → Accounts'),
+
+      palette: st.palette, openPalette: () => this.setState({ palette: true }),
+      closePalette: () => this.setState({ palette: false }),
+      stop: (e) => e.stopPropagation(),
+      pq: st.pq, setPq: (e) => this.setState({ pq: e.target.value }),
+      paletteGroups: this.paletteGroups(),
+
+      toast: st.toast
+    };
+  }
+
+  setF(k, v) { const f = Object.assign({}, this.state.f); f[k] = v; this.setState({ f }); }
+  setForm(k, v) { const form = Object.assign({}, this.state.form); form[k] = v; this.setState({ form }); }
+
+  paletteGroups() {
+    const q = this.state.pq.trim().toLowerCase();
+    const match = (t) => !q || t.toLowerCase().indexOf(q) > -1;
+    const groups = [];
+    const props = PROPS.filter((p) => match(p.name)).slice(0, 4).map((p) => ({
+      label: p.name, meta: p.kind, icon: '⬒', color: 'var(--accent)', go: this.go('detail', p.name)
+    }));
+    if (props.length) groups.push({ label: 'Properties', items: props });
+    const svcs = SERVICES.filter((s) => match(s.ident)).slice(0, 4).map((s) => ({
+      label: s.ident, meta: PROV[s.prov].name, icon: '▤', color: PROV[s.prov].color, go: this.go('services')
+    }));
+    if (svcs.length) groups.push({ label: 'Services', items: svcs });
+    const accts = ACCOUNTS.filter((a) => match(a.email) || match(PROV[a.prov].name)).slice(0, 3).map((a) => ({
+      label: a.email, meta: PROV[a.prov].name, icon: '⬡', color: PROV[a.prov].color,
+      go: () => this.setState({ screen: 'accounts', expanded: a.id, palette: false })
+    }));
+    if (accts.length) groups.push({ label: 'Accounts', items: accts });
+    const cmds = [
+      { label: 'Add service…', meta: '⌘N', icon: '+', color: 'var(--accent)', go: () => this.setState({ modal: true, step: 1, palette: false }) },
+      { label: 'Show renewals under 30 days', meta: 'filter', icon: '⌗', color: 'var(--amber)', go: () => this.setState({ screen: 'services', palette: false, f: { type: 'all', provider: 'all', soon: true, noauto: false } }) },
+      { label: 'Audit accounts missing MFA', meta: 'audit', icon: '⌗', color: 'var(--red)', go: this.go('accounts') }
+    ].filter((c) => match(c.label));
+    if (cmds.length) groups.push({ label: 'Commands', items: cmds });
+    return groups;
+  }
+}
+
+function renewalsIn(n, self) {
+  return SERVICES.filter((s) => { const d = self.days(s.renew); return d !== null && d >= 0 && d <= n; })
+    .sort((a, b) => self.days(a.renew) - self.days(b.renew));
+}
+function cycleAbbr(c) { return { yearly: ' /yr', monthly: ' /mo', usage: ' usage', free: '' }[c] || ' /' + c; }
+function shortName(t) { return t.length > 18 ? t.slice(0, 17) + '…' : t; }
+function skeletonRows() {
+  const w = ['60%', '82%', '70%', '76%', '54%', '64%', '40%', '58%'];
+  return [0, 1, 2, 3, 4, 5, 6, 7].map((i) => ({ cells: w.map((x, j) => ({ w: j % 2 ? x : '48%' })) }));
+}
+
+</script>
+</body>
+</html>

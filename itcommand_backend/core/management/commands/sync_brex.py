@@ -43,7 +43,7 @@ class Command(BaseCommand):
             self.style.SUCCESS(
                 f"Synced {summary.get('cards', 0)} card(s) and "
                 f"{summary.get('charges', 0)} charge(s); "
-                f"{summary.get('matched', 0)} matched to subscriptions "
+                f"{summary.get('matched', 0)} matched to services "
                 f"({summary.get('new', 0)} new)."
             )
         )

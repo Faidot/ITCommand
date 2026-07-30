@@ -1,8 +1,8 @@
-"""Brex integration: pull cards and card charges, and attach them to subscriptions.
+"""Brex integration: pull cards and card charges, and attach them to services.
 
-Answers the question people actually ask about a subscription — *which card
+Answers the question people actually ask about a service — *which card
 does this renew on, and what did we last pay?* — by syncing charges from Brex
-and matching each one to a subscription by its merchant descriptor.
+and matching each one to a service by its merchant descriptor.
 
 Contract, matching the other integrations here: best-effort, never raises,
 returns (result, error).
@@ -136,8 +136,8 @@ def _tokens(text):
     return {word for word in normalise_descriptor(text).split() if len(word) > 2}
 
 
-def match_score(descriptor, subscription):
-    """0..1 confidence that `descriptor` is a charge for `subscription`.
+def match_score(descriptor, service):
+    """0..1 confidence that `descriptor` is a charge for `service`.
 
     Deliberately conservative: a weak overlap scores low and the caller leaves
     the charge unmatched rather than attaching it to the wrong service.
@@ -146,15 +146,15 @@ def match_score(descriptor, subscription):
     if not descriptor_tokens:
         return 0.0
 
-    # An explicit descriptor recorded on the subscription is authoritative.
-    if subscription.billing_descriptor:
-        if _tokens(subscription.billing_descriptor) & descriptor_tokens:
+    # An explicit descriptor recorded on the service is authoritative.
+    if service.billing_descriptor:
+        if _tokens(service.billing_descriptor) & descriptor_tokens:
             return 1.0
 
     best = 0.0
     for field, weight in (
-        (subscription.platform, 1.0),
-        (subscription.name, 0.9),
+        (service.provider.name if service.provider_id else "", 1.0),
+        (service.identifier, 0.9),
     ):
         candidate = _tokens(field)
         if not candidate:
@@ -164,10 +164,10 @@ def match_score(descriptor, subscription):
             continue
         # Score from both directions and take the stronger. "SQ *CLAUDE.AI"
         # covers only half of "Claude Pro", but *everything* the descriptor
-        # says is about that subscription — which is the real signal.
-        covers_subscription = len(overlap) / len(candidate)
+        # says is about that service — which is the real signal.
+        covers_service = len(overlap) / len(candidate)
         covers_descriptor = len(overlap) / len(descriptor_tokens)
-        score = max(covers_subscription, covers_descriptor) * weight
+        score = max(covers_service, covers_descriptor) * weight
         best = max(best, min(score, 0.95))
     return round(best, 3)
 
@@ -176,18 +176,18 @@ def match_score(descriptor, subscription):
 MATCH_THRESHOLD = 0.5
 
 
-def best_match(descriptor, subscriptions):
-    """Pick the best-scoring subscription, or (None, score) when unsure.
+def best_match(descriptor, services):
+    """Pick the best-scoring service, or (None, score) when unsure.
 
-    Returns nothing on a tie: if two subscriptions score identically, picking
-    one is a coin flip, and a wrongly attached charge is harder to notice than
-    an unattached one.
+    Returns nothing on a tie: if two services score identically, picking one is
+    a coin flip, and a wrongly attached charge is harder to notice than an
+    unattached one.
     """
     scored = []
-    for subscription in subscriptions:
-        score = match_score(descriptor, subscription)
+    for service in services:
+        score = match_score(descriptor, service)
         if score > 0:
-            scored.append((score, subscription))
+            scored.append((score, service))
     if not scored:
         return None, 0.0
 
@@ -244,11 +244,11 @@ def sync_cards(integration):
 
 
 def sync_transactions(integration, *, since_days=90):
-    """Upsert card charges and attach them to subscriptions.
+    """Upsert card charges and attach them to estate services.
 
     Returns (summary, error) where summary counts what happened.
     """
-    from core.models import PaymentCard, Subscription, SubscriptionPayment
+    from core.models import PaymentCard, Service, ServicePayment
 
     since = (timezone.localdate() - timedelta(days=since_days)).isoformat()
     items, error = _paged(
@@ -260,9 +260,9 @@ def sync_transactions(integration, *, since_days=90):
         return {"charges": 0, "matched": 0, "new": 0}, error
 
     cards = {card.external_id: card for card in PaymentCard.objects.filter(provider=PROVIDER)}
-    subscriptions = list(
-        Subscription.objects.exclude(status="CANCELLED").only(
-            "id", "name", "platform", "billing_descriptor", "payment_card_id"
+    services = list(
+        Service.objects.exclude(status="CANCELLED").select_related("provider").only(
+            "id", "identifier", "billing_descriptor", "provider__name"
         )
     )
 
@@ -289,9 +289,9 @@ def sync_transactions(integration, *, since_days=90):
             continue
 
         card = cards.get(str(item.get("card_id") or ""))
-        subscription, score = best_match(descriptor, subscriptions)
+        service, score = best_match(descriptor, services)
 
-        payment, created = SubscriptionPayment.objects.update_or_create(
+        payment, created = ServicePayment.objects.update_or_create(
             provider=PROVIDER,
             external_id=external_id,
             defaults={
@@ -301,27 +301,27 @@ def sync_transactions(integration, *, since_days=90):
                 "currency": currency,
                 "posted_at": posted,
                 "card": card,
-                "subscription": subscription,
-                "match_source": "AUTO" if subscription else "NONE",
+                "service": service,
+                "match_source": "AUTO" if service else "NONE",
                 "match_score": score,
             },
         )
         charges += 1
         new += 1 if created else 0
 
-        if subscription:
+        if service:
             matched += 1
             # Record which card it renews on, and the descriptor that matched,
             # so the next sync attaches without guessing.
             updates = []
-            if card and subscription.payment_card_id != card.pk:
-                subscription.payment_card = card
+            if card and service.payment_card_id != card.pk:
+                service.payment_card = card
                 updates.append("payment_card")
-            if not subscription.billing_descriptor and descriptor:
-                subscription.billing_descriptor = str(descriptor)[:255]
+            if not service.billing_descriptor and descriptor:
+                service.billing_descriptor = str(descriptor)[:160]
                 updates.append("billing_descriptor")
             if updates:
-                subscription.save(update_fields=updates + ["updated_at"])
+                service.save(update_fields=updates + ["updated_at"])
 
     return {"charges": charges, "matched": matched, "new": new}, error
 
@@ -357,7 +357,7 @@ def run_sync(integration, *, since_days=90):
 
     message = (
         f"{card_count} card(s), {summary['charges']} charge(s), "
-        f"{summary['matched']} matched to subscriptions"
+        f"{summary['matched']} matched to services"
     )
     integration.mark_result("OK", message)
     return summary, ""

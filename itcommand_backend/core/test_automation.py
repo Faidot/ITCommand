@@ -107,7 +107,7 @@ class EmailReportTests(TestCase):
 
 class AutomationRunnerTests(TestCase):
     @override_settings(
-        AUTOMATION_DAILY_COMMANDS=["example_daily_task"],
+        AUTOMATION_DAILY_COMMANDS=["fetch_exchange_rates"],
         AUTOMATION_INTERVAL_COMMANDS=[],
         AUTOMATION_INTERVAL_SECONDS=300,
         AUTOMATION_PING_ENABLED=False,
@@ -121,12 +121,12 @@ class AutomationRunnerTests(TestCase):
         django_call_command("run_automation", "--once", stdout=StringIO())
 
         scheduled_call.assert_called_once()
-        marker = AppSettings.objects.get(key="automation.example_daily_task.last_success")
+        marker = AppSettings.objects.get(key="automation.fetch_exchange_rates.last_success")
         self.assertEqual(marker.value, timezone.localdate().isoformat())
 
     @override_settings(
-        AUTOMATION_DAILY_COMMANDS=["finance_autopost", "check_subscription_alerts"],
-        AUTOMATION_INTERVAL_COMMANDS=["check_subscription_alerts"],
+        AUTOMATION_DAILY_COMMANDS=["finance_autopost", "fetch_exchange_rates"],
+        AUTOMATION_INTERVAL_COMMANDS=["fetch_exchange_rates"],
         AUTOMATION_INTERVAL_SECONDS=300,
         AUTOMATION_PING_ENABLED=False,
         AUTOMATION_EMAIL_REPORT_ENABLED=False,
@@ -134,7 +134,7 @@ class AutomationRunnerTests(TestCase):
         AUTOMATION_RETRY_SECONDS=30,
     )
     @patch("core.management.commands.run_automation.call_command")
-    def test_interval_alert_check_does_not_repeat_unrelated_daily_work(
+    def test_an_interval_command_does_not_repeat_unrelated_daily_work(
         self,
         scheduled_call,
     ):
@@ -146,8 +146,57 @@ class AutomationRunnerTests(TestCase):
             command_names,
             [
                 "finance_autopost",
-                "check_subscription_alerts",
-                "check_subscription_alerts",
+                "fetch_exchange_rates",
+                "fetch_exchange_rates",
             ],
         )
         self.assertEqual(command_names.count("finance_autopost"), 1)
+
+
+class RetiredCommandTests(TestCase):
+    """Phase 5 deleted four commands that a deployment's .env may still name.
+
+    A configuration leftover must not become a failure retried every cycle
+    forever — the runner would shout about it in the logs indefinitely and
+    never set the marker.
+    """
+
+    @override_settings(
+        AUTOMATION_DAILY_COMMANDS=["auto_renew_subscriptions", "fetch_exchange_rates"],
+        AUTOMATION_INTERVAL_COMMANDS=[],
+        AUTOMATION_INTERVAL_SECONDS=300,
+        AUTOMATION_PING_ENABLED=False,
+        AUTOMATION_EMAIL_REPORT_ENABLED=False,
+        AUTOMATION_POLL_SECONDS=10,
+        AUTOMATION_RETRY_SECONDS=30,
+    )
+    @patch("core.management.commands.run_automation.call_command")
+    def test_a_command_that_no_longer_exists_is_skipped_not_retried(
+        self, scheduled_call
+    ):
+        out = StringIO()
+        django_call_command("run_automation", "--once", stdout=out)
+
+        # The real command still ran; the retired one was skipped by name.
+        names = [call.args[0] for call in scheduled_call.call_args_list]
+        self.assertEqual(names, ["fetch_exchange_rates"])
+        self.assertIn("Skipping auto_renew_subscriptions", out.getvalue())
+
+    @override_settings(
+        AUTOMATION_DAILY_COMMANDS=["auto_renew_subscriptions"],
+        AUTOMATION_INTERVAL_COMMANDS=[],
+        AUTOMATION_INTERVAL_SECONDS=300,
+        AUTOMATION_PING_ENABLED=False,
+        AUTOMATION_EMAIL_REPORT_ENABLED=False,
+        AUTOMATION_POLL_SECONDS=10,
+        AUTOMATION_RETRY_SECONDS=30,
+    )
+    @patch("core.management.commands.run_automation.call_command")
+    def test_a_skipped_command_still_sets_its_marker(self, scheduled_call):
+        """Otherwise it is re-attempted, and re-logged, on every single cycle."""
+        django_call_command("run_automation", "--once", stdout=StringIO())
+        self.assertTrue(
+            AppSettings.objects.filter(
+                key="automation.auto_renew_subscriptions.last_success"
+            ).exists()
+        )
