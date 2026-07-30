@@ -5,7 +5,6 @@ from .vault import *
 from .finance import *
 from .system import *
 from .helpdesk import *
-from .licenses import *
 from .onboarding import *
 from .seating import *
 from .vendors import *
@@ -16,4 +15,3 @@ from .kb import *
 from .integrations import *
 from .payments import *
 from .discovery import *
-from .subscriptions import *
