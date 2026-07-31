@@ -265,16 +265,20 @@ DEFAULT_FROM_EMAIL = config('DEFAULT_FROM_EMAIL', default='itcommand@localhost')
 # Long-lived automation runner settings (used by the Docker automation service).
 AUTOMATION_DAILY_COMMANDS = config(
     'AUTOMATION_DAILY_COMMANDS',
+    # The subscription and licence commands were removed in Phase 5 with the
+    # modules they served. An existing deployment's .env may still name them;
+    # `run_automation` skips a command that no longer exists rather than
+    # failing the whole cycle on it.
     default=(
-        'finance_autopost,auto_renew_licenses,auto_renew_subscriptions,'
-        'fetch_exchange_rates,sync_brex,'
-        'check_license_alerts,check_contract_alerts'
+        'finance_autopost,fetch_exchange_rates,sync_brex,check_contract_alerts'
     ),
     cast=_csv,
 )
 AUTOMATION_INTERVAL_COMMANDS = config(
     'AUTOMATION_INTERVAL_COMMANDS',
-    default='check_subscription_alerts',
+    # Was `check_subscription_alerts`, removed in Phase 5. Nothing runs on the
+    # short cadence now; the estate has no alerting pipeline of its own yet.
+    default='',
     cast=_csv,
 )
 AUTOMATION_INTERVAL_SECONDS = max(

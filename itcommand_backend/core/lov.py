@@ -44,6 +44,17 @@ COMMON_CURRENCIES = (
 )
 
 
+#: Seed for the digital-property kinds group. Imported from the estate taxonomy
+#: rather than restated, so the model choices and the dropdown cannot diverge.
+def _estate_property_kinds():
+    from core.estate import PROPERTY_KINDS
+
+    return tuple(PROPERTY_KINDS)
+
+
+ESTATE_PROPERTY_KINDS = _estate_property_kinds()
+
+
 def _validate_currency_code(code: str) -> Optional[str]:
     if not code or len(code) != 3 or not code.isalpha():
         return "A currency code must be three letters (for example, USD)."
@@ -85,12 +96,13 @@ def _field_choices(dotted_path: str, field_name: str):
 #: Lazily-loaded seeds for system groups, so the registry mirrors the models
 #: rather than duplicating their choice tuples.
 SYSTEM_SEEDS = {
-    "subscription_category": _model_choices("core.Subscription", "CATEGORY_CHOICES"),
-    "subscription_status": _model_choices("core.Subscription", "STATUS_CHOICES"),
-    "subscription_billing_cycle": _model_choices("core.Subscription", "BILLING_CYCLE_CHOICES"),
+    # Keys kept as `subscription_*` so an admin's relabelled or hidden rows
+    # survive Phase 5; the choices behind them now come from `Service`.
+    "subscription_category": _field_choices("core.Service", "service_type"),
+    "subscription_status": _field_choices("core.Service", "status"),
+    "subscription_billing_cycle": _field_choices("core.Service", "billing_cycle"),
     "expense_status": _model_choices("core.Expense", "STATUS_CHOICES"),
     "expense_payment_method": _model_choices("core.Expense", "PAYMENT_METHOD_CHOICES"),
-    "license_type": _model_choices("core.SoftwareLicense", "LICENSE_TYPE_CHOICES"),
     "vault_category": _model_choices("core.VaultCredential", "CATEGORY_CHOICES"),
     "onboarding_category": _model_choices("core.ChecklistTemplateItem", "CATEGORIES"),
     "asset_type": _model_choices("core.Asset", "ASSET_TYPE_CHOICES"),
@@ -120,26 +132,29 @@ _GROUP_LIST = [
     ),
     GroupSpec(
         key="subscription_category",
-        label="Subscription categories",
+        label="Service types",
         extendable=True,
-        help_text="Categories offered when adding a subscription. Safe to extend.",
+        help_text=(
+            "Types offered when adding an estate service. Safe to extend, but "
+            "only the seven stack roles count toward a property's gaps."
+        ),
     ),
     GroupSpec(
         key="subscription_status",
-        label="Subscription statuses",
+        label="Service statuses",
         extendable=False,
         help_text=(
-            "System list. Renewal alerts, dashboards and filters branch on these "
+            "System list. The dashboard, spend totals and filters branch on these "
             "codes, so new statuses would not be understood. Relabel or hide only."
         ),
     ),
     GroupSpec(
         key="subscription_billing_cycle",
-        label="Subscription billing cycles",
+        label="Billing cycles",
         extendable=False,
         help_text=(
-            "System list. Auto-renew advances expiry by month or year based on "
-            "these codes."
+            "System list. Monthly-equivalent spend is computed from these codes, "
+            "and USAGE and FREE deliberately contribute nothing."
         ),
     ),
     GroupSpec(
@@ -153,14 +168,6 @@ _GROUP_LIST = [
         label="Expense payment methods",
         extendable=True,
         help_text="Safe to extend — payment methods are recorded, not branched on.",
-    ),
-    GroupSpec(
-        key="license_type",
-        label="Licence types",
-        extendable=False,
-        help_text=(
-            "System list. Reports treat SUBSCRIPTION-type licences specially."
-        ),
     ),
     GroupSpec(
         key="vault_category",
@@ -234,6 +241,17 @@ _GROUP_LIST = [
         label="Onboarding assigned roles",
         extendable=True,
         help_text="Roles a checklist task can be assigned to. Safe to extend.",
+    ),
+    GroupSpec(
+        key="estate_property_kind",
+        label="Digital property kinds",
+        extendable=True,
+        seed=ESTATE_PROPERTY_KINDS,
+        help_text=(
+            "What a digital property is — a game, an app, a marketing site. "
+            "Safe to extend: nothing in the code branches on these codes, they "
+            "only group and label properties."
+        ),
     ),
 ]
 

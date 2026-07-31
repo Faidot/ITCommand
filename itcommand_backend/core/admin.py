@@ -5,10 +5,9 @@ from .models import (
     FinancialYear, BudgetCategory, Budget, Expense, 
     PettyCashTransaction, DirectPayment, RecurringBill, BillPayment,
     TicketCategory, SLAPolicy, Ticket, TicketComment, TicketAttachment,
-    SoftwareProduct, SoftwareLicense, LicenseAssignment, LicenseAlert,
-    Subscription, SubscriptionSettings, SubscriptionAlertLog,
+    Provider, ProviderAccount, Property, Service, EstateSettings,
     ListOfValues, AppSettings, Integration, ExchangeRate,
-    PaymentCard, SubscriptionPayment,
+    PaymentCard, ServicePayment,
 )
 from django import forms
 from core.lov import GROUPS, GROUP_CHOICES
@@ -123,62 +122,6 @@ class TicketCommentAdmin(admin.ModelAdmin):
 @admin.register(TicketAttachment)
 class TicketAttachmentAdmin(admin.ModelAdmin):
     list_display = ('ticket', 'uploaded_by', 'uploaded_at')
-
-
-@admin.register(SoftwareProduct)
-class SoftwareProductAdmin(admin.ModelAdmin):
-    list_display = ('name', 'vendor', 'category', 'created_at')
-    list_filter = ('category',)
-    search_fields = ('name', 'vendor')
-
-
-@admin.register(SoftwareLicense)
-class SoftwareLicenseAdmin(admin.ModelAdmin):
-    list_display = ('product', 'license_type', 'seats_total', 'expiry_date', 'is_active', 'cost', 'billing_cycle')
-    list_filter = ('license_type', 'is_active', 'billing_cycle', 'product__category')
-    search_fields = ('product__name', 'product__vendor', 'purchase_order_number')
-    autocomplete_fields = ['product', 'created_by']
-
-
-@admin.register(LicenseAssignment)
-class LicenseAssignmentAdmin(admin.ModelAdmin):
-    list_display = ('license', 'user', 'is_active', 'assigned_date', 'revoked_date', 'assigned_by')
-    list_filter = ('is_active',)
-    search_fields = ('user__email', 'user__full_name', 'license__product__name')
-    autocomplete_fields = ['license', 'user', 'assigned_by']
-
-
-@admin.register(LicenseAlert)
-class LicenseAlertAdmin(admin.ModelAdmin):
-    list_display = ('license', 'alert_type', 'is_resolved', 'created_at')
-    list_filter = ('alert_type', 'is_resolved')
-
-
-@admin.register(Subscription)
-class SubscriptionAdmin(admin.ModelAdmin):
-    list_display = (
-        'name', 'platform', 'plan_type', 'category', 'cost', 'currency',
-        'billing_cycle', 'expiry_date', 'status', 'auto_renew',
-    )
-    list_filter = ('category', 'currency', 'billing_cycle', 'status', 'auto_renew')
-    search_fields = ('name', 'platform', 'plan_type', 'purpose', 'team')
-    autocomplete_fields = ('department', 'owner', 'admin', 'created_by')
-
-
-@admin.register(SubscriptionSettings)
-class SubscriptionSettingsAdmin(admin.ModelAdmin):
-    list_display = (
-        'budget_currency', 'monthly_budget_threshold',
-        'yearly_budget_threshold', 'notifications_enabled', 'updated_at',
-    )
-
-
-@admin.register(SubscriptionAlertLog)
-class SubscriptionAlertLogAdmin(admin.ModelAdmin):
-    list_display = ('alert_type', 'subscription', 'recipient', 'scheduled_for', 'sent_at')
-    list_filter = ('alert_type', 'sent_at')
-    search_fields = ('dedupe_key', 'message', 'subscription__name', 'recipient__email')
-    readonly_fields = ('sent_at',)
 
 
 # ---------------------------------------------------------------------------
@@ -300,11 +243,52 @@ class PaymentCardAdmin(admin.ModelAdmin):
     search_fields = ('last_four', 'nickname', 'holder_name', 'external_id')
 
 
-@admin.register(SubscriptionPayment)
-class SubscriptionPaymentAdmin(admin.ModelAdmin):
-    list_display = ('posted_at', 'merchant', 'amount', 'currency', 'card', 'subscription', 'match_source')
+@admin.register(ServicePayment)
+class ServicePaymentAdmin(admin.ModelAdmin):
+    list_display = ('posted_at', 'merchant', 'amount', 'currency', 'card', 'service', 'match_source')
     list_filter = ('provider', 'match_source', 'currency', 'posted_at')
     search_fields = ('merchant', 'description', 'external_id')
     date_hierarchy = 'posted_at'
-    autocomplete_fields = ('subscription',)
+    autocomplete_fields = ('service',)
     readonly_fields = ('external_id', 'provider')
+
+
+# ---------------------------------------------------------------------------
+# Digital Estate
+# ---------------------------------------------------------------------------
+
+@admin.register(Provider)
+class ProviderAdmin(admin.ModelAdmin):
+    list_display = ('name', 'slug', 'brand_color', 'is_active')
+    search_fields = ('name', 'slug')
+    list_filter = ('is_active',)
+
+
+@admin.register(ProviderAccount)
+class ProviderAccountAdmin(admin.ModelAdmin):
+    list_display = ('account_email', 'provider', 'auth_type', 'mfa_type', 'owner', 'is_active')
+    list_filter = ('mfa_type', 'auth_type', 'is_active', 'provider')
+    search_fields = ('account_email', 'provider__name')
+
+
+@admin.register(Property)
+class PropertyAdmin(admin.ModelAdmin):
+    list_display = ('name', 'kind', 'owner', 'is_active')
+    list_filter = ('kind', 'is_active')
+    search_fields = ('name',)
+
+
+@admin.register(Service)
+class ServiceAdmin(admin.ModelAdmin):
+    list_display = (
+        'identifier', 'service_type', 'provider', 'property', 'status',
+        'renewal_date', 'auto_renew', 'cost', 'currency',
+    )
+    list_filter = ('service_type', 'status', 'billing_cycle', 'auto_renew', 'provider')
+    search_fields = ('identifier', 'provider__name', 'provider_account__account_email')
+    autocomplete_fields = ()
+
+
+@admin.register(EstateSettings)
+class EstateSettingsAdmin(admin.ModelAdmin):
+    list_display = ('__str__', 'renewal_warning_days', 'renewal_urgent_days', 'updated_at')

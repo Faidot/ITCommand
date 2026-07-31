@@ -22,7 +22,6 @@ from .views import (
     NetworkIntegrationViewSet, DiscoveredHostViewSet, NetworkScanViewSet,
     RunNetworkScanView, DiscoveryOptionsView,
     TicketCategoryViewSet, SLAPolicyViewSet, TicketViewSet, HelpdeskDashboardView,
-    SoftwareProductViewSet, SoftwareLicenseViewSet, UserLicensesView, LicenseDashboardView,
     ChecklistTemplateViewSet, ChecklistTemplateItemViewSet, OnboardingRecordViewSet, OnboardingTaskViewSet, OnboardingDashboardView,
     OfficeViewSet, FloorViewSet, SeatViewSet, SeatAssignmentViewSet, FloorMapObjectViewSet, SeatingStatsView, UserSeatView,
     VendorViewSet, VendorContractViewSet, VendorPaymentViewSet, VendorNoteViewSet,
@@ -30,13 +29,14 @@ from .views import (
     NetworkLocationViewSet, NetworkDeviceViewSet, IPAddressPoolViewSet, NetworkDashboardView,
     NetworkTopologyView, NetworkExportView, NetworkDeviceLookupView,
     KBCategoryViewSet, KBTagViewSet, KBArticleViewSet, KBDashboardView, KBSuggestView,
-    SubscriptionViewSet,
+    ProviderViewSet, ProviderAccountViewSet, PropertyViewSet, ServiceViewSet,
+    EstateDashboardView, EstateOverviewView, EstateGapsView, EstateSettingsView, ExchangeRateViewSet,
 )
 from .reports import (
     FinancialSummaryView, AssetSummaryView, ExportFinancialView, ExportAssetsView, MainDashboardView,
-    HelpdeskSummaryView, LicenseSummaryView, ProcurementSummaryView, VendorSummaryView,
+    HelpdeskSummaryView, ProcurementSummaryView, VendorSummaryView,
     SeatingSummaryView, NetworkSummaryView, OnboardingSummaryView, KBSummaryView, UserSummaryView,
-    ExportHelpdeskView, ExportLicensesView, ExportProcurementView, ExportVendorsView,
+    ExportHelpdeskView, ExportProcurementView, ExportVendorsView,
     ExportNetworkView, ExportSeatingView, ExportOnboardingView, ExportKBView, ExportUsersView,
     MasterUserReportView, ExportMasterUserView,
 )
@@ -69,9 +69,6 @@ router.register(r'locations', LocationViewSet, basename='location')
 router.register(r'helpdesk/categories', TicketCategoryViewSet, basename='ticket-category')
 router.register(r'helpdesk/sla-policies', SLAPolicyViewSet, basename='sla-policy')
 router.register(r'helpdesk/tickets', TicketViewSet, basename='ticket')
-# Licenses
-router.register(r'licenses/products', SoftwareProductViewSet, basename='software-product')
-router.register(r'licenses', SoftwareLicenseViewSet, basename='software-license')
 # Onboarding
 router.register(r'onboarding/templates', ChecklistTemplateViewSet, basename='onboarding-template')
 router.register(r'onboarding/template-items', ChecklistTemplateItemViewSet, basename='onboarding-template-item')
@@ -101,8 +98,12 @@ router.register(r'network/ip-pools', IPAddressPoolViewSet, basename='network-ip-
 router.register(r'kb/categories', KBCategoryViewSet, basename='kb-category')
 router.register(r'kb/tags', KBTagViewSet, basename='kb-tag')
 router.register(r'kb/articles', KBArticleViewSet, basename='kb-article')
-# Software subscriptions
-router.register(r'subscriptions', SubscriptionViewSet, basename='subscription')
+# Digital Estate
+router.register(r'estate/providers', ProviderViewSet, basename='estate-provider')
+router.register(r'estate/accounts', ProviderAccountViewSet, basename='estate-account')
+router.register(r'estate/properties', PropertyViewSet, basename='estate-property')
+router.register(r'estate/services', ServiceViewSet, basename='estate-service')
+router.register(r'exchange-rates', ExchangeRateViewSet, basename='exchange-rate')
 
 urlpatterns = [
     path('auth/login/', LoginView.as_view(), name='auth_login'),
@@ -117,7 +118,6 @@ urlpatterns = [
     path('reports/financial-summary/', FinancialSummaryView.as_view(), name='reports_financial_summary'),
     path('reports/asset-summary/', AssetSummaryView.as_view(), name='reports_asset_summary'),
     path('reports/helpdesk-summary/', HelpdeskSummaryView.as_view(), name='reports_helpdesk_summary'),
-    path('reports/license-summary/', LicenseSummaryView.as_view(), name='reports_license_summary'),
     path('reports/procurement-summary/', ProcurementSummaryView.as_view(), name='reports_procurement_summary'),
     path('reports/vendor-summary/', VendorSummaryView.as_view(), name='reports_vendor_summary'),
     path('reports/seating-summary/', SeatingSummaryView.as_view(), name='reports_seating_summary'),
@@ -129,7 +129,6 @@ urlpatterns = [
     path('reports/export/financial/', ExportFinancialView.as_view(), name='reports_export_financial'),
     path('reports/export/assets/', ExportAssetsView.as_view(), name='reports_export_assets'),
     path('reports/export/helpdesk/', ExportHelpdeskView.as_view(), name='reports_export_helpdesk'),
-    path('reports/export/licenses/', ExportLicensesView.as_view(), name='reports_export_licenses'),
     path('reports/export/procurement/', ExportProcurementView.as_view(), name='reports_export_procurement'),
     path('reports/export/vendors/', ExportVendorsView.as_view(), name='reports_export_vendors'),
     path('reports/export/network/', ExportNetworkView.as_view(), name='reports_export_network'),
@@ -148,10 +147,7 @@ urlpatterns = [
     path('calendar/<str:token>.ics', CalendarFeedView.as_view(), name='calendar_feed'),
     # Helpdesk
     path('helpdesk/dashboard/', HelpdeskDashboardView.as_view(), name='helpdesk_dashboard'),
-    # Licenses
-    path('licenses/user/<int:user_id>/', UserLicensesView.as_view(), name='user_licenses'),
-    path('licenses/dashboard/', LicenseDashboardView.as_view(), name='license_dashboard'),
-    # Onboarding & Seating
+        # Onboarding & Seating
     path('onboarding/dashboard/', OnboardingDashboardView.as_view(), name='onboarding_dashboard'),
     path('seating/stats/', SeatingStatsView.as_view(), name='seating_stats'),
     path('seating/users/<int:user_id>/seat/', UserSeatView.as_view(), name='user_seat'),
@@ -164,6 +160,11 @@ urlpatterns = [
     path('network/topology/', NetworkTopologyView.as_view(), name='network_topology'),
     path('network/lookup/', NetworkDeviceLookupView.as_view(), name='network_lookup'),
     path('network/export/', NetworkExportView.as_view(), name='network_export'),
+    # Digital Estate aggregations
+    path('estate/dashboard/', EstateDashboardView.as_view(), name='estate_dashboard'),
+    path('estate/overview/', EstateOverviewView.as_view(), name='estate_overview'),
+    path('estate/gaps/', EstateGapsView.as_view(), name='estate_gaps'),
+    path('estate/settings/', EstateSettingsView.as_view(), name='estate_settings'),
     # KB
     path('kb/dashboard/', KBDashboardView.as_view(), name='kb_dashboard'),
     path('kb/suggest/', KBSuggestView.as_view(), name='kb_suggest'),

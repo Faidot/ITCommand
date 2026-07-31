@@ -93,7 +93,7 @@ export function AppSidebar() {
       items: [
         { title: "Asset Inventory", url: "/assets", icon: Box, module: "assets" },
         { title: "Asset Notes", url: "/asset-notes", icon: FileText, module: "assets" },
-        { title: "Software & Subscriptions", url: "/licenses", icon: KeyRound, module: "licenses" },
+        { title: "Digital Estate", url: "/estate/dashboard", icon: Globe, module: "estate" },
       ],
     },
     {
@@ -152,7 +152,6 @@ export function AppSidebar() {
         { title: "Financial", url: "/reports/financial", icon: Wallet, module: "reports" },
         { title: "Assets", url: "/reports/assets", icon: Box, module: "reports" },
         { title: "Helpdesk", url: "/reports/helpdesk", icon: Headset, module: "reports" },
-        { title: "Licenses", url: "/reports/licenses", icon: KeyRound, module: "reports" },
         { title: "Procurement", url: "/reports/procurement", icon: ShoppingCart, module: "reports" },
         { title: "Vendors", url: "/reports/vendors", icon: Building, module: "reports" },
         { title: "Seating", url: "/reports/seating", icon: Map, module: "reports" },

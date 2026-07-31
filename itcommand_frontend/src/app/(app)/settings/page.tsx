@@ -77,7 +77,9 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plug, CalendarDays, Copy, ListChecks } from "lucide-react";
+import { Plug, CalendarDays, Copy, ListChecks, Globe } from "lucide-react";
+import { DigitalEstateTab } from "./digital-estate-tab";
+import { ExchangeRatesPanel } from "./exchange-rates-panel";
 import { useSettingsStore } from "@/store/settingsStore";
 import { Textarea } from "@/components/ui/textarea";
 import { FloorManagerPanel } from "@/components/seating/floor-manager";
@@ -196,6 +198,9 @@ export default function SettingsPage() {
           <TabsTrigger value="calendar">
             <CalendarDays className="h-4 w-4 mr-2" /> Calendar
           </TabsTrigger>
+          <TabsTrigger value="digital-estate">
+            <Globe className="h-4 w-4 mr-2" /> Digital Estate
+          </TabsTrigger>
           <TabsTrigger value="integrations">
             <Plug className="h-4 w-4 mr-2" /> Integrations
           </TabsTrigger>
@@ -209,6 +214,7 @@ export default function SettingsPage() {
 
         <TabsContent value="company"><CompanyTab role={user?.role} /></TabsContent>
         <TabsContent value="calendar"><CalendarTab /></TabsContent>
+        <TabsContent value="digital-estate"><DigitalEstateTab role={user?.role} /></TabsContent>
         <TabsContent value="integrations"><IntegrationsTab role={user?.role} /></TabsContent>
         <TabsContent value="categories"><CategoriesTab /></TabsContent>
         <TabsContent value="locations"><LocationsTab /></TabsContent>
@@ -1809,6 +1815,9 @@ interface IntegrationRow {
   last_status: string;
   last_message: string;
   last_sync_at: string | null;
+  /** The credential is stored for a feature that does not exist yet, so the UI
+   *  must not imply a live sync. */
+  config_only?: boolean;
 }
 
 function IntegrationsTab({ role }: { role?: string }) {
@@ -1874,6 +1883,10 @@ function IntegrationsTab({ role }: { role?: string }) {
 
   return (
     <div className="space-y-4">
+      {/* Exchange rates first: this is the page every "no rate yet" warning in
+          the app points at, so it must be the thing you land on. */}
+      <ExchangeRatesPanel />
+
       {rows.map((row) => {
         const draft = drafts[row.provider] || { api_key: "", base_url: "" };
         return (
@@ -1885,6 +1898,11 @@ function IntegrationsTab({ role }: { role?: string }) {
                   <Badge variant="outline" className="border-emerald-300 text-emerald-700">Enabled</Badge>
                 ) : (
                   <Badge variant="outline">Disabled</Badge>
+                )}
+                {row.config_only && (
+                  <Badge variant="outline" className="border-blue-300 text-blue-700">
+                    Stored for later — no sync yet
+                  </Badge>
                 )}
                 {row.last_status === "OK" && <Badge variant="outline">Last run OK</Badge>}
                 {row.last_status === "ERROR" && (
@@ -1957,13 +1975,17 @@ function IntegrationsTab({ role }: { role?: string }) {
                 >
                   {row.is_enabled ? "Disable" : "Enable"}
                 </Button>
-                <Button
-                  variant="outline"
-                  disabled={busy === row.provider || !row.is_enabled}
-                  onClick={() => void runNow(row)}
-                >
-                  Run now
-                </Button>
+                {/* Config-only providers have nothing to run — the endpoint
+                    would 400, and offering the button implies a sync exists. */}
+                {!row.config_only && (
+                  <Button
+                    variant="outline"
+                    disabled={busy === row.provider || !row.is_enabled}
+                    onClick={() => void runNow(row)}
+                  >
+                    Run now
+                  </Button>
+                )}
                 {row.has_api_key && (
                   <Button
                     variant="ghost"

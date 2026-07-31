@@ -5,11 +5,10 @@ from .vault import *
 from .finance import *
 from .system import *
 from .helpdesk import *
-from .licenses import *
 from .onboarding import *
 from .seating import *
 from .vendors import *
+from .estate import *
 from .procurement import *
 from .network import *
 from .kb import *
-from .subscriptions import *

@@ -9,7 +9,7 @@ import time
 from datetime import timedelta
 
 from django.conf import settings
-from django.core.management import call_command
+from django.core.management import call_command, get_commands
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
@@ -18,8 +18,8 @@ from core.models.system import AppSettings
 
 class Command(BaseCommand):
     help = (
-        "Run scheduled finance, license, subscription, contract, email, "
-        "and network automation."
+        "Run scheduled finance, estate, contract, email, and network "
+        "automation."
     )
 
     def add_arguments(self, parser):
@@ -134,6 +134,20 @@ class Command(BaseCommand):
             time.sleep(poll_seconds)
 
     def _run(self, command_name):
+        # A command named in a deployment's .env that no longer exists is a
+        # configuration leftover, not a failure to retry every cycle forever.
+        # Phase 5 removed four of them; treating that as success means the
+        # marker is set and the runner stops shouting about it.
+        if command_name not in get_commands():
+            self.stdout.write(
+                self.style.WARNING(
+                    f"==> Skipping {command_name}: no such command. Remove it "
+                    f"from AUTOMATION_DAILY_COMMANDS / "
+                    f"AUTOMATION_INTERVAL_COMMANDS."
+                )
+            )
+            return True
+
         self.stdout.write(f"==> Running {command_name}")
         try:
             call_command(command_name, stdout=self.stdout, stderr=self.stderr)

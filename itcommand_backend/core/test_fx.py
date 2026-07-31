@@ -11,7 +11,7 @@ from rest_framework.test import APIClient
 
 from core import fx
 from core.models import AppSettings, ExchangeRate, Integration, User
-from core.test_subscriptions import create_role, create_user
+from core.test_helpers import create_role, create_user
 
 
 def set_reporting_currency(code):

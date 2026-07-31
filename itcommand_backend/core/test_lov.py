@@ -8,7 +8,7 @@ from rest_framework.test import APIClient
 
 from core.lov import GROUPS, get_choices, get_values, is_valid
 from core.models import ListOfValues
-from core.test_subscriptions import create_role, create_user
+from core.test_helpers import create_role, create_user
 
 
 class ListOfValuesModelTests(TestCase):

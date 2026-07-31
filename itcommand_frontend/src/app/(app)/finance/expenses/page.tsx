@@ -51,8 +51,7 @@ export default function ExpensesPage() {
   const [years, setYears] = useState<any[]>([]);
   const [sources, setSources] = useState<any[]>([]);
   const [assets, setAssets] = useState<any[]>([]);
-  const [licenses, setLicenses] = useState<any[]>([]);
-  const [subscriptions, setSubscriptions] = useState<any[]>([]);
+  const [services, setServices] = useState<any[]>([]);
   const [prs, setPrs] = useState<any[]>([]);
   const [budgetByCat, setBudgetByCat] = useState<Record<string, any>>({});
 
@@ -78,15 +77,14 @@ export default function ExpensesPage() {
 
   const fetchData = async () => {
     try {
-      const [expRes, catRes, yrRes, srcRes, astRes, licRes, prRes, subRes, dashRes] = await Promise.all([
+      const [expRes, catRes, yrRes, srcRes, astRes, prRes, svcRes, dashRes] = await Promise.all([
         api.get("/finance/expenses/"),
         api.get("/finance/categories/"),
         api.get("/finance/years/"),
         api.get("/finance/sources/?active=true"),
         api.get("/assets/").catch(() => ({ data: [] })),
-        api.get("/licenses/").catch(() => ({ data: [] })),
         api.get("/procurement/requests/").catch(() => ({ data: [] })),
-        api.get("/subscriptions/").catch(() => ({ data: [] })),
+        api.get("/estate/services/?page_size=200").catch(() => ({ data: [] })),
         api.get("/finance/dashboard/").catch(() => ({ data: { spent_by_category: [] } })),
       ]);
       setExpenses(expRes.data);
@@ -94,9 +92,8 @@ export default function ExpensesPage() {
       setYears(yrRes.data);
       setSources(srcRes.data);
       setAssets(Array.isArray(astRes.data) ? astRes.data : astRes.data.results || []);
-      setLicenses(Array.isArray(licRes.data) ? licRes.data : licRes.data.results || []);
       setPrs(Array.isArray(prRes.data) ? prRes.data : prRes.data.results || []);
-      setSubscriptions(Array.isArray(subRes.data) ? subRes.data : subRes.data.results || []);
+      setServices(Array.isArray(svcRes.data) ? svcRes.data : svcRes.data.results || []);
       const map: Record<string, any> = {};
       (dashRes.data.spent_by_category || []).forEach((c: any) => { map[String(c.category_id)] = c; });
       setBudgetByCat(map);
@@ -404,11 +401,8 @@ export default function ExpensesPage() {
             <div className="space-y-1"><label className="text-sm font-medium">Asset</label>
               <Select value={editForm.linked_asset || ""} onValueChange={(v) => setEditForm({ ...editForm, linked_asset: v })}><SelectTrigger><SelectValue placeholder="None" /></SelectTrigger><SelectContent>{assets.map((a) => <SelectItem key={a.id} value={String(a.id)}>{a.name || a.asset_tag || `Asset #${a.id}`}</SelectItem>)}</SelectContent></Select>
             </div>
-            <div className="space-y-1"><label className="text-sm font-medium">License</label>
-              <Select value={editForm.linked_license || ""} onValueChange={(v) => setEditForm({ ...editForm, linked_license: v })}><SelectTrigger><SelectValue placeholder="None" /></SelectTrigger><SelectContent>{licenses.map((l) => <SelectItem key={l.id} value={String(l.id)}>{l.product_name || `License #${l.id}`}</SelectItem>)}</SelectContent></Select>
-            </div>
-            <div className="space-y-1"><label className="text-sm font-medium">Subscription</label>
-              <Select value={editForm.linked_subscription || ""} onValueChange={(v) => setEditForm({ ...editForm, linked_subscription: v })}><SelectTrigger><SelectValue placeholder="None" /></SelectTrigger><SelectContent>{subscriptions.map((s: any) => <SelectItem key={s.id} value={String(s.id)}>{s.name || `Subscription #${s.id}`}</SelectItem>)}</SelectContent></Select>
+            <div className="space-y-1 col-span-2"><label className="text-sm font-medium">Estate service</label>
+              <Select value={editForm.linked_service || ""} onValueChange={(v) => setEditForm({ ...editForm, linked_service: v })}><SelectTrigger><SelectValue placeholder="None" /></SelectTrigger><SelectContent>{services.map((sv: any) => <SelectItem key={sv.id} value={String(sv.id)}>{sv.identifier || `Service #${sv.id}`}</SelectItem>)}</SelectContent></Select>
             </div>
             <div className="space-y-1 col-span-2"><label className="text-sm font-medium">Purchase Request</label>
               <Select value={editForm.linked_purchase_request || ""} onValueChange={(v) => setEditForm({ ...editForm, linked_purchase_request: v })}><SelectTrigger><SelectValue placeholder="None" /></SelectTrigger><SelectContent>{prs.map((p) => <SelectItem key={p.id} value={String(p.id)}>{p.pr_number || p.title || `PR #${p.id}`}</SelectItem>)}</SelectContent></Select>

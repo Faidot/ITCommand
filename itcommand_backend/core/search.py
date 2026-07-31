@@ -2,7 +2,10 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import permissions
 from django.db.models import Q
-from .models import User, Asset, VaultCredential, Expense, RecurringBill
+from .models import (
+    User, Asset, VaultCredential, Expense, RecurringBill,
+    Property, ProviderAccount, Service,
+)
 from .permissions import has_role_permission
 
 class GlobalSearchView(APIView):
@@ -43,7 +46,50 @@ class GlobalSearchView(APIView):
                     'link': '/assets'
                 })
 
-        # 3. Vault (Only if user has access)
+        # 3. Digital Estate — properties, accounts, services
+        #
+        # Added here rather than as a second ⌘K palette inside /estate. The
+        # top bar already binds ⌘K globally; a second binding meant two
+        # dialogs opened on one keypress, and a search that only worked on
+        # one route group is a worse answer than one that works everywhere.
+        if has_role_permission(request.user, 'estate', 'view'):
+            for prop in Property.objects.filter(name__icontains=query)[:5]:
+                results.append({
+                    'id': prop.id,
+                    'title': prop.name,
+                    'subtitle': prop.get_kind_display(),
+                    'category': 'Properties',
+                    'link': f'/estate/properties/{prop.id}',
+                })
+
+            accounts = ProviderAccount.objects.filter(
+                Q(account_email__icontains=query) | Q(provider__name__icontains=query)
+            ).select_related('provider')[:5]
+            for account in accounts:
+                results.append({
+                    'id': account.id,
+                    'title': account.account_email,
+                    'subtitle': f'{account.provider.name} · {account.get_mfa_type_display()}',
+                    'category': 'Provider accounts',
+                    'link': f'/estate/accounts?q={account.account_email}',
+                })
+
+            services = Service.objects.filter(
+                Q(identifier__icontains=query) | Q(provider__name__icontains=query)
+            ).select_related('provider', 'property')[:5]
+            for service in services:
+                results.append({
+                    'id': service.id,
+                    'title': service.identifier,
+                    'subtitle': (
+                        f'{service.get_service_type_display()} · '
+                        f'{service.property.name if service.property_id else "unattached"}'
+                    ),
+                    'category': 'Services',
+                    'link': f'/estate/services?q={service.identifier}',
+                })
+
+        # 4. Vault (Only if user has access)
         if has_role_permission(request.user, 'vault', 'view'):
             vaults = VaultCredential.objects.filter(
                 Q(visibility='ORG') | Q(created_by=request.user),
@@ -58,7 +104,7 @@ class GlobalSearchView(APIView):
                     'link': '/vault/passwords'
                 })
 
-        # 4. Finance
+        # 5. Finance
         if has_role_permission(request.user, 'finance', 'view'):
             expenses = Expense.objects.filter(
                 Q(title__icontains=query) | Q(paid_to__icontains=query)

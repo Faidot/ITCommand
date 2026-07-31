@@ -329,9 +329,10 @@ class ExpenseViewSet(AuditLogMixin, viewsets.ModelViewSet):
                 paid_to=e.get('paid_to') or shared_paid_to,
                 source_id=e.get('source') or shared_source,
                 linked_asset_id=e.get('linked_asset') or None,
-                linked_license_id=e.get('linked_license') or None,
                 linked_purchase_request_id=e.get('linked_purchase_request') or None,
-                linked_subscription_id=e.get('linked_subscription') or None,
+                # `linked_license` went with the licences module; the estate
+                # equivalent of `linked_subscription` is `linked_service`.
+                linked_service_id=e.get('linked_service') or None,
                 receipt_number=bill_number or e.get('receipt_number', ''),
                 description=e.get('description', ''),
                 bill=bill,
@@ -597,25 +598,26 @@ class CostOverviewView(APIView):
         total_budget = total(Budget.objects.filter(financial_year=active_fy) if active_fy else Budget.objects.none(), 'allocated_amount')
 
         asset_cost = total(Asset.objects.all(), 'purchase_price')
-        license_cost = total(SoftwareLicense.objects.all(), 'cost')
         procurement_actual = total(PurchaseRequest.objects.all(), 'total_actual_cost')
         procurement_estimated = total(PurchaseRequest.objects.all(), 'total_estimated_cost')
 
         # Avoid counting the same purchase once as a booked Expense and again
-        # as its Asset/License/PR source. Assets created from a PR are represented
-        # by that PR until the PR itself is converted to a booked expense.
+        # as its Asset/PR source. Assets created from a PR are represented by
+        # that PR until the PR itself is converted to a booked expense.
+        #
+        # Licences left this calculation in Phase 5 with the module. Estate
+        # services are a recurring *commitment*, not an unbooked purchase, and
+        # are reported separately under `budget_impact` for exactly that
+        # reason — folding them in here would double-count every renewal that
+        # has already been booked.
         unbooked_assets = Asset.objects.exclude(
             Q(expenses__status='APPROVED')
             | Q(source_purchase_request_item__isnull=False)
-        ).distinct()
-        unbooked_licenses = SoftwareLicense.objects.exclude(
-            expenses__status='APPROVED'
         ).distinct()
         unbooked_prs = PurchaseRequest.objects.exclude(
             expenses__status='APPROVED'
         ).distinct()
         unbooked_asset_cost = total(unbooked_assets, 'purchase_price')
-        unbooked_license_cost = total(unbooked_licenses, 'cost')
         unbooked_procurement_actual = total(unbooked_prs, 'total_actual_cost')
 
         # Annualized asset depreciation (Asset.monthly_depreciation is computed)
@@ -636,16 +638,25 @@ class CostOverviewView(APIView):
         modules = [
             {'module': 'Expenses (booked)', 'amount': total_expenses},
             {'module': 'Assets (not yet booked)', 'amount': unbooked_asset_cost},
-            {'module': 'Licenses (not yet booked)', 'amount': unbooked_license_cost},
             {'module': 'Procurement (not yet booked)', 'amount': unbooked_procurement_actual},
             {'module': 'Asset depreciation (yr)', 'amount': round(asset_depreciation_annual, 2)},
         ]
         grand_total = (
             total_expenses
             + unbooked_asset_cost
-            + unbooked_license_cost
             + unbooked_procurement_actual
         )
+
+        # Estate spend, sliced the two ways the estate cares about.
+        #
+        # Kept out of `grand_total_cost` on purpose: that figure is booked and
+        # unbooked *purchases*, while estate spend is a recurring
+        # commitment, and any renewal already booked as an expense is inside
+        # `total_expenses` too. Adding them would double-count. These carry
+        # their own converted-money blocks, complete with `is_complete`.
+        from core import finance_estate
+
+        estate_spend = finance_estate.service_spend_by_property_and_type()
 
         return Response({
             'financial_year': active_fy.name if active_fy else None,
@@ -656,14 +667,24 @@ class CostOverviewView(APIView):
             'remaining_budget': total_budget - total_expenses,
             'net_cash_flow': total_income - total_expenses,
             'asset_cost': asset_cost,
-            'license_cost': license_cost,
             'procurement_actual': procurement_actual,
             'procurement_estimated': procurement_estimated,
             'unbooked_asset_cost': unbooked_asset_cost,
-            'unbooked_license_cost': unbooked_license_cost,
             'unbooked_procurement_actual': unbooked_procurement_actual,
             'asset_depreciation_annual': round(asset_depreciation_annual, 2),
             'grand_total_cost': grand_total,
             'modules': modules,
             'by_category': by_category,
+            'subscriptions': {
+                'currency': estate_spend['currency'],
+                'by_property': estate_spend['by_property'],
+                'by_layer': estate_spend['by_layer'],
+                'orphaned': estate_spend['orphaned'],
+                'note': (
+                    'Recurring commitment, shown separately from booked spend. '
+                    'Not included in grand_total_cost.'
+                ),
+            },
+            'budget_impact': finance_estate.budget_impact(financial_year=active_fy),
+            'vendor_subscription_spend': finance_estate.service_spend_by_vendor(),
         })

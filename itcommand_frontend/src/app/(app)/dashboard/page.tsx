@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   Users, Box, Wallet, Receipt, TrendingUp, CalendarDays, Activity,
-  Headset, KeyRound, ShoppingCart, Building, Network, UserPlus, Map,
+  Headset, KeyRound, Globe, ShoppingCart, Building, Network, UserPlus, Map,
   BookOpen, ShieldAlert, ArrowRight, DollarSign,
 } from "lucide-react";
 import api from "@/lib/api";
@@ -139,10 +139,10 @@ export default function DashboardPage() {
           { label: "Overdue", value: data.helpdesk.overdue, tone: data.helpdesk.overdue ? "text-red-600" : "" },
           { label: "Unassigned", value: data.helpdesk.unassigned },
         ]} />
-        <ModuleCard icon={KeyRound} title="Licenses" href="/licenses" color="text-amber-500" stats={[
-          { label: "Active", value: data.licenses.active },
-          { label: "Expiring", value: data.licenses.expiring_soon, tone: data.licenses.expiring_soon ? "text-amber-600" : "" },
-          { label: "Annual", value: money(data.licenses.annual_cost) },
+        <ModuleCard icon={Globe} title="Digital Estate" href="/estate/dashboard" color="text-amber-500" stats={[
+          { label: "Services", value: data.estate?.active ?? 0 },
+          { label: "Renewing", value: data.estate?.expiring_soon ?? 0, tone: data.estate?.expiring_soon ? "text-amber-600" : "" },
+          { label: "No MFA", value: data.estate?.accounts_missing_mfa ?? 0, tone: data.estate?.accounts_missing_mfa ? "text-red-600" : "" },
         ]} />
         <ModuleCard icon={ShoppingCart} title="Procurement" href="/procurement/requests" color="text-indigo-500" stats={[
           { label: "Pending", value: data.procurement.pending, tone: data.procurement.pending ? "text-amber-600" : "" },

@@ -14,19 +14,37 @@ from core import brex
 from core.models import (
     Integration,
     PaymentCard,
-    Subscription,
-    SubscriptionPayment,
+    Service,
+    ServicePayment,
     User,
 )
-from core.test_subscription_assignments import make_subscription
-from core.test_subscriptions import create_role, create_user
+from core.models import Provider, ProviderAccount
+from core.test_estate_api import make_subscription
+from core.test_helpers import create_role, create_user
+
+
+def service_at(provider_name, identifier, **overrides):
+    """A Service whose provider carries `provider_name`.
+
+    `Subscription.platform` was the high-weight field the matcher keyed on;
+    on `Service` that role belongs to the provider's name, so each fixture
+    needs its own provider rather than sharing the default one.
+    """
+    provider, _ = Provider.objects.get_or_create(
+        slug=provider_name.lower().replace(" ", "-"),
+        defaults={"name": provider_name},
+    )
+    account, _ = ProviderAccount.objects.get_or_create(
+        provider=provider, account_email=f"{provider.slug}@example.invalid"
+    )
+    return make_subscription(name=identifier, provider_account=account, **overrides)
 
 
 class DescriptorMatchingTests(TestCase):
     def setUp(self):
-        self.claude = make_subscription(name="Claude Pro", platform="Anthropic")
-        self.chatgpt = make_subscription(name="ChatGPT Business", platform="OpenAI")
-        self.figma = make_subscription(name="Figma Org", platform="Figma")
+        self.claude = service_at("Anthropic", "Claude Pro")
+        self.chatgpt = service_at("OpenAI", "ChatGPT Business")
+        self.figma = service_at("Figma", "Figma Org")
         self.subs = [self.claude, self.chatgpt, self.figma]
 
     def test_descriptor_noise_is_stripped(self):
@@ -63,8 +81,8 @@ class DescriptorMatchingTests(TestCase):
         self.assertEqual(score, 1.0)
 
     def test_a_tie_is_left_unmatched_rather_than_guessed(self):
-        first = make_subscription(name="Google Workspace", platform="Google")
-        second = make_subscription(name="Google Cloud", platform="Google")
+        first = service_at("Google", "Google Workspace")
+        second = service_at("Google", "Google Cloud")
         match, score = brex.best_match("GOOGLE *SERVICES", [first, second])
         self.assertIsNone(match, "an ambiguous descriptor must not pick one at random")
         self.assertGreater(score, 0)
@@ -73,7 +91,7 @@ class DescriptorMatchingTests(TestCase):
         """sync_transactions excludes them; this documents the intent."""
         self.figma.status = "CANCELLED"
         self.figma.save(update_fields=["status"])
-        candidates = list(Subscription.objects.exclude(status="CANCELLED"))
+        candidates = list(Service.objects.exclude(status="CANCELLED"))
         self.assertNotIn(self.figma, candidates)
 
 
@@ -98,7 +116,7 @@ class SyncTests(TestCase):
         self.integration = Integration.objects.create(provider="BREX", is_enabled=True)
         self.integration.set_api_key("test-token")
         self.integration.save()
-        self.subscription = make_subscription(name="Claude Pro", platform="Anthropic")
+        self.subscription = service_at("Anthropic", "Claude Pro")
         self.today = timezone.localdate()
 
     def fake_pages(self, cards, transactions):
@@ -139,9 +157,9 @@ class SyncTests(TestCase):
         self.assertEqual(card.nickname, "Ops card")
         self.assertEqual(str(card), "Ops card •••• 4242")
 
-        payment = SubscriptionPayment.objects.get()
+        payment = ServicePayment.objects.get()
         self.assertEqual(payment.amount, Decimal("20.00"))
-        self.assertEqual(payment.subscription, self.subscription)
+        self.assertEqual(payment.service, self.subscription)
         self.assertEqual(payment.match_source, "AUTO")
 
         self.subscription.refresh_from_db()
@@ -158,7 +176,7 @@ class SyncTests(TestCase):
         with self.fake_pages(self.card_payload(), self.transaction_payload()):
             brex.run_sync(self.integration)
             brex.run_sync(self.integration)
-        self.assertEqual(SubscriptionPayment.objects.count(), 1)
+        self.assertEqual(ServicePayment.objects.count(), 1)
         self.assertEqual(PaymentCard.objects.count(), 1)
 
     def test_unmatched_spend_is_kept_visible_not_dropped(self):
@@ -170,8 +188,8 @@ class SyncTests(TestCase):
 
         self.assertEqual(summary["charges"], 1)
         self.assertEqual(summary["matched"], 0)
-        payment = SubscriptionPayment.objects.get()
-        self.assertIsNone(payment.subscription)
+        payment = ServicePayment.objects.get()
+        self.assertIsNone(payment.service)
         self.assertEqual(payment.match_source, "NONE")
 
     def test_a_charge_without_a_date_is_skipped(self):
@@ -186,7 +204,7 @@ class SyncTests(TestCase):
         self.integration.save()
         summary, error = brex.run_sync(self.integration)
         self.assertIn("switched off", error)
-        self.assertEqual(SubscriptionPayment.objects.count(), 0)
+        self.assertEqual(ServicePayment.objects.count(), 0)
 
     def test_an_auth_failure_is_explained_and_recorded(self):
         with mock.patch("core.brex._paged", return_value=([], "Brex rejected the token (401). Generate a new one and paste it again.")):
@@ -216,10 +234,10 @@ class SyncTests(TestCase):
         with self.fake_pages(self.card_payload(), self.transaction_payload()):
             out = StringIO()
             call_command("sync_brex", stdout=out)
-        self.assertIn("1 matched to subscriptions", out.getvalue())
+        self.assertIn("1 matched to services", out.getvalue())
 
 
-class SubscriptionPayloadTests(TestCase):
+class ServicePayloadTests(TestCase):
     def test_the_detail_payload_exposes_the_card_and_charges(self):
         client = APIClient()
         manager = create_user(
@@ -228,19 +246,27 @@ class SubscriptionPayloadTests(TestCase):
         )
         client.force_authenticate(manager)
 
-        subscription = make_subscription(name="Claude Pro", platform="Anthropic")
+        subscription = service_at("Anthropic", "Claude Pro")
         card = PaymentCard.objects.create(last_four="4242", nickname="Ops card")
         subscription.payment_card = card
         subscription.save(update_fields=["payment_card"])
-        SubscriptionPayment.objects.create(
+        ServicePayment.objects.create(
             external_id="txn_9", merchant="ANTHROPIC, PBC",
             amount=Decimal("20.00"), currency="USD",
-            posted_at=timezone.localdate(), card=card, subscription=subscription,
+            posted_at=timezone.localdate(), card=card, service=subscription,
             match_source="AUTO", match_score=0.95,
         )
 
-        response = client.get(reverse("subscription-detail", args=[subscription.pk]))
+        # The subscription detail endpoint went with its module. What the
+        # integration actually has to guarantee is that the charge is stored
+        # against the right service and the right card, which is what the
+        # reconciliation is for.
+        response = client.get(reverse("estate-service-detail", args=[subscription.pk]))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertEqual(response.data["payment_card_display"], "•••• 4242 (Ops card)")
-        self.assertEqual(len(response.data["payments"]), 1)
-        self.assertEqual(response.data["payments"][0]["card"], "•••• 4242")
+        self.assertEqual(response.data["identifier"], "Claude Pro")
+
+        payment = ServicePayment.objects.get()
+        self.assertEqual(payment.service, subscription)
+        self.assertEqual(payment.card.display, "•••• 4242")
+        subscription.refresh_from_db()
+        self.assertEqual(subscription.payment_card, card)

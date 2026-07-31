@@ -12,14 +12,13 @@ from .models import (
     User, Department, Asset, Expense, Income, FinancialYear, Budget, BudgetCategory, PettyCashTransaction,
     DirectPayment, RecurringBill, AssetHistory,
     Ticket, TicketCategory,
-    SoftwareLicense, SoftwareProduct,
     PurchaseRequest,
     Vendor, VendorContract, VendorPayment,
     Office, Floor, Seat, SeatAssignment,
     NetworkDevice, NetworkLocation, IPAddressPool,
     OnboardingRecord, OnboardingTask,
     KBArticle, KBCategory, KBFeedback,
-    Subscription,
+    Property, ProviderAccount,
 )
 from .permissions import HasModulePermission, has_role_permission
 from .fx import convert_many, rate_as_of
@@ -478,56 +477,41 @@ class MainDashboardView(APIView):
         tickets_by_status = [{'name': s['status'], 'value': s['count']}
                              for s in tickets.values('status').annotate(count=Count('id'))]
 
-        # ---- Licenses ----
-        licenses = (
-            SoftwareLicense.objects.all()
-            if can_view('licenses') else SoftwareLicense.objects.none()
-        )
-        lic_expiring = licenses.filter(expiry_date__gte=today, expiry_date__lte=soon_60).count()
-        lic_annual = sum(l.annual_cost for l in licenses.filter(is_active=True))
-        license_block = {
-            'total': licenses.count(),
-            'active': licenses.filter(is_active=True).count(),
-            'expiring_soon': lic_expiring,
-            'annual_cost': round(lic_annual, 2),
-        }
+        # ---- Digital Estate ----
+        # Replaces the separate Licenses and Subscriptions blocks, which went
+        # with those modules in Phase 5. One converted headline plus the honest
+        # per-currency breakdown, from the same aggregation the estate
+        # dashboard uses so the two cannot disagree.
+        from core import estate_reports
 
-        # ---- Subscriptions ----
-        subscriptions = (
-            Subscription.objects.all()
-            if can_view('subscriptions') else Subscription.objects.none()
-        )
-        sub_active = [s for s in subscriptions if s.effective_status == 'ACTIVE']
-        # Cost is per-row currency, so annual spend is reported per currency
-        # rather than summed into a single meaningless number.
-        annual_by_currency = {}
-        for s in sub_active:
-            annual_by_currency[s.currency] = (
-                annual_by_currency.get(s.currency, Decimal('0')) + s.annual_cost_unrounded
-            )
-        # A single converted headline plus the honest per-currency breakdown.
-        converted_annual, report_ccy, unconvertible = convert_many(
-            [(s.annual_cost_unrounded, s.currency) for s in sub_active]
-        )
-        subscription_block = {
-            'total': subscriptions.count(),
-            'active': len(sub_active),
-            'expiring_soon': subscriptions.filter(
-                status='ACTIVE', expiry_date__gte=today, expiry_date__lte=soon_60
-            ).count(),
-            'annual_cost_by_currency': [
-                {'currency': currency, 'annual_cost': float(round(amount, 2))}
-                for currency, amount in sorted(annual_by_currency.items())
-            ],
-            'converted': {
-                'currency': report_ccy,
-                'annual_cost': float(converted_annual),
-                'rates_as_of': rate_as_of(report_ccy),
-                'unconvertible': unconvertible,
-                'is_complete': not unconvertible,
-            },
-        }
-
+        if can_view('estate'):
+            estate_active = estate_reports.active_services()
+            currency_rows = estate_reports.spend_by_currency(estate_active)
+            estate_spend = estate_reports.converted_money(currency_rows)
+            estate_block = {
+                'total': estate_active.count(),
+                'active': estate_active.count(),
+                'properties': Property.objects.filter(is_active=True).count(),
+                'orphans': estate_active.filter(property__isnull=True).count(),
+                'expiring_soon': estate_active.filter(
+                    renewal_date__gte=today, renewal_date__lte=soon_60
+                ).count(),
+                'accounts_missing_mfa': ProviderAccount.objects.filter(
+                    is_active=True, mfa_type__in=('NONE', 'UNKNOWN')
+                ).count(),
+                'monthly_cost': estate_spend['monthly'],
+                'annual_cost': estate_spend['yearly'],
+                'currency': estate_spend['currency'],
+                'is_complete': estate_spend['is_complete'],
+                'unconvertible': estate_spend['unconvertible'],
+            }
+        else:
+            estate_block = {
+                'total': 0, 'active': 0, 'properties': 0, 'orphans': 0,
+                'expiring_soon': 0, 'accounts_missing_mfa': 0,
+                'monthly_cost': '0.00', 'annual_cost': '0.00',
+                'currency': '', 'is_complete': True, 'unconvertible': [],
+            }
         # ---- Procurement ----
         prs = (
             PurchaseRequest.objects.all()
@@ -641,8 +625,8 @@ class MainDashboardView(APIView):
                 'budget_used_pct': float(budget_used_pct),
                 'total_budget': float(total_budget), 'total_spent': float(total_spent),
                 'open_tickets': helpdesk['open'], 'overdue_tickets': helpdesk['overdue'],
-                'active_licenses': license_block['active'],
-                'active_subscriptions': subscription_block['active'],
+                'active_services': estate_block['active'],
+                'estate_properties': estate_block['properties'],
                 'pending_pos': procurement['pending'],
                 'total_vendors': vendors_block['total'],
                 'devices_total': network['total'], 'devices_online': network['online'],
@@ -655,8 +639,7 @@ class MainDashboardView(APIView):
             'assets_by_status': assets_by_status,
             'tickets_by_status': tickets_by_status,
             'helpdesk': helpdesk,
-            'licenses': license_block,
-            'subscriptions': subscription_block,
+            'estate': estate_block,
             'procurement': procurement,
             'vendors': vendors_block,
             'network': network,
@@ -746,76 +729,6 @@ class HelpdeskSummaryView(APIView):
             'monthly': monthly,
             'top_agents': top_agents,
         })
-
-
-# ===========================================================================
-# LICENSE REPORT
-# ===========================================================================
-class LicenseSummaryView(APIView):
-    permission_classes = [HasModulePermission]
-    rbac_module = 'reports'
-
-    def get(self, request):
-        today = timezone.now().date()
-        qs = SoftwareLicense.objects.select_related('product').all()
-
-        total = qs.count()
-        active = qs.filter(is_active=True).count()
-        expired = 0
-        expiring_soon = 0
-        total_annual_cost = 0.0
-        soon_cutoff = today + timedelta(days=60)
-        seat_rows = []
-        expiring_rows = []
-
-        for lic in qs:
-            total_annual_cost += lic.annual_cost
-            if lic.is_expired:
-                expired += 1
-            elif lic.expiry_date and today <= lic.expiry_date <= soon_cutoff:
-                expiring_soon += 1
-                expiring_rows.append({
-                    'product': lic.product.name,
-                    'type': lic.license_type,
-                    'expiry_date': lic.expiry_date.strftime('%Y-%m-%d'),
-                    'days_remaining': lic.days_until_expiry,
-                    'cost': float(lic.cost),
-                })
-            if lic.seats_total:
-                seat_rows.append({
-                    'product': lic.product.name,
-                    'seats_total': lic.seats_total,
-                    'seats_used': lic.seats_used,
-                    'usage_pct': lic.seats_usage_pct,
-                })
-
-        expiring_rows.sort(key=lambda r: r['days_remaining'])
-        seat_rows.sort(key=lambda r: r['usage_pct'], reverse=True)
-
-        by_type = [{'name': t['license_type'], 'value': t['count']}
-                   for t in qs.values('license_type').annotate(count=Count('id')).order_by('-count')]
-        by_category = [{'name': c['product__category'], 'value': c['count']}
-                       for c in qs.values('product__category').annotate(count=Count('id')).order_by('-count')]
-        cost_by_category = [{'name': c['product__category'], 'value': float(c['total'] or 0)}
-                            for c in qs.values('product__category').annotate(total=Sum('cost')).order_by('-total')]
-
-        return Response({
-            'totals': {
-                'total': total, 'active': active, 'expired': expired,
-                'expiring_soon': expiring_soon,
-                'total_annual_cost': round(total_annual_cost, 2),
-            },
-            'by_type': by_type,
-            'by_category': by_category,
-            'cost_by_category': cost_by_category,
-            'expiring': expiring_rows,
-            'seat_utilization': seat_rows[:15],
-        })
-
-
-# ===========================================================================
-# PROCUREMENT REPORT
-# ===========================================================================
 class ProcurementSummaryView(APIView):
     permission_classes = [HasModulePermission]
     rbac_module = 'reports'
@@ -1237,7 +1150,7 @@ class UserSummaryView(APIView):
 # MASTER USER REPORT
 # ---------------------------------------------------------------------------
 # One consolidated, user-wise view of everything linked to each person:
-# assets, software licenses / subscriptions, seat, helpdesk tickets,
+# assets, seat, helpdesk tickets,
 # onboarding and vault items. Shared by the JSON summary and the Excel export.
 # ===========================================================================
 _OPEN_TICKET_STATUSES = ['OPEN', 'IN_PROGRESS', 'PENDING']
@@ -1249,9 +1162,6 @@ def _master_users_queryset():
     return User.objects.select_related('department', 'manager', 'team_lead').prefetch_related(
         'assigned_assets__category',
         'asset_unit_assignments__asset__category',
-        'license_assignments__license__product',
-        'license_assignments__license__linked_subscriptions',
-        'subscription_assignments__subscription',
         'seat_assignments__seat__floor__office',
         'submitted_tickets',
         'assigned_tickets',
@@ -1293,46 +1203,14 @@ def _master_user_rows(users):
                 'kind': 'Unit',
             })
 
-        # ---- Subscriptions (active seats only) ----
-        # Filtered in Python: the queryset is prefetched, so a .filter() here
-        # would re-query per user and defeat that.
+        # Software licences and subscription seats were reported here until
+        # Phase 5. Both modules were retired, and the estate has no per-user
+        # seat model to replace them: a Service is bought through a provider
+        # account, not assigned to a person. Reporting nothing is honest;
+        # reporting an empty list under the old heading would not be.
         subscriptions = []
-        for sa in u.subscription_assignments.all():
-            if not sa.is_active or not sa.subscription:
-                continue
-            sub = sa.subscription
-            subscriptions.append({
-                'name': sub.name,
-                'platform': sub.platform,
-                'plan': sub.plan_type,
-                'cost': str(sub.cost),
-                'currency': sub.currency,
-                'billing_cycle': sub.billing_cycle,
-                'expiry': sub.expiry_date.strftime('%Y-%m-%d') if sub.expiry_date else '',
-                'expired': bool(sub.expiry_date and sub.expiry_date < today),
-                'status': sub.status,
-            })
-
-        # ---- Licenses (active assignments only) ----
         licenses = []
         legacy_subscription_licenses = 0
-        for la in u.license_assignments.all():
-            if not la.is_active:
-                continue
-            lic = la.license
-            # A SUBSCRIPTION-type licence only counts as a subscription when no
-            # real Subscription row already represents it, otherwise the same
-            # service would be counted twice.
-            is_sub = lic.license_type == 'SUBSCRIPTION'
-            if is_sub and not lic.linked_subscriptions.all():
-                legacy_subscription_licenses += 1
-            licenses.append({
-                'product': lic.product.name if lic.product else '—',
-                'type': lic.license_type,
-                'is_subscription': is_sub,
-                'expiry': lic.expiry_date.strftime('%Y-%m-%d') if lic.expiry_date else '',
-                'expired': bool(lic.expiry_date and lic.expiry_date < today),
-            })
 
         # ---- Seat (first active assignment) ----
         seat = None
@@ -1449,29 +1327,6 @@ class ExportHelpdeskView(APIView):
                 'Yes' if t.is_overdue else 'No',
             ])
         return make_xlsx('helpdesk_export.xlsx', [('Tickets', headers, rows)])
-
-
-class ExportLicensesView(APIView):
-    permission_classes = [HasModulePermission]
-    rbac_module = 'reports'
-
-    def get(self, request):
-        headers = ['Product', 'Category', 'Type', 'Seats Total', 'Seats Used', 'Cost',
-                   'Billing Cycle', 'Annual Cost', 'Purchase Date', 'Expiry Date', 'Active']
-        rows = []
-        for l in SoftwareLicense.objects.select_related('product').order_by('product__name'):
-            rows.append([
-                l.product.name, l.product.category, l.license_type,
-                l.seats_total if l.seats_total is not None else 'Unlimited',
-                l.seats_used, float(l.cost), l.billing_cycle or '',
-                round(l.annual_cost, 2),
-                l.purchase_date.strftime('%Y-%m-%d') if l.purchase_date else '',
-                l.expiry_date.strftime('%Y-%m-%d') if l.expiry_date else '',
-                'Yes' if l.is_active else 'No',
-            ])
-        return make_xlsx('licenses_export.xlsx', [('Licenses', headers, rows)])
-
-
 class ExportProcurementView(APIView):
     permission_classes = [HasModulePermission]
     rbac_module = 'reports'
