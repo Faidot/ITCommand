@@ -33,7 +33,14 @@ import {
   TableRow,
 } from "@/components/ui/table";
 
-import { EmptyState, KpiCard, KpiRowSkeleton, TableSkeleton } from "../estate-ui";
+import {
+  EmptyState,
+  KpiCard,
+  KpiMoney,
+  KpiRowSkeleton,
+  TableSkeleton,
+  UnconvertedNote,
+} from "../estate-ui";
 import { errorMessage, resultsOf } from "../estate-types";
 
 interface Charge {
@@ -49,6 +56,9 @@ interface Charge {
   provider_name: string | null;
   match_source: string;
   match_score: number;
+  base_amount: number | null;
+  base_currency: string;
+  is_converted: boolean;
 }
 
 interface CardRow {
@@ -73,6 +83,15 @@ interface CurrencyTotal {
   count: number;
 }
 
+/** A single figure in the reporting currency, and what it had to leave out. */
+interface Converted {
+  currency: string;
+  total: number;
+  converted_count: number;
+  unconvertible: CurrencyTotal[];
+  is_complete: boolean;
+}
+
 interface Summary {
   days: number;
   charge_count: number;
@@ -80,7 +99,20 @@ interface Summary {
   unmatched_count: number;
   totals: CurrencyTotal[];
   unmatched_totals: CurrencyTotal[];
+  converted: Converted;
+  unmatched_converted: Converted;
   card_count: number;
+}
+
+function normalizeConverted(value: unknown): Converted {
+  const record = (value ?? {}) as Record<string, unknown>;
+  return {
+    currency: str(record.currency, "USD"),
+    total: numeric(record.total),
+    converted_count: numeric(record.converted_count),
+    unconvertible: normalizeTotals(record.unconvertible),
+    is_complete: record.is_complete !== false,
+  };
 }
 
 const str = (value: unknown, fallback = ""): string =>
@@ -105,6 +137,12 @@ function normalizeCharge(row: Record<string, unknown>): Charge {
     provider_name: row.provider_name ? str(row.provider_name) : null,
     match_source: str(row.match_source, "NONE"),
     match_score: numeric(row.match_score),
+    base_amount:
+      row.base_amount === null || row.base_amount === undefined
+        ? null
+        : numeric(row.base_amount),
+    base_currency: str(row.base_currency),
+    is_converted: row.is_converted === true,
   };
 }
 
@@ -188,6 +226,8 @@ export default function EstatePaymentsPage() {
           unmatched_count: numeric(raw.unmatched_count),
           totals: normalizeTotals(raw.totals),
           unmatched_totals: normalizeTotals(raw.unmatched_totals),
+          converted: normalizeConverted(raw.converted),
+          unmatched_converted: normalizeConverted(raw.unmatched_converted),
           card_count: numeric(raw.card_count),
         });
         setCharges(resultsOf(chargesRes.data, normalizeCharge));
@@ -254,16 +294,46 @@ export default function EstatePaymentsPage() {
     <div className="space-y-3">
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
         <KpiCard
-          title={`Charges · ${summary?.days ?? 90}d`}
-          value={summary?.charge_count ?? 0}
-          detail={<CurrencyTotals totals={summary?.totals ?? []} />}
+          title={`Spend · ${summary?.days ?? 90}d`}
+          value={
+            summary ? (
+              <KpiMoney
+                amount={summary.converted.total}
+                currency={summary.converted.currency}
+              />
+            ) : (
+              "—"
+            )
+          }
+          detail={
+            <>
+              <CurrencyTotals totals={summary?.totals ?? []} />
+              {/* The sentence that keeps a partial total honest. */}
+              <UnconvertedNote
+                rows={(summary?.converted.unconvertible ?? []).map((row) => ({
+                  currency: row.currency,
+                  monthly: row.total,
+                }))}
+              />
+            </>
+          }
           icon={CreditCard}
-          severity="muted"
+          severity={summary?.converted.is_complete === false ? "warning" : "muted"}
         />
         <KpiCard
           title="Unmatched"
           value={summary?.unmatched_count ?? 0}
-          detail={<CurrencyTotals totals={summary?.unmatched_totals ?? []} />}
+          detail={
+            <>
+              <CurrencyTotals totals={summary?.unmatched_totals ?? []} />
+              <UnconvertedNote
+                rows={(summary?.unmatched_converted.unconvertible ?? []).map((row) => ({
+                  currency: row.currency,
+                  monthly: row.total,
+                }))}
+              />
+            </>
+          }
           icon={Link2Off}
           severity={(summary?.unmatched_count ?? 0) > 0 ? "warning" : "ok"}
         />
@@ -387,6 +457,20 @@ export default function EstatePaymentsPage() {
                       </TableCell>
                       <TableCell className="whitespace-nowrap text-right text-sm tabular-nums">
                         {formatMoney(charge.amount, charge.currency)}
+                        {/* The converted figure sits under the original, never
+                            replacing it — the charge really was in its own
+                            currency, and that is the auditable fact. */}
+                        {charge.is_converted && charge.base_amount !== null ? (
+                          charge.base_currency !== charge.currency && (
+                            <span className="block text-[11px] text-muted-foreground">
+                              {formatMoney(charge.base_amount, charge.base_currency)}
+                            </span>
+                          )
+                        ) : (
+                          <span className="block text-[11px] text-amber-700 dark:text-amber-400">
+                            no rate
+                          </span>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}

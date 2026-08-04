@@ -86,6 +86,15 @@ class ServicePaymentSerializer(serializers.ModelSerializer):
     match_source_label = serializers.CharField(
         source="get_match_source_display", read_only=True
     )
+    #: Frozen at sync time. Null when no rate existed for that currency on
+    #: that date — never 1:1, so a null here means "not counted", not "zero".
+    base_amount = serializers.DecimalField(
+        max_digits=16, decimal_places=2, read_only=True, coerce_to_string=True
+    )
+    fx_rate = serializers.DecimalField(
+        max_digits=20, decimal_places=10, read_only=True, coerce_to_string=True
+    )
+    is_converted = serializers.BooleanField(read_only=True)
 
     class Meta:
         model = ServicePayment
@@ -95,5 +104,7 @@ class ServicePaymentSerializer(serializers.ModelSerializer):
             "card", "card_display", "card_last_four",
             "service", "service_name", "provider_name",
             "match_source", "match_source_label", "match_score",
+            "base_amount", "base_currency", "fx_rate", "fx_rate_date",
+            "is_converted",
         ]
         read_only_fields = fields

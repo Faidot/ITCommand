@@ -26,6 +26,8 @@ from email.utils import parsedate_to_datetime
 from django.db import transaction
 from django.utils import timezone
 
+from core import fx
+
 
 PROVIDER = "BREX"
 DEFAULT_BASE_URL = "https://platform.brexapis.com"
@@ -784,7 +786,7 @@ def sync_transactions(integration, *, since_days=90):
         "/v2/transactions/card/primary",
         {"posted_at_start": since},
     )
-    empty = {"charges": 0, "matched": 0, "new": 0, "truncated": truncated}
+    empty = {"charges": 0, "matched": 0, "new": 0, "converted": 0, "truncated": truncated}
     if error and not items:
         return empty, error
 
@@ -797,7 +799,11 @@ def sync_transactions(integration, *, since_days=90):
         )
     )
 
-    charges = matched = new = 0
+    # The currency every charge is converted into, resolved once: it is an
+    # AppSettings lookup, and doing it per charge would be a query per row.
+    reporting = fx.reporting_currency()
+
+    charges = matched = new = converted = 0
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -826,7 +832,7 @@ def sync_transactions(integration, *, since_days=90):
         # so a failure mid-loop cannot leave a service pointing at a card whose
         # charge was never stored.
         with transaction.atomic():
-            _payment, created = ServicePayment.objects.update_or_create(
+            payment, created = ServicePayment.objects.update_or_create(
                 provider=PROVIDER,
                 external_id=external_id,
                 defaults={
@@ -841,6 +847,15 @@ def sync_transactions(integration, *, since_days=90):
                     "match_score": score,
                 },
             )
+
+            # Freeze the converted value while we are here. A missing rate
+            # leaves it unconverted rather than folded at 1:1; the backfill
+            # picks it up once rates arrive.
+            if payment.apply_fx(reporting_currency=reporting):
+                payment.save(update_fields=[
+                    "base_amount", "base_currency", "fx_rate", "fx_rate_date",
+                ])
+                converted += 1
 
             if service:
                 # Record which card it renews on, and the descriptor that
@@ -861,7 +876,8 @@ def sync_transactions(integration, *, since_days=90):
             matched += 1
 
     return {
-        "charges": charges, "matched": matched, "new": new, "truncated": truncated,
+        "charges": charges, "matched": matched, "new": new,
+        "converted": converted, "truncated": truncated,
     }, error
 
 

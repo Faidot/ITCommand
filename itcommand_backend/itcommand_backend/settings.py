@@ -269,8 +269,11 @@ AUTOMATION_DAILY_COMMANDS = config(
     # modules they served. An existing deployment's .env may still name them;
     # `run_automation` skips a command that no longer exists rather than
     # failing the whole cycle on it.
+    # backfill_payment_fx runs after fetch_exchange_rates so it sees the rates
+    # that arrived this morning, and after sync_brex so it sees today's charges.
     default=(
-        'finance_autopost,fetch_exchange_rates,sync_brex,check_contract_alerts'
+        'finance_autopost,fetch_exchange_rates,sync_brex,'
+        'backfill_payment_fx,check_contract_alerts'
     ),
     cast=_csv,
 )

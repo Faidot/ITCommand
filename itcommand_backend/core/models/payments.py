@@ -10,7 +10,7 @@ visible rather than dropped.
 """
 import hashlib
 import json
-from decimal import Decimal
+from decimal import ROUND_HALF_UP, Decimal
 
 from django.db import models
 
@@ -224,6 +224,30 @@ class ServicePayment(models.Model):
     match_source = models.CharField(max_length=8, choices=MATCH_CHOICES, default="NONE")
     match_score = models.FloatField(default=0.0)
 
+    # ── converted value ──────────────────────────────────────────────────
+    #
+    # Frozen at sync time rather than computed on read, for three reasons: a
+    # report run today and next month must agree, MANUAL rate rows are
+    # editable so recomputing could silently restate history, and a rollup
+    # over thousands of charges should not do a rate lookup per row.
+    #
+    # All four are null together. A missing rate leaves them null — it is
+    # never folded at 1:1, which is the rule `core.fx` exists to enforce.
+    # `backfill_payment_fx` fills them in once the rate arrives.
+    base_amount = models.DecimalField(
+        max_digits=16, decimal_places=2, null=True, blank=True
+    )
+    #: What `base_amount` is denominated in. Stored per row because the org
+    #: reporting currency can change, and every frozen figure predating that
+    #: change is in the old one.
+    base_currency = models.CharField(max_length=3, blank=True, default="")
+    fx_rate = models.DecimalField(
+        max_digits=20, decimal_places=10, null=True, blank=True
+    )
+    #: The `as_of` of the rate row actually used, which may be older than
+    #: `posted_at` — a weekend charge converts at Friday's rate.
+    fx_rate_date = models.DateField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -235,7 +259,48 @@ class ServicePayment(models.Model):
         ]
         indexes = [
             models.Index(fields=["service", "-posted_at"], name="payment_svc_date_idx"),
+            # The backfill's working set: rows still waiting for a rate.
+            models.Index(
+                fields=["base_amount", "posted_at"], name="payment_unconverted_idx"
+            ),
         ]
 
     def __str__(self):
         return f"{self.merchant} {self.currency} {self.amount} on {self.posted_at}"
+
+    @property
+    def is_converted(self):
+        return self.base_amount is not None
+
+    def apply_fx(self, *, reporting_currency=None, force=False):
+        """Freeze the converted value. Returns True if anything changed.
+
+        A row already converted into the current reporting currency is left
+        alone unless `force`, so re-running is cheap and does not restate
+        figures that are already correct.
+
+        Conversion is re-derived from `amount` and a rate as of `posted_at` —
+        never from a stale `base_amount`, which would compound rounding and
+        bake in the old reporting currency.
+        """
+        from core import fx
+
+        target = (reporting_currency or fx.reporting_currency()).upper()
+        if not force and self.base_amount is not None and self.base_currency == target:
+            return False
+
+        rate, as_of = fx.rate_with_date(
+            self.currency, base=target, on_date=self.posted_at
+        )
+        if rate is None:
+            # Explicitly not 1:1. An unconvertible charge stays unconverted
+            # and gets reported as such.
+            return False
+
+        self.base_amount = (Decimal(self.amount) * rate).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        self.base_currency = target
+        self.fx_rate = rate
+        self.fx_rate_date = as_of or self.posted_at
+        return True

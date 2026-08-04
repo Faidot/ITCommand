@@ -18,9 +18,12 @@ Permissions split on what the data actually is:
   -> `finance`, a narrower grant.
 """
 from datetime import timedelta
+from decimal import Decimal
 
 from django.db.models import Count, Q, Sum
 from django.utils import timezone
+
+from core import fx
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
@@ -140,30 +143,63 @@ class ServicePaymentViewSet(viewsets.ReadOnlyModelViewSet):
 
         return qs.order_by("-posted_at", "-id")
 
+    @staticmethod
+    def _by_currency(queryset):
+        rows = (
+            queryset.values("currency")
+            .annotate(total=Sum("amount"), count=Count("id"))
+            .order_by("-total")
+        )
+        return [
+            {
+                "currency": row["currency"],
+                "total": f"{row['total'] or 0:.2f}",
+                "count": row["count"],
+            }
+            for row in rows
+        ]
+
+    def _converted(self, queryset, reporting):
+        """The converted total, and what could not be converted.
+
+        Only rows frozen into the *current* reporting currency count. A row
+        converted before the currency changed is stale, not usable, and is
+        reported as unconverted until `backfill_payment_fx --restate` runs.
+        """
+        usable = queryset.filter(
+            base_amount__isnull=False, base_currency=reporting
+        )
+        unconvertible = queryset.exclude(
+            base_amount__isnull=False, base_currency=reporting
+        )
+        total = usable.aggregate(total=Sum("base_amount"))["total"] or Decimal("0")
+        return {
+            "currency": reporting,
+            "total": f"{total:.2f}",
+            "converted_count": usable.count(),
+            # Named to match `estate_reports` and the FX rule the codebase
+            # already follows: a missing rate is reported, never folded at 1:1.
+            "unconvertible": self._by_currency(unconvertible),
+            "is_complete": not unconvertible.exists(),
+        }
+
     @action(detail=False, methods=["get"])
     def summary(self, request):
         """What the estate panel leads with.
 
-        Totals are grouped by currency and never summed across them. There is
-        no FX conversion here yet, and adding one at 1:1 to get a single
-        headline number would be worse than showing two.
+        Two views of the same money, on purpose. `totals` is per currency and
+        never added across currencies. `converted` is the single figure in the
+        reporting currency, and it carries an `unconvertible` block naming
+        exactly what it excludes — because a headline that quietly drops the
+        charges it could not convert is a wrong number, and one built at 1:1
+        is a worse one.
         """
         window = _int_param(request.query_params, "days", 90, low=1, high=1095)
         since = timezone.localdate() - timedelta(days=window)
         charges = ServicePayment.objects.filter(posted_at__gte=since)
+        reporting = fx.reporting_currency()
 
-        by_currency = (
-            charges.values("currency")
-            .annotate(total=Sum("amount"), count=Count("id"))
-            .order_by("-total")
-        )
         unmatched = charges.filter(service__isnull=True)
-        unmatched_by_currency = (
-            unmatched.values("currency")
-            .annotate(total=Sum("amount"), count=Count("id"))
-            .order_by("-total")
-        )
-
         total_count = charges.count()
         matched_count = total_count - unmatched.count()
 
@@ -173,23 +209,10 @@ class ServicePaymentViewSet(viewsets.ReadOnlyModelViewSet):
             "charge_count": total_count,
             "matched_count": matched_count,
             "unmatched_count": total_count - matched_count,
-            # Deliberately per-currency. See the docstring.
-            "totals": [
-                {
-                    "currency": row["currency"],
-                    "total": f"{row['total'] or 0:.2f}",
-                    "count": row["count"],
-                }
-                for row in by_currency
-            ],
-            "unmatched_totals": [
-                {
-                    "currency": row["currency"],
-                    "total": f"{row['total'] or 0:.2f}",
-                    "count": row["count"],
-                }
-                for row in unmatched_by_currency
-            ],
+            "totals": self._by_currency(charges),
+            "unmatched_totals": self._by_currency(unmatched),
+            "converted": self._converted(charges, reporting),
+            "unmatched_converted": self._converted(unmatched, reporting),
             "card_count": PaymentCard.objects.count(),
             "last_charge_at": charges.order_by("-posted_at")
             .values_list("posted_at", flat=True)
