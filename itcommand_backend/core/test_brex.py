@@ -1263,6 +1263,145 @@ class FullSyncOrchestrationTests(TestCase):
         self.assertNotIn("401", self.integration.last_message)
 
 
+class ManualMatchDurabilityTests(TestCase):
+    """A person's match must survive the nightly re-guess."""
+
+    def setUp(self):
+        self.integration = Integration.objects.create(provider="BREX", is_enabled=True)
+        self.integration.set_api_key("test-token")
+        self.integration.save()
+        self.claude = service_at("Anthropic", "Claude Pro")
+        self.figma = service_at("Figma", "Figma Org")
+
+    def paged(self, descriptor="ANTHROPIC, PBC"):
+        def _paged(_integration, path, params=None):
+            if "/v2/cards" in path:
+                return [{"id": "cd_1", "last_four": "4242"}], "", ""
+            if "/transactions" in path:
+                return [{
+                    "id": "txn_1", "card_id": "cd_1",
+                    "amount": {"amount": 2000, "currency": "USD"},
+                    "posted_at_date": timezone.localdate().isoformat(),
+                    "merchant": {"raw_descriptor": descriptor},
+                }], "", ""
+            return [], "", ""
+        return mock.patch("core.brex._paged", side_effect=_paged)
+
+    def test_a_manual_match_is_not_overwritten_by_the_matcher(self):
+        """Without this, correcting a match lasts until the next sync."""
+        with self.paged():
+            brex.run_sync(self.integration)
+
+        payment = ServicePayment.objects.get()
+        self.assertEqual(payment.service, self.claude, "the matcher's guess")
+
+        # A person says it is really Figma.
+        payment.service = self.figma
+        payment.match_source = "MANUAL"
+        payment.match_score = 1.0
+        payment.save(update_fields=["service", "match_source", "match_score"])
+
+        with self.paged():
+            summary, _error = brex.run_sync(self.integration)
+
+        payment.refresh_from_db()
+        self.assertEqual(payment.service, self.figma, "the person's decision stands")
+        self.assertEqual(payment.match_source, "MANUAL")
+        self.assertEqual(summary["manual_kept"], 1)
+
+    def test_the_facts_are_still_refreshed_on_a_manual_row(self):
+        """Only the match is the person's; the amount is still Brex's."""
+        with self.paged():
+            brex.run_sync(self.integration)
+        payment = ServicePayment.objects.get()
+        payment.match_source = "MANUAL"
+        payment.service = self.figma
+        payment.save(update_fields=["match_source", "service"])
+
+        def _paged(_integration, path, params=None):
+            if "/v2/cards" in path:
+                return [{"id": "cd_1", "last_four": "4242"}], "", ""
+            if "/transactions" in path:
+                return [{
+                    "id": "txn_1", "card_id": "cd_1",
+                    "amount": {"amount": 9999, "currency": "USD"},
+                    "posted_at_date": timezone.localdate().isoformat(),
+                    "merchant": {"raw_descriptor": "ANTHROPIC, PBC"},
+                }], "", ""
+            return [], "", ""
+
+        with mock.patch("core.brex._paged", side_effect=_paged):
+            brex.run_sync(self.integration)
+
+        payment.refresh_from_db()
+        self.assertEqual(payment.amount, Decimal("99.99"), "Brex owns the amount")
+        self.assertEqual(payment.service, self.figma, "the person owns the match")
+
+    def test_a_manually_unlinked_charge_is_not_rematched(self):
+        """Removing a match says it was wrong; re-guessing it would ignore that."""
+        with self.paged():
+            brex.run_sync(self.integration)
+
+        payment = ServicePayment.objects.get()
+        payment.service = None
+        payment.match_source = "MANUAL"
+        payment.save(update_fields=["service", "match_source"])
+
+        with self.paged():
+            brex.run_sync(self.integration)
+
+        payment.refresh_from_db()
+        self.assertIsNone(payment.service)
+
+    def test_an_automatic_match_is_still_re_evaluated(self):
+        """Only MANUAL is protected — the matcher may improve its own guesses."""
+        with self.paged(descriptor="ANTHROPIC, PBC"):
+            brex.run_sync(self.integration)
+        self.assertEqual(ServicePayment.objects.get().service, self.claude)
+
+        with self.paged(descriptor="FIGMA MONTHLY"):
+            brex.run_sync(self.integration)
+
+        self.assertEqual(ServicePayment.objects.get().service, self.figma)
+
+
+class ExchangeRateFailureTests(TestCase):
+    """The same marker bug that cost Brex a day of syncing, for rates."""
+
+    def setUp(self):
+        self.integration = Integration.objects.create(
+            provider="EXCHANGE_RATES", is_enabled=True
+        )
+        self.integration.set_api_key("rates-key")
+        self.integration.save()
+
+    def test_a_failed_fetch_raises_so_the_runner_retries(self):
+        with mock.patch(
+            "core.management.commands.fetch_exchange_rates.urllib.request.urlopen",
+            side_effect=urllib.error.URLError("no route"),
+        ):
+            with self.assertRaises(CommandError):
+                call_command("fetch_exchange_rates", stdout=StringIO(), stderr=StringIO())
+
+        self.integration.refresh_from_db()
+        self.assertEqual(self.integration.last_status, "ERROR")
+
+    def test_run_automation_does_not_mark_a_failed_fetch_as_done(self):
+        with mock.patch(
+            "core.management.commands.fetch_exchange_rates.urllib.request.urlopen",
+            side_effect=urllib.error.URLError("no route"),
+        ):
+            with self.assertRaises(CommandError):
+                call_command("run_automation", "--once", stdout=StringIO(), stderr=StringIO())
+
+        self.assertIsNone(
+            AppSettings.objects.filter(
+                key="automation.fetch_exchange_rates.last_success"
+            ).first(),
+            "a failed run must not leave a success marker for today",
+        )
+
+
 class QueuedSyncTests(TestCase):
     """U1: a long sync must not run inside the HTTP request."""
 

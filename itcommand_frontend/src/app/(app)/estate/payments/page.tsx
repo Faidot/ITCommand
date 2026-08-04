@@ -14,16 +14,25 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { CreditCard, Link2Off, RefreshCw, Search, TriangleAlert } from "lucide-react";
+import { CreditCard, Link2, Link2Off, RefreshCw, Search, TriangleAlert } from "lucide-react";
 import { toast } from "sonner";
 
 import api from "@/lib/api";
 import { formatMoney } from "@/lib/currency";
 import { formatDate } from "@/lib/date";
+import { can } from "@/lib/permissions";
+import { useAuthStore } from "@/store/authStore";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Table,
   TableBody,
@@ -41,7 +50,7 @@ import {
   TableSkeleton,
   UnconvertedNote,
 } from "../estate-ui";
-import { errorMessage, resultsOf } from "../estate-types";
+import { errorMessage, normalizeService, resultsOf } from "../estate-types";
 
 interface Charge {
   id: number;
@@ -199,11 +208,16 @@ function CurrencyTotals({ totals }: { totals: CurrencyTotal[] }) {
 }
 
 export default function EstatePaymentsPage() {
+  const user = useAuthStore((state) => state.user);
+  const canEdit = can(user, "estate", "edit");
+
   const [summary, setSummary] = useState<Summary | null>(null);
   const [charges, setCharges] = useState<Charge[]>([]);
   const [cards, setCards] = useState<CardRow[]>([]);
+  const [services, setServices] = useState<{ id: number; label: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [busyCharge, setBusyCharge] = useState<number | null>(null);
   const [search, setSearch] = useState("");
   const [onlyUnmatched, setOnlyUnmatched] = useState(true);
 
@@ -212,10 +226,11 @@ export default function EstatePaymentsPage() {
       if (silent) setRefreshing(true);
       else setLoading(true);
       try {
-        const [summaryRes, chargesRes, cardsRes] = await Promise.all([
+        const [summaryRes, chargesRes, cardsRes, servicesRes] = await Promise.all([
           api.get<unknown>("/estate/payments/summary/?days=90"),
           api.get<unknown>("/estate/payments/?days=90&page_size=200"),
           api.get<unknown>("/estate/cards/?page_size=200"),
+          api.get<unknown>("/estate/services/?page_size=200"),
         ]);
 
         const raw = (summaryRes.data ?? {}) as Record<string, unknown>;
@@ -232,6 +247,14 @@ export default function EstatePaymentsPage() {
         });
         setCharges(resultsOf(chargesRes.data, normalizeCharge));
         setCards(resultsOf(cardsRes.data, normalizeCard));
+        setServices(
+          resultsOf(servicesRes.data, normalizeService).map((service) => ({
+            id: service.id,
+            label: service.provider_name
+              ? `${service.identifier} · ${service.provider_name}`
+              : service.identifier,
+          })),
+        );
       } catch (reason) {
         toast.error(errorMessage(reason, "Failed to load cards and charges."));
       } finally {
@@ -245,6 +268,41 @@ export default function EstatePaymentsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  /**
+   * Correct a match the descriptor matcher got wrong.
+   *
+   * The backend also copies this charge's merchant onto the service as its
+   * billing descriptor when the service has none, so the same correction is
+   * not needed again next month.
+   */
+  const linkCharge = async (charge: Charge, serviceId: string) => {
+    setBusyCharge(charge.id);
+    try {
+      await api.post(`/estate/payments/${charge.id}/link/`, {
+        service: Number(serviceId),
+      });
+      toast.success("Charge linked. Future charges from this merchant will match on their own.");
+      await load(true);
+    } catch (reason) {
+      toast.error(errorMessage(reason, "Could not link that charge."));
+    } finally {
+      setBusyCharge(null);
+    }
+  };
+
+  const unlinkCharge = async (charge: Charge) => {
+    setBusyCharge(charge.id);
+    try {
+      await api.post(`/estate/payments/${charge.id}/unlink/`, {});
+      toast.success("Charge unlinked. The sync will leave it alone.");
+      await load(true);
+    } catch (reason) {
+      toast.error(errorMessage(reason, "Could not unlink that charge."));
+    } finally {
+      setBusyCharge(null);
+    }
+  };
 
   const visible = useMemo(() => {
     const needle = search.trim().toLowerCase();
@@ -440,15 +498,50 @@ export default function EstatePaymentsPage() {
                       </TableCell>
                       <TableCell>
                         {charge.service_name ? (
-                          <span className="text-sm">
-                            {charge.service_name}
-                            {charge.provider_name && (
-                              <span className="text-muted-foreground">
-                                {" "}
-                                · {charge.provider_name}
-                              </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm">
+                              {charge.service_name}
+                              {charge.provider_name && (
+                                <span className="text-muted-foreground">
+                                  {" "}
+                                  · {charge.provider_name}
+                                </span>
+                              )}
+                            </span>
+                            {charge.match_source === "MANUAL" && (
+                              <Badge variant="outline" className="text-[10px]">
+                                by hand
+                              </Badge>
                             )}
-                          </span>
+                            {canEdit && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-6 px-1.5 text-[11px]"
+                                disabled={busyCharge === charge.id}
+                                onClick={() => void unlinkCharge(charge)}
+                              >
+                                <Link2Off className="mr-1 h-3 w-3" /> Unlink
+                              </Button>
+                            )}
+                          </div>
+                        ) : canEdit ? (
+                          <Select
+                            disabled={busyCharge === charge.id}
+                            onValueChange={(value) => void linkCharge(charge, value)}
+                          >
+                            <SelectTrigger className="h-7 w-[220px] text-xs">
+                              <Link2 className="mr-1 h-3 w-3 shrink-0" />
+                              <SelectValue placeholder="Link to a service" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {services.map((service) => (
+                                <SelectItem key={service.id} value={String(service.id)}>
+                                  {service.label}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
                         ) : (
                           <Badge className="border-transparent bg-amber-100 text-[10px] text-amber-900 dark:bg-amber-950 dark:text-amber-300">
                             unmatched

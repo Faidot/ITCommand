@@ -200,7 +200,10 @@ class ServicePayment(models.Model):
 
     MATCH_CHOICES = (
         ("AUTO", "Matched automatically"),
-        ("MANUAL", "Linked by a person"),
+        # Covers a person linking *and* a person unlinking. Both are decisions
+        # the sync must leave alone, so they share a value; "linked by a
+        # person" would misdescribe a charge somebody deliberately detached.
+        ("MANUAL", "Set by a person"),
         ("NONE", "Not matched"),
     )
 

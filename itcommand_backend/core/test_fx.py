@@ -1,8 +1,11 @@
+import urllib.error
 from datetime import timedelta
 from decimal import Decimal
 from io import StringIO
+from unittest import mock
 
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -202,16 +205,30 @@ class FetchExchangeRatesCommandTests(TestCase):
         self.assertIn("not enabled", out.getvalue())
         self.assertEqual(ExchangeRate.objects.count(), 0)
 
-    def test_a_provider_failure_is_recorded_and_does_not_raise(self):
+    def test_a_provider_failure_is_recorded_and_fails_the_command(self):
+        """Changed deliberately: this used to swallow the failure.
+
+        `run_automation` treats a command that exits cleanly as the day's work
+        done and sets its success marker, so returning quietly meant one
+        unreachable provider cost a whole day of rate fetching. Raising makes
+        the runner retry on AUTOMATION_RETRY_SECONDS instead. It cannot crash
+        the loop — `run_automation._run` catches broadly and records a failure.
+
+        Also now mocked rather than pointed at a closed port: the old version
+        made a real outbound connection to find out it was refused.
+        """
         integration = Integration.objects.create(
-            provider="EXCHANGE_RATES",
-            is_enabled=True,
-            base_url="http://127.0.0.1:9/never-listening",
+            provider="EXCHANGE_RATES", is_enabled=True,
         )
         integration.set_api_key("k")
         integration.save()
 
-        call_command("fetch_exchange_rates", stdout=StringIO(), stderr=StringIO())
+        with mock.patch(
+            "core.management.commands.fetch_exchange_rates.urllib.request.urlopen",
+            side_effect=urllib.error.URLError("no route to host"),
+        ):
+            with self.assertRaises(CommandError):
+                call_command("fetch_exchange_rates", stdout=StringIO(), stderr=StringIO())
 
         integration.refresh_from_db()
         self.assertEqual(integration.last_status, "ERROR")

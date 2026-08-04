@@ -786,7 +786,10 @@ def sync_transactions(integration, *, since_days=90):
         "/v2/transactions/card/primary",
         {"posted_at_start": since},
     )
-    empty = {"charges": 0, "matched": 0, "new": 0, "converted": 0, "truncated": truncated}
+    empty = {
+        "charges": 0, "matched": 0, "new": 0, "converted": 0,
+        "manual_kept": 0, "truncated": truncated,
+    }
     if error and not items:
         return empty, error
 
@@ -803,7 +806,17 @@ def sync_transactions(integration, *, since_days=90):
     # AppSettings lookup, and doing it per charge would be a query per row.
     reporting = fx.reporting_currency()
 
-    charges = matched = new = converted = 0
+    # Charges a person linked by hand. The sync must not overwrite them: the
+    # whole point of a manual match is that somebody looked at a descriptor
+    # the matcher got wrong, and re-guessing it every night would undo that
+    # decision silently. One query, not one per charge.
+    manual_ids = set(
+        ServicePayment.objects.filter(
+            provider=PROVIDER, match_source="MANUAL"
+        ).values_list("external_id", flat=True)
+    )
+
+    charges = matched = new = converted = respected = 0
     for item in items:
         if not isinstance(item, dict):
             continue
@@ -826,7 +839,28 @@ def sync_transactions(integration, *, since_days=90):
             continue
 
         card = cards.get(str(item.get("card_id") or ""))
-        service, score = best_match(descriptor, services)
+        is_manual = external_id in manual_ids
+        service, score = (None, 0.0) if is_manual else best_match(descriptor, services)
+
+        # Facts about the charge, which Brex owns and the sync always refreshes.
+        defaults = {
+            "merchant": str(descriptor)[:255],
+            "description": str(item.get("description") or "")[:255],
+            "amount": amount,
+            "currency": currency,
+            "posted_at": posted,
+            "card": card,
+        }
+        # The match is a judgement, and a person's beats ours. Leaving these
+        # out of `defaults` is what preserves a manual link across a re-sync.
+        if is_manual:
+            respected += 1
+        else:
+            defaults.update({
+                "service": service,
+                "match_source": "AUTO" if service else "NONE",
+                "match_score": score,
+            })
 
         # The charge and the write-back it implies land together or not at all,
         # so a failure mid-loop cannot leave a service pointing at a card whose
@@ -835,17 +869,7 @@ def sync_transactions(integration, *, since_days=90):
             payment, created = ServicePayment.objects.update_or_create(
                 provider=PROVIDER,
                 external_id=external_id,
-                defaults={
-                    "merchant": str(descriptor)[:255],
-                    "description": str(item.get("description") or "")[:255],
-                    "amount": amount,
-                    "currency": currency,
-                    "posted_at": posted,
-                    "card": card,
-                    "service": service,
-                    "match_source": "AUTO" if service else "NONE",
-                    "match_score": score,
-                },
+                defaults=defaults,
             )
 
             # Freeze the converted value while we are here. A missing rate
@@ -872,12 +896,12 @@ def sync_transactions(integration, *, since_days=90):
 
         charges += 1
         new += 1 if created else 0
-        if service:
+        if service or is_manual:
             matched += 1
 
     return {
         "charges": charges, "matched": matched, "new": new,
-        "converted": converted, "truncated": truncated,
+        "converted": converted, "manual_kept": respected, "truncated": truncated,
     }, error
 
 

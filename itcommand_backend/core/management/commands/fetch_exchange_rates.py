@@ -15,7 +15,7 @@ import urllib.parse
 import urllib.request
 from decimal import Decimal, InvalidOperation
 
-from django.core.management.base import BaseCommand
+from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
 from core.app_settings import default_currency
@@ -75,8 +75,7 @@ class Command(BaseCommand):
             api_key = integration.get_api_key()
         except CredentialUnreadable as exc:
             integration.mark_result("ERROR", str(exc))
-            self.stderr.write(self.style.ERROR(str(exc)))
-            return
+            raise CommandError(str(exc)) from exc
         if api_key:
             # Providers disagree on the parameter name; sending both is harmless
             # and avoids a per-provider adapter for what is one query string.
@@ -93,20 +92,17 @@ class Command(BaseCommand):
         except (urllib.error.URLError, TimeoutError, ValueError, OSError) as exc:
             message = f"{type(exc).__name__}: {exc}"
             integration.mark_result("ERROR", message)
-            self.stderr.write(self.style.ERROR(f"Rate fetch failed — {message}"))
-            return
+            raise CommandError(f"Rate fetch failed — {message}") from exc
 
         if payload.get("success") is False or payload.get("error"):
             message = json.dumps(payload.get("error") or payload)[:500]
             integration.mark_result("ERROR", message)
-            self.stderr.write(self.style.ERROR(f"Provider rejected the request — {message}"))
-            return
+            raise CommandError(f"Provider rejected the request — {message}")
 
         rates = _extract_rates(payload)
         if not rates:
             integration.mark_result("ERROR", "Response contained no rates.")
-            self.stderr.write(self.style.ERROR("Response contained no rates."))
-            return
+            raise CommandError("Response contained no rates.")
 
         today = timezone.localdate()
         saved = skipped = 0

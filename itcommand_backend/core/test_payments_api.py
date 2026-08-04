@@ -14,7 +14,14 @@ from rest_framework import status
 from rest_framework.test import APIClient
 from django.test import TestCase
 
-from core.models import CardAccount, PaymentCard, Provider, ProviderAccount, ServicePayment
+from core.models import (
+    AuditLog,
+    CardAccount,
+    PaymentCard,
+    Provider,
+    ProviderAccount,
+    ServicePayment,
+)
 from core.test_estate_api import make_subscription
 from core.test_helpers import create_role, create_user
 
@@ -209,6 +216,135 @@ class PaymentsApiTests(TestCase):
             client.get(reverse("estate-payment-list")).status_code,
             status.HTTP_401_UNAUTHORIZED,
         )
+
+
+class ManualMatchTests(TestCase):
+    """Correcting a match the descriptor matcher got wrong."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.editor = create_user(
+            "match-edit@example.invalid",
+            create_role("MATCH_EDIT", view=True, edit=True).slug,
+        )
+        self.client.force_authenticate(self.editor)
+
+        self.service = a_service()
+        self.other = a_service(name="ChatGPT", provider_name="OpenAI")
+        self.charge = ServicePayment.objects.create(
+            external_id="txn_manual", merchant="WEIRD*VENDOR9911",
+            amount=Decimal("20.00"), currency="USD",
+            posted_at=timezone.localdate(), match_source="NONE",
+        )
+
+    def link_url(self, payment):
+        return reverse("estate-payment-link", args=[payment.pk])
+
+    def unlink_url(self, payment):
+        return reverse("estate-payment-unlink", args=[payment.pk])
+
+    def test_linking_records_a_human_decision(self):
+        response = self.client.post(
+            self.link_url(self.charge), {"service": self.service.pk}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.charge.refresh_from_db()
+        self.assertEqual(self.charge.service, self.service)
+        self.assertEqual(self.charge.match_source, "MANUAL")
+        self.assertEqual(self.charge.match_score, 1.0, "a person looked at it")
+
+    def test_linking_teaches_the_matcher_for_next_time(self):
+        """Otherwise the same correction is needed every month."""
+        self.assertEqual(self.service.billing_descriptor, "")
+
+        self.client.post(
+            self.link_url(self.charge), {"service": self.service.pk}, format="json"
+        )
+
+        self.service.refresh_from_db()
+        self.assertEqual(self.service.billing_descriptor, "WEIRD*VENDOR9911")
+
+    def test_an_existing_descriptor_is_not_overwritten(self):
+        self.service.billing_descriptor = "SET ON PURPOSE"
+        self.service.save(update_fields=["billing_descriptor"])
+
+        self.client.post(
+            self.link_url(self.charge), {"service": self.service.pk}, format="json"
+        )
+
+        self.service.refresh_from_db()
+        self.assertEqual(self.service.billing_descriptor, "SET ON PURPOSE")
+
+    def test_relinking_moves_the_charge_and_audits_both_ends(self):
+        self.client.post(
+            self.link_url(self.charge), {"service": self.service.pk}, format="json"
+        )
+        self.client.post(
+            self.link_url(self.charge), {"service": self.other.pk}, format="json"
+        )
+
+        self.charge.refresh_from_db()
+        self.assertEqual(self.charge.service, self.other)
+
+        entry = AuditLog.objects.filter(model_name="ServicePayment").last()
+        self.assertEqual(entry.changes["service"], self.other.pk)
+        self.assertEqual(entry.changes["previous_service"], self.service.pk)
+
+    def test_unlinking_clears_the_match(self):
+        self.charge.service = self.service
+        self.charge.match_source = "AUTO"
+        self.charge.save(update_fields=["service", "match_source"])
+
+        response = self.client.post(self.unlink_url(self.charge), {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+        self.charge.refresh_from_db()
+        self.assertIsNone(self.charge.service)
+        self.assertEqual(
+            self.charge.match_source, "MANUAL",
+            "a person deciding it was wrong is still a person's decision",
+        )
+
+    def test_unlinking_something_unmatched_is_rejected(self):
+        response = self.client.post(self.unlink_url(self.charge), {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_linking_to_a_missing_service_is_a_404(self):
+        response = self.client.post(
+            self.link_url(self.charge), {"service": 999999}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_linking_without_a_service_is_a_400(self):
+        response = self.client.post(self.link_url(self.charge), {}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn("unlink", response.data["detail"])
+
+    def test_both_actions_are_audited(self):
+        self.client.post(
+            self.link_url(self.charge), {"service": self.service.pk}, format="json"
+        )
+        self.client.post(self.unlink_url(self.charge), {}, format="json")
+
+        actions = [
+            entry.changes["action"]
+            for entry in AuditLog.objects.filter(model_name="ServicePayment").order_by("id")
+        ]
+        self.assertEqual(actions, ["link", "unlink"])
+
+    def test_estate_view_alone_cannot_change_a_match(self):
+        """Correcting data is an edit, not a read."""
+        client = APIClient()
+        client.force_authenticate(
+            create_user("view-only@example.invalid", create_role("VIEW_ONLY", view=True).slug)
+        )
+        response = client.post(
+            self.link_url(self.charge), {"service": self.service.pk}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.charge.refresh_from_db()
+        self.assertIsNone(self.charge.service)
 
 
 class CardAccountPermissionTests(TestCase):

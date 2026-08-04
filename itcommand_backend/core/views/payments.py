@@ -20,16 +20,18 @@ Permissions split on what the data actually is:
 from datetime import timedelta
 from decimal import Decimal
 
+from django.db import transaction
 from django.db.models import Count, Q, Sum
 from django.utils import timezone
 
-from core import fx
-from rest_framework import viewsets
+from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
-from core.models import CardAccount, PaymentCard, ServicePayment
+from core import fx
+from core.mixins import AuditLogMixin
+from core.models import CardAccount, PaymentCard, Service, ServicePayment
 from core.permissions import HasModulePermission
 from core.serializers import (
     CardAccountSerializer,
@@ -93,14 +95,18 @@ class CardAccountViewSet(viewsets.ReadOnlyModelViewSet):
     pagination_class = PaymentsPagination
 
 
-class ServicePaymentViewSet(viewsets.ReadOnlyModelViewSet):
+class ServicePaymentViewSet(AuditLogMixin, viewsets.ReadOnlyModelViewSet):
     """Card charges, matched and unmatched.
 
-    Read-only, which leaves one real gap: `match_source` has a MANUAL value
-    for "linked by a person", and nothing can currently set it. Correcting a
-    wrong match is a mutation with its own audit and re-match semantics, and
-    building it as an afterthought here would get it wrong. It is a deliberate
-    follow-up, not an oversight.
+    The rows themselves are owned by the sync and cannot be edited — a hand
+    edit would survive until the next run. The one exception is the *match*,
+    which is a judgement rather than a fact: `link` and `unlink` let a person
+    correct what the descriptor matcher got wrong.
+
+    A manual match is durable. `sync_transactions` skips the match fields for
+    any charge marked MANUAL, so the nightly run refreshes the amount and the
+    card but leaves the human decision alone. Without that, correcting a match
+    would last exactly until the next sync re-guessed it.
     """
 
     queryset = ServicePayment.objects.select_related(
@@ -109,6 +115,8 @@ class ServicePaymentViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = ServicePaymentSerializer
     permission_classes = [HasModulePermission]
     rbac_module = "estate"
+    #: Both are corrections to existing data, so they need `edit`, not `add`.
+    rbac_action_permissions = {"link": "edit", "unlink": "edit"}
     pagination_class = PaymentsPagination
 
     def get_queryset(self):
@@ -142,6 +150,82 @@ class ServicePaymentViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(posted_at__gte=since)
 
         return qs.order_by("-posted_at", "-id")
+
+    @action(detail=True, methods=["post"])
+    def link(self, request, pk=None):
+        """Tie this charge to a service, overriding whatever the matcher said.
+
+        Also teaches the matcher: if the service has no billing descriptor,
+        this charge's merchant becomes it, so the *next* charge from the same
+        merchant matches on its own instead of needing the same correction
+        again. Only when empty — an existing descriptor was set deliberately.
+        """
+        payment = self.get_object()
+        raw = request.data.get("service")
+        if raw in (None, ""):
+            return Response(
+                {"detail": "A service id is required. Use unlink to clear a match."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        service = Service.objects.filter(pk=raw).first()
+        if service is None:
+            return Response(
+                {"detail": "That service does not exist."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        previous = payment.service
+        with transaction.atomic():
+            payment.service = service
+            payment.match_source = "MANUAL"
+            # A person looked at it. That is not a 0.7 guess.
+            payment.match_score = 1.0
+            payment.save(update_fields=["service", "match_source", "match_score"])
+
+            taught = False
+            if not service.billing_descriptor and payment.merchant:
+                service.billing_descriptor = payment.merchant[:160]
+                service.save(update_fields=["billing_descriptor", "updated_at"])
+                taught = True
+
+        self.log_action("UPDATE", payment, {
+            "action": "link",
+            "service": service.pk,
+            "service_name": service.identifier,
+            "previous_service": previous.pk if previous else None,
+            "merchant": payment.merchant,
+            "billing_descriptor_set": taught,
+        })
+        return Response(self.get_serializer(payment).data)
+
+    @action(detail=True, methods=["post"])
+    def unlink(self, request, pk=None):
+        """Detach a charge from its service.
+
+        Left as NONE rather than handed back to the matcher: a person removing
+        a match is saying it was wrong, and the matcher would only propose the
+        same one again. It stays unmatched until somebody links it.
+        """
+        payment = self.get_object()
+        previous = payment.service
+        if previous is None:
+            return Response(
+                {"detail": "That charge is not linked to a service."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        payment.service = None
+        payment.match_source = "MANUAL"
+        payment.match_score = 0.0
+        payment.save(update_fields=["service", "match_source", "match_score"])
+
+        self.log_action("UPDATE", payment, {
+            "action": "unlink",
+            "previous_service": previous.pk,
+            "previous_service_name": previous.identifier,
+            "merchant": payment.merchant,
+        })
+        return Response(self.get_serializer(payment).data)
 
     @staticmethod
     def _by_currency(queryset):
