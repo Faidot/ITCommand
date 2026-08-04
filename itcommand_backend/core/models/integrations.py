@@ -1,3 +1,4 @@
+import hashlib
 from decimal import Decimal
 
 from django.core.validators import MinValueValidator, RegexValidator
@@ -8,6 +9,15 @@ from core.encryption import decrypt_value, encrypt_value
 from .users import User
 
 
+class CredentialUnreadable(Exception):
+    """Stored ciphertext exists but will not decrypt with the current key.
+
+    Distinct from "no key saved", which is the state callers used to see for
+    both cases. Telling an operator there is no token when there is one they
+    can no longer read sends them to the wrong fix.
+    """
+
+
 class Integration(models.Model):
     """A configured third-party service.
 
@@ -16,6 +26,12 @@ class Integration(models.Model):
     present. Add new providers by extending PROVIDER_CHOICES; the settings UI
     renders whatever is registered here.
     """
+
+    #: How long before `key_expires_at` the UI should start warning.
+    EXPIRY_WARNING_DAYS = 30
+    #: Upper bound on anything written to `last_message`. It is provider text
+    #: rendered in the UI, so it is bounded and flattened at the door.
+    MESSAGE_LIMIT = 500
 
     PROVIDER_CHOICES = (
         ("EXCHANGE_RATES", "Currency exchange rates"),
@@ -145,6 +161,17 @@ class Integration(models.Model):
     )
     base_url = models.URLField(blank=True, default="")
     encrypted_api_key = models.TextField(blank=True, default="")
+    #: First 8 hex chars of the key's SHA-256. Enough to tell two keys apart in
+    #: an audit trail and to confirm the one you hold is the one installed;
+    #: far too little to reconstruct the key. Never a substring of the secret.
+    key_fingerprint = models.CharField(max_length=16, blank=True, default="")
+    key_set_at = models.DateTimeField(null=True, blank=True)
+    #: Operator-entered, because no provider here reports its own token expiry.
+    #: A date rather than a timestamp: nobody knows the hour a token dies.
+    key_expires_at = models.DateField(
+        null=True, blank=True,
+        help_text="Optional. When this token expires, so it can be rotated before it fails.",
+    )
     #: Provider-specific extras (e.g. a plan tier or account id).
     config = models.JSONField(default=dict, blank=True)
 
@@ -166,31 +193,98 @@ class Integration(models.Model):
         return self.get_provider_display()
 
     # --- credentials -------------------------------------------------
+    #: `credential_state` values.
+    CREDENTIAL_MISSING = "MISSING"
+    CREDENTIAL_OK = "OK"
+    CREDENTIAL_UNREADABLE = "UNREADABLE"
+
+    @staticmethod
+    def fingerprint_for(raw_key):
+        """A short, non-reversible label for a key. Empty for an empty key."""
+        if not raw_key:
+            return ""
+        return hashlib.sha256(raw_key.encode("utf-8")).hexdigest()[:8]
+
     def set_api_key(self, raw_key):
-        self.encrypted_api_key = encrypt_value(raw_key) if raw_key else ""
+        """Store a key, or clear it when `raw_key` is empty.
+
+        Clearing wipes the fingerprint and set-at too — leaving them behind
+        would claim a key is installed when none is.
+        """
+        from django.utils import timezone
+
+        if raw_key:
+            self.encrypted_api_key = encrypt_value(raw_key)
+            self.key_fingerprint = self.fingerprint_for(raw_key)
+            self.key_set_at = timezone.now()
+        else:
+            self.encrypted_api_key = ""
+            self.key_fingerprint = ""
+            self.key_set_at = None
+            self.key_expires_at = None
 
     def get_api_key(self):
+        """The decrypted key.
+
+        Returns "" when none is saved, and raises `CredentialUnreadable` when
+        one is saved but will not decrypt — the two used to be the same answer,
+        which reported a rotated VAULT_ENCRYPTION_KEY as a missing token.
+
+        Safe to leave raising: page renders read `has_api_key`, which never
+        decrypts. Only sync paths call this.
+        """
         if not self.encrypted_api_key:
             return ""
         try:
             return decrypt_value(self.encrypted_api_key)
-        except Exception:
-            # A rotated/absent Fernet key must not crash a page render.
-            return ""
+        except Exception as exc:
+            raise CredentialUnreadable(
+                f"The stored {self.get_provider_display()} credential cannot be "
+                "decrypted. VAULT_ENCRYPTION_KEY has changed since it was saved "
+                "— paste the credential again to re-encrypt it under the current key."
+            ) from exc
 
     @property
     def has_api_key(self):
         return bool(self.encrypted_api_key)
 
     @property
+    def credential_state(self):
+        """MISSING / OK / UNREADABLE, without exposing the key."""
+        if not self.encrypted_api_key:
+            return self.CREDENTIAL_MISSING
+        try:
+            decrypt_value(self.encrypted_api_key)
+        except Exception:
+            return self.CREDENTIAL_UNREADABLE
+        return self.CREDENTIAL_OK
+
+    @property
+    def key_expires_in_days(self):
+        """Days until the operator-entered expiry, or None if none is set.
+
+        Negative once past. The UI warns from `EXPIRY_WARNING_DAYS`.
+        """
+        if not self.key_expires_at:
+            return None
+        from django.utils import timezone
+
+        return (self.key_expires_at - timezone.localdate()).days
+
+    @property
     def spec(self):
         return self.PROVIDER_SPECS.get(self.provider, {})
+
+    @classmethod
+    def clean_message(cls, message):
+        """Flatten and bound provider text before it is stored and rendered."""
+        return " ".join(str(message or "").split())[: cls.MESSAGE_LIMIT]
 
     def mark_result(self, status, message=""):
         from django.utils import timezone
 
         self.last_status = status
-        self.last_message = (message or "")[:2000]
+        self.last_message = self.clean_message(message)
         self.last_sync_at = timezone.now()
         self.save(update_fields=["last_status", "last_message", "last_sync_at", "updated_at"])
 

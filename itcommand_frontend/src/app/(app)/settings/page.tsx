@@ -1812,6 +1812,13 @@ interface IntegrationRow {
   is_enabled: boolean;
   base_url: string;
   has_api_key: boolean;
+  /** Short SHA-256 prefix — identifies which key is installed, is not part of it. */
+  key_fingerprint: string;
+  key_set_at: string | null;
+  key_expires_at: string | null;
+  key_expires_in_days: number | null;
+  expiry_warning_days: number;
+  credential_state: "MISSING" | "OK" | "UNREADABLE";
   last_status: string;
   last_message: string;
   last_sync_at: string | null;
@@ -1820,10 +1827,25 @@ interface IntegrationRow {
   config_only?: boolean;
 }
 
+/** What the expiry date means right now, or null when none is set. */
+function expiryNotice(row: IntegrationRow) {
+  const days = row.key_expires_in_days;
+  if (days === null || days === undefined) return null;
+  if (days < 0) {
+    return { tone: "red" as const, text: `Key expired ${Math.abs(days)} day${Math.abs(days) === 1 ? "" : "s"} ago` };
+  }
+  if (days <= row.expiry_warning_days) {
+    return { tone: "amber" as const, text: `Key expires in ${days} day${days === 1 ? "" : "s"}` };
+  }
+  return { tone: "muted" as const, text: `Key expires in ${days} days` };
+}
+
 function IntegrationsTab({ role }: { role?: string }) {
   const [rows, setRows] = useState<IntegrationRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [drafts, setDrafts] = useState<Record<string, { api_key: string; base_url: string }>>({});
+  const [drafts, setDrafts] = useState<
+    Record<string, { api_key: string; base_url: string; key_expires_at: string }>
+  >({});
   const [busy, setBusy] = useState<string | null>(null);
 
   const load = async () => {
@@ -1857,7 +1879,10 @@ function IntegrationsTab({ role }: { role?: string }) {
     try {
       await api.put("/integrations/", { provider: row.provider, ...changes });
       toast.success(`${row.label} updated`);
-      setDrafts((d) => ({ ...d, [row.provider]: { api_key: "", base_url: "" } }));
+      setDrafts((d) => ({
+        ...d,
+        [row.provider]: { api_key: "", base_url: "", key_expires_at: "" },
+      }));
       await load();
     } catch (err) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -1871,8 +1896,15 @@ function IntegrationsTab({ role }: { role?: string }) {
     setBusy(row.provider);
     try {
       const res = await api.post("/integrations/test/", { provider: row.provider });
-      if (res.data?.ok) toast.success(res.data.output || "Completed");
-      else toast.error(res.data?.output || "The provider returned an error");
+      // PARTIAL means rows were written but data is missing — a green toast
+      // would claim a clean run that did not happen.
+      if (res.data?.status === "PARTIAL") {
+        toast.warning(res.data.output || "Completed with missing data");
+      } else if (res.data?.ok) {
+        toast.success(res.data.output || "Completed");
+      } else {
+        toast.error(res.data?.output || "The provider returned an error");
+      }
       await load();
     } catch {
       toast.error("Could not run the integration");
@@ -1888,7 +1920,8 @@ function IntegrationsTab({ role }: { role?: string }) {
       <ExchangeRatesPanel />
 
       {rows.map((row) => {
-        const draft = drafts[row.provider] || { api_key: "", base_url: "" };
+        const draft = drafts[row.provider] || { api_key: "", base_url: "", key_expires_at: "" };
+        const expiry = expiryNotice(row);
         return (
           <Card key={row.provider}>
             <CardHeader>
@@ -1905,8 +1938,30 @@ function IntegrationsTab({ role }: { role?: string }) {
                   </Badge>
                 )}
                 {row.last_status === "OK" && <Badge variant="outline">Last run OK</Badge>}
+                {row.last_status === "PARTIAL" && (
+                  <Badge variant="outline" className="border-amber-300 text-amber-700">
+                    Last run incomplete
+                  </Badge>
+                )}
                 {row.last_status === "ERROR" && (
                   <Badge variant="outline" className="border-red-300 text-red-700">Last run failed</Badge>
+                )}
+                {row.credential_state === "UNREADABLE" && (
+                  <Badge variant="outline" className="border-red-300 text-red-700">
+                    Key unreadable
+                  </Badge>
+                )}
+                {expiry && expiry.tone !== "muted" && (
+                  <Badge
+                    variant="outline"
+                    className={
+                      expiry.tone === "red"
+                        ? "border-red-300 text-red-700"
+                        : "border-amber-300 text-amber-700"
+                    }
+                  >
+                    {expiry.text}
+                  </Badge>
                 )}
               </CardTitle>
               <p className="text-sm text-muted-foreground">{row.description}</p>
@@ -1945,6 +2000,51 @@ function IntegrationsTab({ role }: { role?: string }) {
                     <p className="text-xs text-muted-foreground">
                       Stored encrypted and never shown again after saving.
                     </p>
+                    {row.credential_state === "UNREADABLE" && (
+                      <p className="text-xs text-red-600">
+                        A key is stored but cannot be decrypted —
+                        VAULT_ENCRYPTION_KEY has changed since it was saved.
+                        Paste the key again to re-encrypt it.
+                      </p>
+                    )}
+                    {row.has_api_key && (
+                      <p className="text-xs text-muted-foreground">
+                        {row.key_fingerprint ? (
+                          <>
+                            Fingerprint <span className="font-mono">{row.key_fingerprint}</span>
+                          </>
+                        ) : (
+                          "Fingerprint unknown — saved before fingerprinting; re-save to record one"
+                        )}
+                        {row.key_set_at
+                          ? ` · set ${new Date(row.key_set_at).toLocaleDateString()}`
+                          : ""}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {row.needs_api_key && (
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Key expires (optional)</label>
+                    <Input
+                      type="date"
+                      value={
+                        draft.key_expires_at ||
+                        (row.key_expires_at ? row.key_expires_at.slice(0, 10) : "")
+                      }
+                      onChange={(e) =>
+                        setDrafts((d) => ({
+                          ...d,
+                          [row.provider]: { ...draft, key_expires_at: e.target.value },
+                        }))
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {expiry
+                        ? `${expiry.text}. Warns from ${row.expiry_warning_days} days out.`
+                        : `No provider here reports its own expiry, so enter it to be warned ${row.expiry_warning_days} days ahead.`}
+                    </p>
                   </div>
                 )}
               </div>
@@ -1963,6 +2063,9 @@ function IntegrationsTab({ role }: { role?: string }) {
                     void save(row, {
                       base_url: draft.base_url || row.base_url,
                       ...(draft.api_key ? { api_key: draft.api_key } : {}),
+                      ...(draft.key_expires_at
+                        ? { key_expires_at: draft.key_expires_at }
+                        : {}),
                     })
                   }
                 >

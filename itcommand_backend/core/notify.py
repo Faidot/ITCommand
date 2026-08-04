@@ -48,7 +48,12 @@ def _payload_for(provider, *, title, message="", url=""):
 
 def send_to_provider(integration, *, title, message="", url=""):
     """POST one alert. Returns (ok, detail); never raises."""
-    endpoint = integration.get_api_key() or integration.base_url
+    from core.models.integrations import CredentialUnreadable
+
+    try:
+        endpoint = integration.get_api_key() or integration.base_url
+    except CredentialUnreadable as exc:
+        return False, str(exc)
     if not endpoint:
         return False, "No webhook URL configured."
 

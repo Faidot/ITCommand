@@ -39,11 +39,20 @@ class Command(BaseCommand):
             self.stderr.write(self.style.ERROR(f"Brex sync failed — {error}"))
             return
 
-        self.stdout.write(
-            self.style.SUCCESS(
-                f"Synced {summary.get('cards', 0)} card(s) and "
-                f"{summary.get('charges', 0)} charge(s); "
-                f"{summary.get('matched', 0)} matched to services "
-                f"({summary.get('new', 0)} new)."
-            )
+        counts = (
+            f"Synced {summary.get('cards', 0)} card(s) and "
+            f"{summary.get('charges', 0)} charge(s); "
+            f"{summary.get('matched', 0)} matched to services "
+            f"({summary.get('new', 0)} new)."
         )
+
+        # A partial run stored real rows, so it is not an error — but saying
+        # only the counts would hide that data is missing.
+        problems = summary.get("problems") or []
+        if problems:
+            self.stdout.write(self.style.WARNING(f"{counts} Incomplete:"))
+            for problem in problems:
+                self.stdout.write(self.style.WARNING(f"  - {problem}"))
+            return
+
+        self.stdout.write(self.style.SUCCESS(counts))

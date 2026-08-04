@@ -21,6 +21,7 @@ from django.utils import timezone
 from core.app_settings import default_currency
 from core.lov import get_values
 from core.models import ExchangeRate, Integration
+from core.models.integrations import CredentialUnreadable
 
 
 PROVIDER = "EXCHANGE_RATES"
@@ -70,7 +71,12 @@ class Command(BaseCommand):
 
         url = integration.base_url or Integration.PROVIDER_SPECS[PROVIDER]["default_base_url"]
         params = {"base": base, "source": base, "symbols": ",".join(sorted(wanted))}
-        api_key = integration.get_api_key()
+        try:
+            api_key = integration.get_api_key()
+        except CredentialUnreadable as exc:
+            integration.mark_result("ERROR", str(exc))
+            self.stderr.write(self.style.ERROR(str(exc)))
+            return
         if api_key:
             # Providers disagree on the parameter name; sending both is harmless
             # and avoids a per-provider adapter for what is one query string.

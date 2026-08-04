@@ -15,6 +15,7 @@ import urllib.request
 from datetime import timedelta
 from decimal import Decimal, InvalidOperation
 
+from django.db import transaction
 from django.utils import timezone
 
 
@@ -42,13 +43,22 @@ _NON_ALNUM = re.compile(r"[^a-z0-9 ]+")
 # --------------------------------------------------------------------------
 
 def _get(integration, path, params=None):
-    """GET JSON from Brex. Returns (payload, error)."""
+    """GET JSON from Brex. Returns (payload, error).
+
+    The token travels in the Authorization header and is never placed in the
+    URL, so nothing here can leak it into a log, a referrer or an error string.
+    """
+    from core.models.integrations import CredentialUnreadable
+
     base = (integration.base_url or DEFAULT_BASE_URL).rstrip("/")
     url = f"{base}/{path.lstrip('/')}"
     if params:
         url = f"{url}?{urllib.parse.urlencode(params)}"
 
-    token = integration.get_api_key()
+    try:
+        token = integration.get_api_key()
+    except CredentialUnreadable as exc:
+        return None, str(exc)
     if not token:
         return None, "No Brex API token saved."
 
@@ -78,16 +88,22 @@ def _get(integration, path, params=None):
 
 
 def _paged(integration, path, params=None):
-    """Walk Brex's cursor pagination. Returns (items, error)."""
+    """Walk Brex's cursor pagination. Returns (items, error, truncated).
+
+    `truncated` is True when the walk stopped at MAX_PAGES with a cursor still
+    outstanding — there is more data at Brex than we read. It used to break out
+    silently, so a sync that missed rows still reported success.
+    """
     items = []
     cursor = None
+    truncated = False
     for _ in range(MAX_PAGES):
         query = dict(params or {}, limit=PAGE_SIZE)
         if cursor:
             query["cursor"] = cursor
         payload, error = _get(integration, path, query)
         if error:
-            return items, error
+            return items, error, truncated
         batch = (payload or {}).get("items")
         if batch is None and isinstance(payload, list):
             batch = payload
@@ -95,7 +111,10 @@ def _paged(integration, path, params=None):
         cursor = (payload or {}).get("next_cursor")
         if not cursor:
             break
-    return items, ""
+    else:
+        # Ran the full page budget and Brex still offered a cursor.
+        truncated = bool(cursor)
+    return items, "", truncated
 
 
 # --------------------------------------------------------------------------
@@ -205,12 +224,12 @@ def best_match(descriptor, services):
 # --------------------------------------------------------------------------
 
 def sync_cards(integration):
-    """Upsert Brex cards. Returns (count, error)."""
+    """Upsert Brex cards. Returns (count, error, truncated)."""
     from core.models import PaymentCard, User
 
-    items, error = _paged(integration, "/v2/cards")
+    items, error, truncated = _paged(integration, "/v2/cards")
     if error and not items:
-        return 0, error
+        return 0, error, truncated
 
     count = 0
     for item in items:
@@ -240,24 +259,26 @@ def sync_cards(integration):
             },
         )
         count += 1
-    return count, error
+    return count, error, truncated
 
 
 def sync_transactions(integration, *, since_days=90):
     """Upsert card charges and attach them to estate services.
 
-    Returns (summary, error) where summary counts what happened.
+    Returns (summary, error) where summary counts what happened and carries a
+    `truncated` flag when the page budget cut the walk short.
     """
     from core.models import PaymentCard, Service, ServicePayment
 
     since = (timezone.localdate() - timedelta(days=since_days)).isoformat()
-    items, error = _paged(
+    items, error, truncated = _paged(
         integration,
         "/v2/transactions/card/primary",
         {"posted_at_start": since},
     )
+    empty = {"charges": 0, "matched": 0, "new": 0, "truncated": truncated}
     if error and not items:
-        return {"charges": 0, "matched": 0, "new": 0}, error
+        return empty, error
 
     cards = {card.external_id: card for card in PaymentCard.objects.filter(provider=PROVIDER)}
     services = list(
@@ -291,39 +312,47 @@ def sync_transactions(integration, *, since_days=90):
         card = cards.get(str(item.get("card_id") or ""))
         service, score = best_match(descriptor, services)
 
-        payment, created = ServicePayment.objects.update_or_create(
-            provider=PROVIDER,
-            external_id=external_id,
-            defaults={
-                "merchant": str(descriptor)[:255],
-                "description": str(item.get("description") or "")[:255],
-                "amount": amount,
-                "currency": currency,
-                "posted_at": posted,
-                "card": card,
-                "service": service,
-                "match_source": "AUTO" if service else "NONE",
-                "match_score": score,
-            },
-        )
+        # The charge and the write-back it implies land together or not at all,
+        # so a failure mid-loop cannot leave a service pointing at a card whose
+        # charge was never stored.
+        with transaction.atomic():
+            _payment, created = ServicePayment.objects.update_or_create(
+                provider=PROVIDER,
+                external_id=external_id,
+                defaults={
+                    "merchant": str(descriptor)[:255],
+                    "description": str(item.get("description") or "")[:255],
+                    "amount": amount,
+                    "currency": currency,
+                    "posted_at": posted,
+                    "card": card,
+                    "service": service,
+                    "match_source": "AUTO" if service else "NONE",
+                    "match_score": score,
+                },
+            )
+
+            if service:
+                # Record which card it renews on, and the descriptor that
+                # matched, so the next sync attaches without guessing.
+                updates = []
+                if card and service.payment_card_id != card.pk:
+                    service.payment_card = card
+                    updates.append("payment_card")
+                if not service.billing_descriptor and descriptor:
+                    service.billing_descriptor = str(descriptor)[:160]
+                    updates.append("billing_descriptor")
+                if updates:
+                    service.save(update_fields=updates + ["updated_at"])
+
         charges += 1
         new += 1 if created else 0
-
         if service:
             matched += 1
-            # Record which card it renews on, and the descriptor that matched,
-            # so the next sync attaches without guessing.
-            updates = []
-            if card and service.payment_card_id != card.pk:
-                service.payment_card = card
-                updates.append("payment_card")
-            if not service.billing_descriptor and descriptor:
-                service.billing_descriptor = str(descriptor)[:160]
-                updates.append("billing_descriptor")
-            if updates:
-                service.save(update_fields=updates + ["updated_at"])
 
-    return {"charges": charges, "matched": matched, "new": new}, error
+    return {
+        "charges": charges, "matched": matched, "new": new, "truncated": truncated,
+    }, error
 
 
 def _as_date(value):
@@ -339,14 +368,28 @@ def _as_date(value):
 
 
 def run_sync(integration, *, since_days=90):
-    """Full sync: cards first, then charges. Returns (summary, error)."""
+    """Full sync: cards first, then charges. Returns (summary, error).
+
+    A sync that read *some* data and then hit a problem is neither a success
+    nor a total failure. It is recorded as PARTIAL with the reason attached,
+    because the previous behaviour — keeping the rows and discarding the error
+    — reported a token revoked mid-walk as a clean run.
+    """
     if not integration.is_enabled:
         return {}, "The Brex integration is switched off."
 
-    card_count, card_error = sync_cards(integration)
+    problems = []
+
+    card_count, card_error, cards_truncated = sync_cards(integration)
     if card_error and not card_count:
         integration.mark_result("ERROR", card_error)
         return {}, card_error
+    if card_error:
+        problems.append(f"cards: {card_error}")
+    if cards_truncated:
+        problems.append(
+            f"the card list hit the {MAX_PAGES}-page limit, so some cards were not read"
+        )
 
     summary, error = sync_transactions(integration, since_days=since_days)
     summary["cards"] = card_count
@@ -354,10 +397,24 @@ def run_sync(integration, *, since_days=90):
     if error and not summary.get("charges"):
         integration.mark_result("ERROR", error)
         return summary, error
+    if error:
+        problems.append(f"charges: {error}")
+    if summary.get("truncated"):
+        problems.append(
+            f"the charge list hit the {MAX_PAGES}-page limit "
+            f"({MAX_PAGES * PAGE_SIZE} charges), so older charges in the window "
+            "were not read — narrow --days or raise the limit"
+        )
 
-    message = (
+    counts = (
         f"{card_count} card(s), {summary['charges']} charge(s), "
         f"{summary['matched']} matched to services"
     )
-    integration.mark_result("OK", message)
+    if problems:
+        message = f"Partial sync — {counts}. " + " ".join(problems)
+        integration.mark_result("PARTIAL", message)
+        summary["problems"] = problems
+        return summary, ""
+
+    integration.mark_result("OK", counts)
     return summary, ""
