@@ -44,7 +44,10 @@ class Command(BaseCommand):
             raise CommandError(f"Brex sync failed — {error}")
 
         counts = (
-            f"Synced {summary.get('cards', 0)} card(s) and "
+            f"Synced {summary.get('cards', 0)} card(s), "
+            f"{summary.get('card_accounts', 0)} account(s), "
+            f"{summary.get('users', 0)} user(s), "
+            f"{summary.get('departments', 0)} department(s) and "
             f"{summary.get('charges', 0)} charge(s); "
             f"{summary.get('matched', 0)} matched to services "
             f"({summary.get('new', 0)} new)."

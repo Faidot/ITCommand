@@ -12,10 +12,12 @@ from django.utils import timezone
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from core import brex
+from core import automation_queue, brex
 from core.models import (
     AppSettings,
     AuditLog,
+    BrexObject,
+    CardAccount,
     Integration,
     PaymentCard,
     Service,
@@ -946,6 +948,400 @@ class ConnectionTestEndpointTests(TestCase):
         )
         response = client.post(self.url, {"api_key": "x"}, format="json")
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+
+class MirrorTests(TestCase):
+    """Raw payloads are kept, and unchanged ones are not rewritten."""
+
+    def test_new_objects_are_stored_verbatim(self):
+        payload = {"id": "cd_1", "last_four": "4242", "nested": {"a": [1, 2]}}
+        created, changed, unchanged = brex.mirror("CARD", [payload])
+
+        self.assertEqual((created, changed, unchanged), (1, 0, 0))
+        row = BrexObject.objects.get()
+        self.assertEqual(row.payload, payload)
+        self.assertEqual(row.object_type, "CARD")
+        self.assertEqual(row.last_seen_at, row.last_changed_at)
+
+    def test_an_unchanged_payload_is_seen_again_but_not_rewritten(self):
+        payload = {"id": "cd_1", "last_four": "4242"}
+        brex.mirror("CARD", [payload])
+        first = BrexObject.objects.get()
+
+        _created, changed, unchanged = brex.mirror("CARD", [payload])
+
+        row = BrexObject.objects.get()
+        self.assertEqual((changed, unchanged), (0, 1))
+        self.assertEqual(
+            row.last_changed_at, first.last_changed_at,
+            "an identical payload is not a change",
+        )
+        self.assertGreaterEqual(row.last_seen_at, first.last_seen_at)
+
+    def test_key_order_alone_is_not_a_change(self):
+        """Brex may serialise the same object differently between calls."""
+        brex.mirror("CARD", [{"id": "cd_1", "a": 1, "b": 2}])
+        first = BrexObject.objects.get()
+
+        _c, changed, unchanged = brex.mirror("CARD", [{"id": "cd_1", "b": 2, "a": 1}])
+
+        self.assertEqual((changed, unchanged), (0, 1))
+        self.assertEqual(BrexObject.objects.get().last_changed_at, first.last_changed_at)
+
+    def test_a_real_change_is_recorded(self):
+        brex.mirror("CARD", [{"id": "cd_1", "status": "ACTIVE"}])
+        first = BrexObject.objects.get()
+
+        _c, changed, unchanged = brex.mirror("CARD", [{"id": "cd_1", "status": "LOCKED"}])
+
+        row = BrexObject.objects.get()
+        self.assertEqual((changed, unchanged), (1, 0))
+        self.assertEqual(row.payload["status"], "LOCKED")
+        self.assertGreater(row.last_changed_at, first.last_changed_at)
+
+    def test_objects_of_different_types_do_not_collide_on_id(self):
+        brex.mirror("CARD", [{"id": "shared", "which": "card"}])
+        brex.mirror("USER", [{"id": "shared", "which": "user"}])
+
+        self.assertEqual(BrexObject.objects.count(), 2)
+        self.assertEqual(
+            BrexObject.objects.get(object_type="USER").payload["which"], "user"
+        )
+
+    def test_items_without_an_id_are_skipped_not_fatal(self):
+        created, _changed, _unchanged = brex.mirror(
+            "CARD", [{"no_id": True}, "not a dict", {"id": "cd_1"}]
+        )
+        self.assertEqual(created, 1)
+        self.assertEqual(BrexObject.objects.count(), 1)
+
+    def test_mirroring_nothing_is_a_no_op(self):
+        self.assertEqual(brex.mirror("CARD", []), (0, 0, 0))
+        self.assertEqual(BrexObject.objects.count(), 0)
+
+
+class ReferenceDataSyncTests(TestCase):
+    """Users, card accounts and departments."""
+
+    def setUp(self):
+        self.integration = Integration.objects.create(provider="BREX", is_enabled=True)
+        self.integration.set_api_key("test-token")
+        self.integration.save()
+
+    def serving(self, by_path):
+        def _paged(_integration, path, params=None):
+            for fragment, items in by_path.items():
+                if fragment in path:
+                    return items, "", ""
+            return [], "", ""
+        return mock.patch("core.brex._paged", side_effect=_paged)
+
+    def test_card_accounts_store_balances_without_precision_loss(self):
+        accounts = [{
+            "id": "acc_1", "name": "Primary", "status": "ACTIVE",
+            "current_balance": {"amount": 1234567, "currency": "USD"},
+            "available_balance": {"amount": 1000000, "currency": "USD"},
+        }]
+        with self.serving({"/accounts/card": accounts}):
+            count, error, _ = brex.sync_card_accounts(self.integration)
+
+        self.assertEqual((count, error), (1, ""))
+        account = CardAccount.objects.get()
+        self.assertEqual(account.current_balance, Decimal("12345.67"))
+        self.assertEqual(account.available_balance, Decimal("10000.00"))
+        self.assertEqual(account.currency, "USD")
+
+    def test_a_missing_balance_is_null_not_zero(self):
+        """An unknown balance and an empty account are different facts."""
+        with self.serving({"/accounts/card": [{"id": "acc_1", "name": "No balance"}]}):
+            brex.sync_card_accounts(self.integration)
+
+        account = CardAccount.objects.get()
+        self.assertIsNone(account.current_balance)
+        self.assertIsNone(account.available_balance)
+
+    def test_card_accounts_are_idempotent(self):
+        accounts = [{
+            "id": "acc_1", "name": "Primary",
+            "current_balance": {"amount": 500, "currency": "USD"},
+        }]
+        with self.serving({"/accounts/card": accounts}):
+            brex.sync_card_accounts(self.integration)
+            brex.sync_card_accounts(self.integration)
+
+        self.assertEqual(CardAccount.objects.count(), 1)
+        self.assertEqual(BrexObject.objects.filter(object_type="CARD_ACCOUNT").count(), 1)
+
+    def test_departments_are_mirrored_only(self):
+        """No typed model until something in the product reads them."""
+        with self.serving({"/departments": [{"id": "dep_1", "name": "Engineering"}]}):
+            count, error, _ = brex.sync_departments(self.integration)
+
+        self.assertEqual((count, error), (1, ""))
+        row = BrexObject.objects.get(object_type="DEPARTMENT")
+        self.assertEqual(row.payload["name"], "Engineering")
+
+    def test_users_are_mirrored_for_owner_resolution(self):
+        users = [{"id": "usr_1", "first_name": "Sam", "email": "sam@example.invalid"}]
+        with self.serving({"/v2/users": users}):
+            count, error, _ = brex.sync_users(self.integration)
+
+        self.assertEqual((count, error), (1, ""))
+        self.assertEqual(BrexObject.objects.filter(object_type="USER").count(), 1)
+
+
+class CardDetailTests(TestCase):
+    def setUp(self):
+        self.integration = Integration.objects.create(provider="BREX", is_enabled=True)
+        self.integration.set_api_key("test-token")
+        self.integration.save()
+
+    def serving(self, by_path):
+        def _paged(_integration, path, params=None):
+            for fragment, items in by_path.items():
+                if fragment in path:
+                    return items, "", ""
+            return [], "", ""
+        return mock.patch("core.brex._paged", side_effect=_paged)
+
+    def test_card_form_limits_and_owner_id_are_captured(self):
+        cards = [{
+            "id": "cd_1", "last_four": "4242", "card_name": "Ops",
+            "status": "ACTIVE", "card_type": "VIRTUAL",
+            "owner": {"id": "usr_1"},
+            "spend_controls": {
+                "spend_limit": {"amount": 250000, "currency": "USD"},
+                "spend_limit_interval": "MONTHLY",
+            },
+        }]
+        with self.serving({"/v2/cards": cards}):
+            brex.sync_cards(self.integration)
+
+        card = PaymentCard.objects.get()
+        self.assertEqual(card.form, "VIRTUAL")
+        self.assertEqual(card.limit_amount, Decimal("2500.00"))
+        self.assertEqual(card.limit_currency, "USD")
+        self.assertEqual(card.limit_interval, "MONTHLY")
+        self.assertEqual(card.external_owner_id, "usr_1")
+
+    def test_an_owner_is_resolved_from_the_mirrored_user_list(self):
+        """The embedded owner block is a summary and may lack the email."""
+        person = create_user(
+            "deep@example.invalid", create_role("CARD_OWNER", view=True).slug
+        )
+        brex.mirror("USER", [{
+            "id": "usr_1", "first_name": "Deep", "last_name": "Match",
+            "email": "deep@example.invalid",
+        }])
+
+        cards = [{
+            "id": "cd_1", "last_four": "4242", "status": "ACTIVE",
+            "owner": {"id": "usr_1"},
+        }]
+        with self.serving({"/v2/cards": cards}):
+            brex.sync_cards(self.integration)
+
+        card = PaymentCard.objects.get()
+        self.assertEqual(card.holder, person)
+        self.assertEqual(card.holder_name, "Deep Match")
+
+    def test_an_unknown_card_type_is_unknown_not_guessed(self):
+        cards = [{"id": "cd_1", "last_four": "4242", "card_type": "SOMETHING_NEW"}]
+        with self.serving({"/v2/cards": cards}):
+            brex.sync_cards(self.integration)
+        self.assertEqual(PaymentCard.objects.get().form, "UNKNOWN")
+
+    def test_a_card_without_a_limit_stores_null_not_zero(self):
+        cards = [{"id": "cd_1", "last_four": "4242"}]
+        with self.serving({"/v2/cards": cards}):
+            brex.sync_cards(self.integration)
+        self.assertIsNone(PaymentCard.objects.get().limit_amount)
+
+    def test_no_pan_is_requested_or_stored(self):
+        """cards.pan is deliberately out of scope."""
+        cards = [{
+            "id": "cd_1", "last_four": "4242",
+            "number": "4111111111111111", "pan": "4111111111111111",
+        }]
+        with self.serving({"/v2/cards": cards}):
+            brex.sync_cards(self.integration)
+
+        card = PaymentCard.objects.get()
+        self.assertEqual(card.last_four, "4242")
+        stored = {f.name for f in PaymentCard._meta.get_fields()}
+        self.assertNotIn("pan", stored)
+        self.assertNotIn("number", stored)
+        # The mirror keeps raw payloads, so it must not become a PAN store
+        # by the back door.
+        self.assertNotIn(
+            "pan", brex.SCOPE_PROBES[0][0],
+            "cards.pan must not appear among the scopes we ask for",
+        )
+        self.assertFalse(
+            any("pan" in scope for scope, _p, _l, _r in brex.SCOPE_PROBES)
+        )
+
+
+class FullSyncOrchestrationTests(TestCase):
+    def setUp(self):
+        self.integration = Integration.objects.create(provider="BREX", is_enabled=True)
+        self.integration.set_api_key("test-token")
+        self.integration.save()
+        service_at("Anthropic", "Claude Pro")
+
+    def test_a_missing_optional_scope_does_not_stop_cards_and_charges(self):
+        """Departments are nice to have; cards and charges are the point."""
+        def _paged(_integration, path, params=None):
+            if "/departments" in path:
+                return [], "Brex accepted the token but refused this call (403).", ""
+            if "/v2/cards" in path:
+                return [{"id": "cd_1", "last_four": "4242"}], "", ""
+            if "/transactions" in path:
+                return [{
+                    "id": "txn_1", "card_id": "cd_1",
+                    "amount": {"amount": 2000, "currency": "USD"},
+                    "posted_at_date": timezone.localdate().isoformat(),
+                    "merchant": {"raw_descriptor": "ANTHROPIC, PBC"},
+                }], "", ""
+            return [], "", ""
+
+        with mock.patch("core.brex._paged", side_effect=_paged):
+            summary, error = brex.run_sync(self.integration)
+
+        self.assertEqual(error, "", "an optional scope must not fail the sync")
+        self.assertEqual(summary["cards"], 1)
+        self.assertEqual(summary["charges"], 1)
+        self.integration.refresh_from_db()
+        self.assertEqual(self.integration.last_status, "PARTIAL")
+        self.assertIn("departments.readonly", self.integration.last_message)
+
+    def test_a_whole_sync_is_idempotent(self):
+        def _paged(_integration, path, params=None):
+            if "/v2/users" in path:
+                return [{"id": "usr_1", "email": "sam@example.invalid"}], "", ""
+            if "/accounts/card" in path:
+                return [{"id": "acc_1", "name": "Primary"}], "", ""
+            if "/departments" in path:
+                return [{"id": "dep_1", "name": "Eng"}], "", ""
+            if "/v2/cards" in path:
+                return [{"id": "cd_1", "last_four": "4242"}], "", ""
+            return [{
+                "id": "txn_1", "card_id": "cd_1",
+                "amount": {"amount": 2000, "currency": "USD"},
+                "posted_at_date": timezone.localdate().isoformat(),
+                "merchant": {"raw_descriptor": "ANTHROPIC, PBC"},
+            }], "", ""
+
+        with mock.patch("core.brex._paged", side_effect=_paged):
+            brex.run_sync(self.integration)
+            brex.run_sync(self.integration)
+
+        self.assertEqual(PaymentCard.objects.count(), 1)
+        self.assertEqual(CardAccount.objects.count(), 1)
+        self.assertEqual(ServicePayment.objects.count(), 1)
+        self.assertEqual(BrexObject.objects.count(), 5)
+
+    def test_a_failure_is_remembered_after_a_later_success(self):
+        """last_message is overwritten every run; the failure must survive."""
+        with mock.patch(
+            "core.brex._paged", return_value=([], "Brex rejected the token (401).", "")
+        ):
+            brex.run_sync(self.integration)
+
+        self.integration.refresh_from_db()
+        self.assertEqual(self.integration.last_status, "ERROR")
+        first_error_at = self.integration.last_error_at
+        self.assertIsNotNone(first_error_at)
+
+        with mock.patch("core.brex._paged", return_value=([], "", "")):
+            brex.run_sync(self.integration)
+
+        self.integration.refresh_from_db()
+        self.assertEqual(self.integration.last_status, "OK")
+        self.assertIn("401", self.integration.last_error)
+        self.assertEqual(self.integration.last_error_at, first_error_at)
+        self.assertNotIn("401", self.integration.last_message)
+
+
+class QueuedSyncTests(TestCase):
+    """U1: a long sync must not run inside the HTTP request."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.superadmin = create_user("queue-super@example.com", "SUPERADMIN")
+        self.client.force_authenticate(self.superadmin)
+        integration = Integration.objects.create(provider="BREX", is_enabled=True)
+        integration.set_api_key("k")
+        integration.save()
+
+    def test_run_now_queues_instead_of_syncing_in_the_request(self):
+        with mock.patch("core.brex.run_sync") as run_sync:
+            response = self.client.post(
+                reverse("integration_test"), {"provider": "BREX"}, format="json"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["queued"])
+        run_sync.assert_not_called()
+        self.assertTrue(automation_queue.pending("sync_brex"))
+
+    def test_queueing_twice_leaves_one_pending_request(self):
+        url = reverse("integration_test")
+        with mock.patch("core.brex.run_sync"):
+            self.client.post(url, {"provider": "BREX"}, format="json")
+            self.client.post(url, {"provider": "BREX"}, format="json")
+
+        self.assertEqual(automation_queue.pending_commands(), ["sync_brex"])
+
+    def test_the_payload_shows_a_queued_sync(self):
+        with mock.patch("core.brex.run_sync"):
+            self.client.post(reverse("integration_test"), {"provider": "BREX"}, format="json")
+
+        response = self.client.get(reverse("integrations"))
+        row = next(i for i in response.data["integrations"] if i["provider"] == "BREX")
+        self.assertTrue(row["sync_requested_at"])
+
+    def test_the_runner_picks_up_a_queued_command_and_clears_it(self):
+        automation_queue.request_run("sync_brex")
+
+        with mock.patch("core.brex._paged", return_value=([], "", "")):
+            try:
+                call_command("run_automation", "--once", stdout=StringIO(), stderr=StringIO())
+            except CommandError:
+                pass  # other daily commands are not the subject here
+
+        self.assertEqual(
+            automation_queue.pending("sync_brex"), "",
+            "a request must be cleared or it runs forever",
+        )
+
+    def test_a_failing_queued_command_does_not_requeue_itself(self):
+        automation_queue.request_run("sync_brex")
+
+        with mock.patch(
+            "core.brex._paged", return_value=([], "Brex rejected the token (401).", "")
+        ):
+            try:
+                call_command("run_automation", "--once", stdout=StringIO(), stderr=StringIO())
+            except CommandError:
+                pass
+
+        self.assertEqual(automation_queue.pending("sync_brex"), "")
+
+    def test_only_allow_listed_commands_can_be_queued(self):
+        with self.assertRaises(automation_queue.NotQueueable):
+            automation_queue.request_run("rm_rf_everything")
+
+    def test_a_non_superadmin_cannot_queue_a_sync(self):
+        client = APIClient()
+        client.force_authenticate(
+            create_user("nosy3@example.com", create_role("NOSY3", view=True).slug)
+        )
+        response = client.post(
+            reverse("integration_test"), {"provider": "BREX"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(automation_queue.pending("sync_brex"), "")
 
 
 class ServicePayloadTests(TestCase):

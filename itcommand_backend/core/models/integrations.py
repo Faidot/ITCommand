@@ -178,6 +178,14 @@ class Integration(models.Model):
     last_sync_at = models.DateTimeField(null=True, blank=True)
     last_status = models.CharField(max_length=16, blank=True, default="")
     last_message = models.TextField(blank=True, default="")
+    #: The last *failure*, kept when a later run succeeds.
+    #:
+    #: `last_message` is overwritten by every run, so a sync that fails
+    #: overnight and succeeds at breakfast leaves no trace of the failure.
+    #: These two survive it, which is what makes "it worked, but it has been
+    #: flapping" a question anyone can answer.
+    last_error = models.TextField(blank=True, default="")
+    last_error_at = models.DateTimeField(null=True, blank=True)
 
     updated_by = models.ForeignKey(
         User, on_delete=models.SET_NULL, null=True, blank=True,
@@ -280,13 +288,27 @@ class Integration(models.Model):
         """Flatten and bound provider text before it is stored and rendered."""
         return " ".join(str(message or "").split())[: cls.MESSAGE_LIMIT]
 
+    #: Statuses that mean the run did not fully do its job.
+    FAILED_STATUSES = ("ERROR", "PARTIAL")
+
     def mark_result(self, status, message=""):
         from django.utils import timezone
 
+        now = timezone.now()
         self.last_status = status
         self.last_message = self.clean_message(message)
-        self.last_sync_at = timezone.now()
-        self.save(update_fields=["last_status", "last_message", "last_sync_at", "updated_at"])
+        self.last_sync_at = now
+        fields = ["last_status", "last_message", "last_sync_at", "updated_at"]
+
+        # A partial run counts as a failure worth remembering: it left data
+        # behind, and that is exactly the kind of thing a later green tick
+        # would otherwise bury.
+        if status in self.FAILED_STATUSES:
+            self.last_error = self.last_message
+            self.last_error_at = now
+            fields += ["last_error", "last_error_at"]
+
+        self.save(update_fields=fields)
 
 
 class CalendarFeedToken(models.Model):

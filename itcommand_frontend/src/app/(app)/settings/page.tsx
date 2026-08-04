@@ -1824,6 +1824,11 @@ interface IntegrationRow {
   last_status: string;
   last_message: string;
   last_sync_at: string | null;
+  /** The last failure, kept even after a later run succeeds. */
+  last_error: string;
+  last_error_at: string | null;
+  /** Set while a run is waiting for the automation service to pick it up. */
+  sync_requested_at: string;
   /** The credential is stored for a feature that does not exist yet, so the UI
    *  must not imply a live sync. */
   config_only?: boolean;
@@ -1955,6 +1960,16 @@ function IntegrationsTab({ role }: { role?: string }) {
 
   useEffect(() => { void load(); }, []);
 
+  // A queued sync finishes on the automation service's clock, not ours, so
+  // the page has to look again rather than wait on a response that already
+  // came back. Stops as soon as nothing is pending.
+  const anyQueued = rows.some((row) => row.sync_requested_at);
+  useEffect(() => {
+    if (!anyQueued) return;
+    const timer = setInterval(() => void load(), 10000);
+    return () => clearInterval(timer);
+  }, [anyQueued]);
+
   if (role !== "SUPERADMIN") {
     return (
       <Card>
@@ -2014,6 +2029,13 @@ function IntegrationsTab({ role }: { role?: string }) {
     setBusy(row.provider);
     try {
       const res = await api.post("/integrations/test/", { provider: row.provider });
+      // A long sync is handed to the automation service rather than run in
+      // the request, so there is no result yet — say so and start watching.
+      if (res.data?.queued) {
+        toast.info(res.data.output || "Sync queued");
+        await load();
+        return;
+      }
       // PARTIAL means rows were written but data is missing — a green toast
       // would claim a clean run that did not happen.
       if (res.data?.status === "PARTIAL") {
@@ -2053,6 +2075,11 @@ function IntegrationsTab({ role }: { role?: string }) {
                 {row.config_only && (
                   <Badge variant="outline" className="border-blue-300 text-blue-700">
                     Stored for later — no sync yet
+                  </Badge>
+                )}
+                {row.sync_requested_at && (
+                  <Badge variant="outline" className="border-blue-300 text-blue-700">
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" /> Sync queued
                   </Badge>
                 )}
                 {row.last_status === "OK" && <Badge variant="outline">Last run OK</Badge>}
@@ -2181,6 +2208,19 @@ function IntegrationsTab({ role }: { role?: string }) {
                 >
                   {row.last_sync_at ? `${new Date(row.last_sync_at).toLocaleString()} — ` : ""}
                   {row.last_message}
+                </p>
+              )}
+
+              {/* Shown only when the current state is healthy — otherwise
+                  last_message already says it, and repeating it reads as two
+                  separate problems. */}
+              {row.last_error && row.last_status === "OK" && (
+                <p className="text-xs text-muted-foreground">
+                  Last failure
+                  {row.last_error_at
+                    ? ` on ${new Date(row.last_error_at).toLocaleString()}`
+                    : ""}
+                  : {row.last_error}
                 </p>
               )}
 

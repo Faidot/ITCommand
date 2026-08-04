@@ -7,7 +7,7 @@ from .models import (
     TicketCategory, SLAPolicy, Ticket, TicketComment, TicketAttachment,
     Provider, ProviderAccount, Property, Service, EstateSettings,
     ListOfValues, AppSettings, Integration, ExchangeRate,
-    PaymentCard, ServicePayment,
+    BrexObject, CardAccount, PaymentCard, ServicePayment,
 )
 from django import forms
 from core.lov import GROUPS, GROUP_CHOICES
@@ -238,9 +238,35 @@ class ExchangeRateAdmin(admin.ModelAdmin):
 
 @admin.register(PaymentCard)
 class PaymentCardAdmin(admin.ModelAdmin):
-    list_display = ('__str__', 'provider', 'last_four', 'holder_name', 'status', 'last_synced_at')
-    list_filter = ('provider', 'status')
+    list_display = ('__str__', 'provider', 'last_four', 'holder_name', 'form', 'status', 'last_synced_at')
+    list_filter = ('provider', 'status', 'form')
     search_fields = ('last_four', 'nickname', 'holder_name', 'external_id')
+
+
+@admin.register(CardAccount)
+class CardAccountAdmin(admin.ModelAdmin):
+    list_display = ('__str__', 'provider', 'status', 'current_balance', 'currency', 'last_synced_at')
+    list_filter = ('provider', 'status', 'currency')
+    search_fields = ('name', 'external_id')
+
+
+@admin.register(BrexObject)
+class BrexObjectAdmin(admin.ModelAdmin):
+    """Read-only: this mirrors what Brex said, so editing it would be a lie."""
+
+    list_display = ('object_type', 'external_id', 'last_seen_at', 'last_changed_at')
+    list_filter = ('object_type',)
+    search_fields = ('external_id',)
+    readonly_fields = (
+        'object_type', 'external_id', 'payload', 'payload_hash',
+        'first_seen_at', 'last_seen_at', 'last_changed_at',
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
 
 
 @admin.register(ServicePayment)

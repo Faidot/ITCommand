@@ -533,8 +533,151 @@ def test_connection(integration, *, sleep=time.sleep):
 
 
 # --------------------------------------------------------------------------
+# Raw mirroring
+# --------------------------------------------------------------------------
+
+def mirror(object_type, items, *, id_key="id"):
+    """Store raw payloads, skipping rows whose content has not changed.
+
+    Returns (created, changed, unchanged). Most objects are byte-identical
+    between runs, so the common case costs one SELECT and a single bulk
+    timestamp UPDATE rather than a write per row.
+
+    Deliberately tolerant: an item Brex sends without an id is skipped rather
+    than raising. Mirroring is a best-effort record of what was said, and
+    failing the whole sync over one odd row would be the wrong trade.
+    """
+    from core.models import BrexObject
+
+    now = timezone.now()
+    incoming = {}
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        external_id = str(item.get(id_key) or "").strip()
+        if external_id:
+            incoming[external_id] = item
+    if not incoming:
+        return 0, 0, 0
+
+    existing = {
+        row.external_id: row
+        for row in BrexObject.objects.filter(
+            object_type=object_type, external_id__in=list(incoming)
+        )
+    }
+
+    new_rows, changed_rows, unchanged_ids = [], [], []
+    for external_id, payload in incoming.items():
+        digest = BrexObject.hash_payload(payload)
+        row = existing.get(external_id)
+        if row is None:
+            new_rows.append(BrexObject(
+                object_type=object_type, external_id=external_id,
+                payload=payload, payload_hash=digest,
+                last_seen_at=now, last_changed_at=now,
+            ))
+        elif row.payload_hash != digest:
+            row.payload = payload
+            row.payload_hash = digest
+            row.last_seen_at = now
+            row.last_changed_at = now
+            changed_rows.append(row)
+        else:
+            unchanged_ids.append(external_id)
+
+    if new_rows:
+        BrexObject.objects.bulk_create(new_rows, ignore_conflicts=True)
+    if changed_rows:
+        BrexObject.objects.bulk_update(
+            changed_rows, ["payload", "payload_hash", "last_seen_at", "last_changed_at"]
+        )
+    if unchanged_ids:
+        # One narrow UPDATE for every unchanged object, so "we still see it"
+        # is recorded without rewriting payloads that did not move.
+        BrexObject.objects.filter(
+            object_type=object_type, external_id__in=unchanged_ids
+        ).update(last_seen_at=now)
+
+    return len(new_rows), len(changed_rows), len(unchanged_ids)
+
+
+def _money_field(block):
+    """(amount, currency) from a Brex money block, or (None, '') if absent."""
+    if not isinstance(block, dict) or block.get("amount") is None:
+        return None, ""
+    amount, currency = money_from_brex(block)
+    return amount, currency
+
+
+# --------------------------------------------------------------------------
 # Sync
 # --------------------------------------------------------------------------
+
+def sync_users(integration):
+    """Mirror Brex users so card owners can be resolved. Returns (count, error, truncated).
+
+    Owner resolution already works from the block embedded in each card; this
+    exists so a card whose owner block is thin can still be attributed, and so
+    the mapping can be redone later without re-fetching.
+    """
+    items, error, truncated = _paged(integration, "/v2/users")
+    if error and not items:
+        return 0, error, truncated
+    mirror("USER", items)
+    return len(items), error, truncated
+
+
+def sync_card_accounts(integration):
+    """Upsert card accounts and their balances. Returns (count, error, truncated)."""
+    from core.models import CardAccount
+
+    items, error, truncated = _paged(integration, "/v2/accounts/card")
+    if error and not items:
+        return 0, error, truncated
+
+    mirror("CARD_ACCOUNT", items)
+    count = 0
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        external_id = str(item.get("id") or "").strip()
+        if not external_id:
+            continue
+
+        current, currency = _money_field(item.get("current_balance"))
+        available, available_currency = _money_field(item.get("available_balance"))
+
+        CardAccount.objects.update_or_create(
+            provider=PROVIDER,
+            external_id=external_id,
+            defaults={
+                "name": str(item.get("name") or "")[:160],
+                "status": str(item.get("status") or "")[:32],
+                "currency": currency or available_currency or "USD",
+                "current_balance": current,
+                "available_balance": available,
+                "last_synced_at": timezone.now(),
+            },
+        )
+        count += 1
+    return count, error, truncated
+
+
+def sync_departments(integration):
+    """Mirror departments for cost allocation. Returns (count, error, truncated).
+
+    Mirror only, no typed model. Nothing in the product allocates cost by
+    Brex department yet, and a table with no reader is the mistake the
+    discovery integrations already made — the raw rows are here for whenever
+    something does want them.
+    """
+    items, error, truncated = _paged(integration, "/v2/departments")
+    if error and not items:
+        return 0, error, truncated
+    mirror("DEPARTMENT", items)
+    return len(items), error, truncated
+
 
 def sync_cards(integration):
     """Upsert Brex cards. Returns (count, error, truncated)."""
@@ -543,6 +686,12 @@ def sync_cards(integration):
     items, error, truncated = _paged(integration, "/v2/cards")
     if error and not items:
         return 0, error, truncated
+
+    mirror("CARD", items)
+
+    # Owners resolved from the mirrored user list where the embedded block is
+    # thin. One pass, so a hundred cards is not a hundred queries.
+    users_by_id = _mirrored_users()
 
     count = 0
     for item in items:
@@ -554,10 +703,21 @@ def sync_cards(integration):
             continue
 
         owner = item.get("owner") or {}
+        owner_id = str(owner.get("id") or item.get("owner_user_id") or "").strip()
+        if owner_id and owner_id in users_by_id:
+            # Prefer the full user record; the embedded block is a summary.
+            owner = {**users_by_id[owner_id], **{k: v for k, v in owner.items() if v}}
+
         holder_name = " ".join(
             part for part in [owner.get("first_name"), owner.get("last_name")] if part
         ) or str(owner.get("name") or "")
         email = (owner.get("email") or "").strip().lower()
+
+        limit_amount, limit_currency = _money_field(
+            item.get("spend_controls", {}).get("spend_limit")
+            if isinstance(item.get("spend_controls"), dict)
+            else item.get("limit")
+        )
 
         PaymentCard.objects.update_or_create(
             provider=PROVIDER,
@@ -567,12 +727,47 @@ def sync_cards(integration):
                 "nickname": str(item.get("card_name") or "")[:160],
                 "holder_name": holder_name[:160],
                 "holder": User.objects.filter(email__iexact=email).first() if email else None,
+                "external_owner_id": owner_id[:128],
                 "status": str(item.get("status") or "UNKNOWN").upper()[:16],
+                "form": _card_form(item),
+                "limit_amount": limit_amount,
+                "limit_currency": limit_currency[:3],
+                "limit_interval": str(
+                    (item.get("spend_controls") or {}).get("spend_limit_interval") or ""
+                )[:32],
                 "last_synced_at": timezone.now(),
             },
         )
         count += 1
     return count, error, truncated
+
+
+#: Brex words this differently across endpoints; map whatever arrives onto the
+#: two states anybody actually cares about.
+_PHYSICAL_WORDS = {"PHYSICAL", "PLASTIC", "METAL"}
+_VIRTUAL_WORDS = {"VIRTUAL", "DIGITAL"}
+
+
+def _card_form(item):
+    raw = str(item.get("card_type") or item.get("type") or "").strip().upper()
+    if raw in _PHYSICAL_WORDS:
+        return "PHYSICAL"
+    if raw in _VIRTUAL_WORDS:
+        return "VIRTUAL"
+    return "UNKNOWN"
+
+
+def _mirrored_users():
+    """{brex user id: payload} from the mirror, for owner resolution."""
+    from core.models import BrexObject
+
+    return {
+        row.external_id: row.payload
+        for row in BrexObject.objects.filter(object_type="USER").only(
+            "external_id", "payload"
+        )
+        if isinstance(row.payload, dict)
+    }
 
 
 def sync_transactions(integration, *, since_days=90):
@@ -592,6 +787,8 @@ def sync_transactions(integration, *, since_days=90):
     empty = {"charges": 0, "matched": 0, "new": 0, "truncated": truncated}
     if error and not items:
         return empty, error
+
+    mirror("TRANSACTION", items)
 
     cards = {card.external_id: card for card in PaymentCard.objects.filter(provider=PROVIDER)}
     services = list(
@@ -680,29 +877,55 @@ def _as_date(value):
         return None
 
 
+#: The reference data pulled before cards, in order. Each is optional: a token
+#: without the scope still syncs cards and charges, which is the point of the
+#: integration. Missing ones are reported, not fatal.
+REFERENCE_STEPS = (
+    ("users", sync_users, "users.readonly"),
+    ("card_accounts", sync_card_accounts, "accounts.card.readonly"),
+    ("departments", sync_departments, "departments.readonly"),
+)
+
+
 def run_sync(integration, *, since_days=90):
-    """Full sync: cards first, then charges. Returns (summary, error).
+    """Full sync: reference data, then cards, then charges. Returns (summary, error).
 
     A sync that read *some* data and then hit a problem is neither a success
     nor a total failure. It is recorded as PARTIAL with the reason attached,
     because the previous behaviour — keeping the rows and discarding the error
     — reported a token revoked mid-walk as a clean run.
+
+    Order matters: users are mirrored before cards so a card whose embedded
+    owner block is thin can still be attributed to a person.
     """
     if not integration.is_enabled:
         return {}, "The Brex integration is switched off."
 
     problems = []
+    summary = {}
+
+    # Reference data first, and never fatally: the two things this integration
+    # exists for are cards and charges, and a token that cannot read
+    # departments should still deliver those.
+    for name, step, scope in REFERENCE_STEPS:
+        count, step_error, step_truncated = step(integration)
+        summary[name] = count
+        if step_error:
+            problems.append(f"{name} ({scope}): {step_error}")
+        if step_truncated:
+            problems.append(f"{name}: {step_truncated}")
 
     card_count, card_error, cards_truncated = sync_cards(integration)
     if card_error and not card_count:
         integration.mark_result("ERROR", card_error)
-        return {}, card_error
+        return summary, card_error
     if card_error:
         problems.append(f"cards: {card_error}")
     if cards_truncated:
         problems.append(f"cards: {cards_truncated}")
 
-    summary, error = sync_transactions(integration, since_days=since_days)
+    charge_summary, error = sync_transactions(integration, since_days=since_days)
+    summary.update(charge_summary)
     summary["cards"] = card_count
 
     if error and not summary.get("charges"):
@@ -717,7 +940,8 @@ def run_sync(integration, *, since_days=90):
 
     counts = (
         f"{card_count} card(s), {summary['charges']} charge(s), "
-        f"{summary['matched']} matched to services"
+        f"{summary['matched']} matched to services, "
+        f"{summary.get('card_accounts', 0)} account(s)"
     )
     if problems:
         message = f"Partial sync — {counts}. " + " ".join(problems)

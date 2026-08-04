@@ -3,6 +3,7 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework_simplejwt.tokens import RefreshToken
+from django.conf import settings
 from django.contrib.auth import authenticate
 from django.db.models import Sum
 from django.utils import timezone
@@ -174,7 +175,27 @@ class IntegrationsView(AuditLogMixin, APIView):
             'last_status': integration.last_status if integration else '',
             'last_message': integration.last_message if integration else '',
             'last_sync_at': integration.last_sync_at if integration else None,
+            # Kept when a later run succeeds, so "it works now but it has been
+            # flapping" is answerable rather than silently overwritten.
+            'last_error': integration.last_error if integration else '',
+            'last_error_at': integration.last_error_at if integration else None,
+            # Set while a run is waiting for the automation service to pick it
+            # up, so the UI can say "queued" instead of looking idle.
+            'sync_requested_at': self._pending.get(provider, ''),
         }
+
+    @property
+    def _pending(self):
+        """{provider: requested_at} for queued runs, fetched once per request."""
+        from core import automation_queue
+
+        if not hasattr(self, '_pending_cache'):
+            self._pending_cache = {
+                provider: automation_queue.pending(command)
+                for provider, command in IntegrationTestView.COMMANDS.items()
+                if command in IntegrationTestView.QUEUED_COMMANDS
+            }
+        return self._pending_cache
 
     def get(self, request):
         existing = {i.provider: i for i in Integration.objects.all()}
@@ -318,6 +339,9 @@ class IntegrationTestView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsSuperadmin]
 
     COMMANDS = {'EXCHANGE_RATES': 'fetch_exchange_rates', 'BREX': 'sync_brex'}
+    #: Commands too slow to run inside a request. Everything else is a single
+    #: call and finishes well inside a normal response.
+    QUEUED_COMMANDS = {'sync_brex'}
 
     def post(self, request):
         from io import StringIO
@@ -350,6 +374,29 @@ class IntegrationTestView(APIView):
                 {'detail': f"Nothing to run for '{provider}'."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # A full sync pages through months of data. Running it inside this
+        # request would hold a Gunicorn worker for minutes — with three
+        # workers, a couple of clicks takes most of the site down. Hand it to
+        # the automation runner and answer immediately.
+        if command in self.QUEUED_COMMANDS:
+            from core import automation_queue
+
+            requested = automation_queue.request_run(
+                command, requested_by=request.user.email
+            )
+            return Response({
+                'ok': True,
+                'queued': True,
+                'requested_at': requested,
+                'poll_seconds': settings.AUTOMATION_POLL_SECONDS,
+                'output': (
+                    'Sync queued. The automation service picks it up within '
+                    f'{settings.AUTOMATION_POLL_SECONDS} seconds; this page '
+                    'will update when it finishes.'
+                ),
+            })
+
         out, err = StringIO(), StringIO()
         try:
             call_command(command, stdout=out, stderr=err)
