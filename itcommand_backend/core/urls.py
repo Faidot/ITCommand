@@ -30,6 +30,7 @@ from .views import (
     NetworkTopologyView, NetworkExportView, NetworkDeviceLookupView,
     KBCategoryViewSet, KBTagViewSet, KBArticleViewSet, KBDashboardView, KBSuggestView,
     ProviderViewSet, ProviderAccountViewSet, PropertyViewSet, ServiceViewSet,
+    PaymentCardViewSet, ServicePaymentViewSet, CardAccountViewSet,
     EstateDashboardView, EstateOverviewView, EstateGapsView, EstateSettingsView, ExchangeRateViewSet,
 )
 from .reports import (
@@ -103,6 +104,11 @@ router.register(r'estate/providers', ProviderViewSet, basename='estate-provider'
 router.register(r'estate/accounts', ProviderAccountViewSet, basename='estate-account')
 router.register(r'estate/properties', PropertyViewSet, basename='estate-property')
 router.register(r'estate/services', ServiceViewSet, basename='estate-service')
+# Read-only views onto what the Brex sync writes. Cards and charges sit under
+# estate because they answer an estate question; balances are gated on finance.
+router.register(r'estate/cards', PaymentCardViewSet, basename='estate-card')
+router.register(r'estate/payments', ServicePaymentViewSet, basename='estate-payment')
+router.register(r'finance/card-accounts', CardAccountViewSet, basename='card-account')
 router.register(r'exchange-rates', ExchangeRateViewSet, basename='exchange-rate')
 
 urlpatterns = [
