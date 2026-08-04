@@ -4,16 +4,24 @@ Answers the question people actually ask about a service — *which card
 does this renew on, and what did we last pay?* — by syncing charges from Brex
 and matching each one to a service by its merchant descriptor.
 
-Contract, matching the other integrations here: best-effort, never raises,
-returns (result, error).
+Two layers, deliberately:
+
+* `_request` raises a typed `BrexError` and retries what is worth retrying.
+  Callers that need to tell a revoked token from a missing scope use it.
+* `_get` / `_paged` / `run_sync` keep the best-effort `(result, error)`
+  contract the other integrations here use, so a provider outage never
+  raises into the automation loop.
 """
 import json
 import re
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import timedelta
+from datetime import timezone as dt_timezone
 from decimal import Decimal, InvalidOperation
+from email.utils import parsedate_to_datetime
 
 from django.db import transaction
 from django.utils import timezone
@@ -22,9 +30,94 @@ from django.utils import timezone
 PROVIDER = "BREX"
 DEFAULT_BASE_URL = "https://platform.brexapis.com"
 TIMEOUT_SECONDS = 30
+#: A person is waiting on the connection test, so it fails faster than a sync.
+PROBE_TIMEOUT_SECONDS = 10
 #: Brex paginates with a cursor; cap the walk so a huge history cannot hang a sync.
 MAX_PAGES = 20
 PAGE_SIZE = 100
+
+#: Total attempts per request, including the first. 4 gives 1s + 2s + 4s of
+#: waiting before giving up — long enough to ride out a brief rate limit,
+#: short enough that a daily sync does not sit for minutes on a dead API.
+MAX_ATTEMPTS = 4
+BACKOFF_BASE_SECONDS = 1.0
+MAX_BACKOFF_SECONDS = 30.0
+#: Brex can ask for a long wait; honour it, but not unboundedly.
+MAX_RETRY_AFTER_SECONDS = 60.0
+#: Wall-clock ceiling on one paginated walk. Without it, twenty pages each
+#: retrying through a rate limit could hold the automation loop for an hour.
+WALK_BUDGET_SECONDS = 300.0
+
+
+# --------------------------------------------------------------------------
+# Typed errors
+# --------------------------------------------------------------------------
+
+class BrexError(Exception):
+    """Something went wrong talking to Brex.
+
+    `str(exc)` is operator-facing and safe to store and display: it never
+    contains the token, which travels only in a request header.
+    """
+
+    #: Whether trying the same request again could plausibly succeed.
+    retryable = False
+    #: Short machine-readable label, used by the connection test.
+    code = "error"
+
+
+class BrexNotConfigured(BrexError):
+    """No token saved, or one saved that will not decrypt."""
+
+    code = "not_configured"
+
+
+class BrexAuthError(BrexError):
+    """401 — the token is wrong, revoked or expired."""
+
+    code = "auth"
+
+
+class BrexScopeError(BrexError):
+    """403 — the token is valid but was not granted this scope.
+
+    Distinct from 401 because the fix is different: a scope is chosen when
+    the token is created, so it cannot be granted after the fact. The token
+    has to be regenerated.
+    """
+
+    code = "scope"
+
+
+class BrexRateLimited(BrexError):
+    """429 — too many requests."""
+
+    retryable = True
+    code = "rate_limited"
+
+    def __init__(self, message, retry_after=None):
+        super().__init__(message)
+        self.retry_after = retry_after
+
+
+class BrexServerError(BrexError):
+    """5xx — Brex's problem, and usually temporary."""
+
+    retryable = True
+    code = "server"
+
+
+class BrexUnavailable(BrexError):
+    """The request never completed: DNS, connection, timeout."""
+
+    retryable = True
+    code = "unavailable"
+
+
+class BrexBadResponse(BrexError):
+    """A response arrived but was not the JSON we expect."""
+
+    code = "bad_response"
 
 #: Currencies without minor units — dividing these by 100 would be wrong.
 ZERO_DECIMAL_CURRENCIES = {"JPY", "KRW", "VND", "CLP", "ISK", "PYG", "UGX", "RWF", "XOF", "XAF"}
@@ -42,8 +135,95 @@ _NON_ALNUM = re.compile(r"[^a-z0-9 ]+")
 # HTTP
 # --------------------------------------------------------------------------
 
-def _get(integration, path, params=None):
-    """GET JSON from Brex. Returns (payload, error).
+def _retry_after_seconds(headers):
+    """Parse a Retry-After header. Seconds or an HTTP date; None if absent."""
+    if not headers:
+        return None
+    raw = headers.get("Retry-After")
+    if not raw:
+        return None
+    try:
+        return max(0.0, float(str(raw).strip()))
+    except (TypeError, ValueError):
+        pass
+    try:
+        when = parsedate_to_datetime(str(raw))
+    except (TypeError, ValueError):
+        return None
+    if when is None:
+        return None
+    if timezone.is_naive(when):
+        # A Retry-After date without a zone is UTC by RFC 9110. Note this is
+        # datetime's utc, not django.utils.timezone's — that one was removed
+        # in Django 5.0 and this codebase runs 6.
+        when = timezone.make_aware(when, dt_timezone.utc)
+    return max(0.0, (when - timezone.now()).total_seconds())
+
+
+def _backoff_seconds(attempt, retry_after=None):
+    """Seconds to wait before attempt number `attempt` + 1.
+
+    Brex naming a delay beats guessing one, so Retry-After wins when present.
+    """
+    if retry_after is not None:
+        return min(retry_after, MAX_RETRY_AFTER_SECONDS)
+    return min(BACKOFF_BASE_SECONDS * (2 ** (attempt - 1)), MAX_BACKOFF_SECONDS)
+
+
+def _once(url, token, timeout):
+    """One GET. Returns the decoded payload or raises a BrexError."""
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "User-Agent": "ITCommand/1.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            body = response.read().decode("utf-8", errors="replace")
+    except urllib.error.HTTPError as exc:
+        if exc.code == 401:
+            raise BrexAuthError(
+                "Brex rejected the token (401). It is wrong, revoked or expired "
+                "— generate a new one and paste it again."
+            ) from exc
+        if exc.code == 403:
+            raise BrexScopeError(
+                "Brex accepted the token but refused this call (403). The scope "
+                "was not granted when the token was created, and scopes cannot "
+                "be added afterwards — regenerate the token with the missing "
+                "permission ticked."
+            ) from exc
+        if exc.code == 429:
+            raise BrexRateLimited(
+                "Brex is rate-limiting the request (429).",
+                retry_after=_retry_after_seconds(getattr(exc, "headers", None)),
+            ) from exc
+        if exc.code >= 500:
+            raise BrexServerError(
+                f"Brex returned HTTP {exc.code} ({exc.reason}). That is their "
+                "side, and usually temporary."
+            ) from exc
+        raise BrexError(f"Brex returned HTTP {exc.code}: {exc.reason}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        # `exc` can carry the URL; the token is never in it, but keep the
+        # stored text to the reason rather than the whole repr.
+        reason = getattr(exc, "reason", None) or exc
+        raise BrexUnavailable(f"Could not reach Brex: {reason}") from exc
+
+    try:
+        return json.loads(body)
+    except ValueError as exc:
+        raise BrexBadResponse(
+            "Brex did not return JSON — check the API endpoint setting."
+        ) from exc
+
+
+def _request(integration, path, params=None, *, timeout=TIMEOUT_SECONDS,
+             max_attempts=MAX_ATTEMPTS, sleep=time.sleep):
+    """GET JSON from Brex, retrying what is worth retrying. Raises BrexError.
 
     The token travels in the Authorization header and is never placed in the
     URL, so nothing here can leak it into a log, a referrer or an error string.
@@ -58,46 +238,54 @@ def _get(integration, path, params=None):
     try:
         token = integration.get_api_key()
     except CredentialUnreadable as exc:
-        return None, str(exc)
+        raise BrexNotConfigured(str(exc)) from exc
     if not token:
-        return None, "No Brex API token saved."
+        raise BrexNotConfigured("No Brex API token saved.")
 
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "User-Agent": "ITCommand/1.0",
-        },
-    )
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return _once(url, token, timeout)
+        except BrexError as exc:
+            if not exc.retryable or attempt >= max_attempts:
+                raise
+            sleep(_backoff_seconds(attempt, getattr(exc, "retry_after", None)))
+
+
+def _get(integration, path, params=None, **kwargs):
+    """`_request` in the best-effort form the sync path uses: (payload, error)."""
     try:
-        with urllib.request.urlopen(request, timeout=TIMEOUT_SECONDS) as response:
-            return json.loads(response.read().decode("utf-8", errors="replace")), ""
-    except urllib.error.HTTPError as exc:
-        if exc.code == 401:
-            return None, "Brex rejected the token (401). Generate a new one and paste it again."
-        if exc.code == 403:
-            return None, "The token is valid but lacks permission (403). It needs read access to cards and transactions."
-        if exc.code == 429:
-            return None, "Brex is rate-limiting the request (429). Try again in a few minutes."
-        return None, f"Brex returned HTTP {exc.code}: {exc.reason}"
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
-        return None, f"Could not reach Brex: {exc}"
-    except ValueError:
-        return None, "Brex did not return JSON — check the base URL."
+        return _request(integration, path, params, **kwargs), ""
+    except BrexError as exc:
+        return None, str(exc)
 
 
-def _paged(integration, path, params=None):
+def _paged(integration, path, params=None, *, budget_seconds=WALK_BUDGET_SECONDS):
     """Walk Brex's cursor pagination. Returns (items, error, truncated).
 
-    `truncated` is True when the walk stopped at MAX_PAGES with a cursor still
-    outstanding — there is more data at Brex than we read. It used to break out
-    silently, so a sync that missed rows still reported success.
+    `truncated` is a reason string, empty when the walk finished. Two ways it
+    can stop early, and the caller needs to tell them apart:
+
+    * the MAX_PAGES budget ran out with a cursor still outstanding;
+    * the wall-clock budget ran out, which retries make reachable — twenty
+      pages each riding out a rate limit could otherwise hold the automation
+      loop for the better part of an hour.
+
+    Either way there is more data at Brex than we read, and saying so is the
+    point: it used to break out silently and still report success.
     """
     items = []
     cursor = None
-    truncated = False
+    truncated = ""
+    started = time.monotonic()
     for _ in range(MAX_PAGES):
+        if time.monotonic() - started > budget_seconds:
+            truncated = (
+                f"the walk ran past its {int(budget_seconds)}s budget, so the "
+                "rest was not read — Brex was most likely rate-limiting"
+            )
+            break
         query = dict(params or {}, limit=PAGE_SIZE)
         if cursor:
             query["cursor"] = cursor
@@ -113,7 +301,11 @@ def _paged(integration, path, params=None):
             break
     else:
         # Ran the full page budget and Brex still offered a cursor.
-        truncated = bool(cursor)
+        if cursor:
+            truncated = (
+                f"the {MAX_PAGES}-page limit was reached "
+                f"({MAX_PAGES * PAGE_SIZE} records), so older records were not read"
+            )
     return items, "", truncated
 
 
@@ -217,6 +409,127 @@ def best_match(descriptor, services):
     if len(scored) > 1 and scored[1][0] == best_score:
         return None, best_score
     return best, best_score
+
+
+# --------------------------------------------------------------------------
+# Connection test
+# --------------------------------------------------------------------------
+
+#: The scopes we probe, in the order the UI lists them.
+#:
+#: `required` marks the two the sync cannot run without. The rest are read by
+#: later features or are simply useful to know about, so a token missing them
+#: is reported without calling the whole connection broken.
+SCOPE_PROBES = (
+    ("cards.readonly", "/v2/cards", "Card list", True),
+    ("transactions.card.readonly", "/v2/transactions/card/primary", "Card charges", True),
+    ("users.readonly", "/v2/users", "Card owners", False),
+    ("accounts.card.readonly", "/v2/accounts/card", "Card accounts and balances", False),
+    ("departments.readonly", "/v2/departments", "Departments, for cost allocation", False),
+    ("expenses.card.readonly", "/v2/expenses/card", "Expense detail", False),
+    ("statements.card.readonly", "/v2/accounts/card/primary/statements", "Statements", False),
+    ("vendors.readonly", "/v2/vendors", "Vendors", False),
+)
+
+
+def test_connection(integration, *, sleep=time.sleep):
+    """Prove the token is live, then probe each scope. Never raises.
+
+    Returns a dict the UI renders directly. Probes use one attempt each and a
+    short timeout: somebody is waiting on this, and a retry storm across eight
+    endpoints would hold the request open for minutes.
+    """
+    started = time.monotonic()
+
+    def elapsed_ms():
+        return int((time.monotonic() - started) * 1000)
+
+    def probe_kwargs():
+        return {"timeout": PROBE_TIMEOUT_SECONDS, "max_attempts": 1, "sleep": sleep}
+
+    # Identity first. If the token itself is bad, probing eight endpoints
+    # would produce eight copies of the same failure.
+    try:
+        me = _request(integration, "/v2/users/me", **probe_kwargs()) or {}
+    except BrexNotConfigured as exc:
+        return {
+            "ok": False, "status": "NOT_CONFIGURED", "code": exc.code,
+            "message": str(exc), "latency_ms": elapsed_ms(),
+            "identity": None, "scopes": [],
+        }
+    except BrexAuthError as exc:
+        return {
+            "ok": False, "status": "AUTH_FAILED", "code": exc.code,
+            "message": str(exc), "latency_ms": elapsed_ms(),
+            "identity": None, "scopes": [],
+        }
+    except BrexScopeError as exc:
+        # /v2/users/me needs users.readonly. A token without it is still
+        # usable for cards and charges, so carry on to the probes.
+        me, identity_note = {}, str(exc)
+    except BrexError as exc:
+        return {
+            "ok": False, "status": "UNREACHABLE", "code": exc.code,
+            "message": str(exc), "latency_ms": elapsed_ms(),
+            "identity": None, "scopes": [],
+        }
+    else:
+        identity_note = ""
+
+    identity = None
+    if me:
+        identity = {
+            "name": " ".join(
+                part for part in [me.get("first_name"), me.get("last_name")] if part
+            ) or str(me.get("name") or ""),
+            "email": str(me.get("email") or ""),
+        }
+
+    scopes = []
+    for scope, path, label, required in SCOPE_PROBES:
+        result = {"scope": scope, "label": label, "required": required}
+        try:
+            _request(integration, path, {"limit": 1}, **probe_kwargs())
+        except BrexScopeError as exc:
+            result.update(ok=False, code=exc.code, detail=str(exc))
+        except BrexError as exc:
+            result.update(ok=False, code=exc.code, detail=str(exc))
+        else:
+            result.update(ok=True, code="ok", detail="Granted.")
+        scopes.append(result)
+
+    missing_required = [s for s in scopes if s["required"] and not s["ok"]]
+    missing_optional = [s for s in scopes if not s["required"] and not s["ok"]]
+
+    if missing_required:
+        status = "MISSING_SCOPES"
+        message = (
+            "Connected, but the token cannot do what the sync needs: "
+            + ", ".join(s["scope"] for s in missing_required)
+            + ". Regenerate the token with those permissions ticked."
+        )
+        ok = False
+    elif missing_optional:
+        status = "PARTIAL"
+        message = (
+            "Connected. The sync will work. Not granted: "
+            + ", ".join(s["scope"] for s in missing_optional)
+            + "."
+        )
+        ok = True
+    else:
+        status = "OK"
+        message = "Connected. Every scope the integration uses is granted."
+        ok = True
+
+    if identity_note:
+        message = f"{message} {identity_note}"
+
+    return {
+        "ok": ok, "status": status, "code": "ok" if ok else "scope",
+        "message": message, "latency_ms": elapsed_ms(),
+        "identity": identity, "scopes": scopes,
+    }
 
 
 # --------------------------------------------------------------------------
@@ -387,9 +700,7 @@ def run_sync(integration, *, since_days=90):
     if card_error:
         problems.append(f"cards: {card_error}")
     if cards_truncated:
-        problems.append(
-            f"the card list hit the {MAX_PAGES}-page limit, so some cards were not read"
-        )
+        problems.append(f"cards: {cards_truncated}")
 
     summary, error = sync_transactions(integration, since_days=since_days)
     summary["cards"] = card_count
@@ -401,9 +712,7 @@ def run_sync(integration, *, since_days=90):
         problems.append(f"charges: {error}")
     if summary.get("truncated"):
         problems.append(
-            f"the charge list hit the {MAX_PAGES}-page limit "
-            f"({MAX_PAGES * PAGE_SIZE} charges), so older charges in the window "
-            "were not read — narrow --days or raise the limit"
+            f"charges: {summary['truncated']} — narrow --days or raise the limit"
         )
 
     counts = (

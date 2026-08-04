@@ -6,11 +6,13 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Building,
+  Check,
   Eye,
   EyeOff,
   ExternalLink,
   KeyRound,
   Layers,
+  Loader2,
   Lock,
   MapPin,
   Network,
@@ -1827,6 +1829,96 @@ interface IntegrationRow {
   config_only?: boolean;
 }
 
+interface ScopeResult {
+  scope: string;
+  label: string;
+  required: boolean;
+  ok: boolean;
+  code: string;
+  detail: string;
+}
+
+interface ConnectionTest {
+  ok: boolean;
+  status: "OK" | "PARTIAL" | "MISSING_SCOPES" | "AUTH_FAILED" | "UNREACHABLE" | "NOT_CONFIGURED";
+  code: string;
+  message: string;
+  latency_ms: number;
+  identity: { name: string; email: string } | null;
+  scopes: ScopeResult[];
+}
+
+/**
+ * The per-scope checklist.
+ *
+ * A scope is refused at token-creation time, so "not granted" is not
+ * something the app can fix — the panel has to say that plainly, or people
+ * will look for a setting that does not exist.
+ */
+function ConnectionTestPanel({ result }: { result: ConnectionTest }) {
+  const tone =
+    result.status === "OK"
+      ? "border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30"
+      : result.ok
+        ? "border-amber-300 bg-amber-50 dark:bg-amber-950/30"
+        : "border-red-300 bg-red-50 dark:bg-red-950/30";
+
+  return (
+    <div className={`space-y-3 rounded-md border p-3 ${tone}`}>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        {result.ok ? (
+          <ShieldCheck className="h-4 w-4 text-emerald-600" />
+        ) : (
+          <ShieldAlert className="h-4 w-4 text-red-600" />
+        )}
+        <span className="font-medium">{result.message}</span>
+        <span className="text-xs text-muted-foreground">{result.latency_ms} ms</span>
+      </div>
+
+      {result.identity && (
+        <p className="text-xs text-muted-foreground">
+          Token belongs to {result.identity.name || "an unnamed user"}
+          {result.identity.email ? ` (${result.identity.email})` : ""}
+        </p>
+      )}
+
+      {result.scopes.length > 0 && (
+        <ul className="space-y-1">
+          {result.scopes.map((scope) => (
+            <li key={scope.scope} className="flex items-start gap-2 text-xs">
+              {scope.ok ? (
+                <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />
+              ) : (
+                <X
+                  className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${
+                    scope.required ? "text-red-600" : "text-amber-600"
+                  }`}
+                />
+              )}
+              <span className="min-w-0">
+                <span className="font-mono">{scope.scope}</span>
+                <span className="text-muted-foreground"> — {scope.label}</span>
+                {scope.required && (
+                  <span className="ml-1 text-muted-foreground">(required)</span>
+                )}
+                {!scope.ok && scope.code === "scope" && (
+                  <span className="block text-muted-foreground">
+                    Not granted. Scopes are chosen when the token is created and
+                    cannot be added later — regenerate the token with this one ticked.
+                  </span>
+                )}
+                {!scope.ok && scope.code !== "scope" && (
+                  <span className="block text-muted-foreground">{scope.detail}</span>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
 /** What the expiry date means right now, or null when none is set. */
 function expiryNotice(row: IntegrationRow) {
   const days = row.key_expires_in_days;
@@ -1847,6 +1939,8 @@ function IntegrationsTab({ role }: { role?: string }) {
     Record<string, { api_key: string; base_url: string; key_expires_at: string }>
   >({});
   const [busy, setBusy] = useState<string | null>(null);
+  const [testing, setTesting] = useState<string | null>(null);
+  const [tests, setTests] = useState<Record<string, ConnectionTest>>({});
 
   const load = async () => {
     try {
@@ -1889,6 +1983,30 @@ function IntegrationsTab({ role }: { role?: string }) {
       toast.error(detail || "Could not save the integration");
     } finally {
       setBusy(null);
+    }
+  };
+
+  /**
+   * Check a token without saving it first.
+   *
+   * The typed-but-unsaved key is sent deliberately: otherwise the only way to
+   * find out whether a token works is to commit it and run a full sync.
+   */
+  const testConnection = async (row: IntegrationRow, draftKey: string, draftUrl: string) => {
+    setTesting(row.provider);
+    try {
+      const res = await api.post<ConnectionTest>("/integrations/brex/test/", {
+        ...(draftKey ? { api_key: draftKey } : {}),
+        ...(draftUrl ? { base_url: draftUrl } : {}),
+      });
+      setTests((t) => ({ ...t, [row.provider]: res.data }));
+      if (res.data.status === "OK") toast.success(res.data.message);
+      else if (res.data.ok) toast.warning(res.data.message);
+      else toast.error(res.data.message);
+    } catch {
+      toast.error("Could not run the connection test");
+    } finally {
+      setTesting(null);
     }
   };
 
@@ -2049,8 +2167,18 @@ function IntegrationsTab({ role }: { role?: string }) {
                 )}
               </div>
 
+              {tests[row.provider] && <ConnectionTestPanel result={tests[row.provider]} />}
+
               {row.last_message && (
-                <p className={`text-xs ${row.last_status === "ERROR" ? "text-red-600" : "text-muted-foreground"}`}>
+                <p
+                  className={`text-xs ${
+                    row.last_status === "ERROR"
+                      ? "text-red-600"
+                      : row.last_status === "PARTIAL"
+                        ? "text-amber-700"
+                        : "text-muted-foreground"
+                  }`}
+                >
                   {row.last_sync_at ? `${new Date(row.last_sync_at).toLocaleString()} — ` : ""}
                   {row.last_message}
                 </p>
@@ -2078,6 +2206,27 @@ function IntegrationsTab({ role }: { role?: string }) {
                 >
                   {row.is_enabled ? "Disable" : "Enable"}
                 </Button>
+                {/* Brex can prove a token is live in about a second, so the
+                    cheap check goes before the expensive one. Enabled with an
+                    unsaved key in the box, which is the point. */}
+                {row.provider === "BREX" && (
+                  <Button
+                    variant="outline"
+                    disabled={
+                      testing === row.provider || (!row.has_api_key && !draft.api_key)
+                    }
+                    onClick={() =>
+                      void testConnection(row, draft.api_key, draft.base_url)
+                    }
+                  >
+                    {testing === row.provider ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <ShieldCheck className="mr-2 h-4 w-4" />
+                    )}
+                    Test connection
+                  </Button>
+                )}
                 {/* Config-only providers have nothing to run — the endpoint
                     would 400, and offering the button implies a sync exists. */}
                 {!row.config_only && (

@@ -258,6 +258,60 @@ class IntegrationsView(AuditLogMixin, APIView):
         return Response(self._serialize(integration, provider, spec))
 
 
+class BrexConnectionTestView(AuditLogMixin, APIView):
+    """Prove a Brex token is live and report which scopes it was granted.
+
+    Separate from `IntegrationTestView`, which runs a full sync. This only
+    reads one record per endpoint, so it answers "is this token any good?"
+    in about a second instead of pulling ninety days of charges.
+
+    A key may be supplied in the body to test it *before* saving — otherwise
+    there is no way to check a token without first committing it. A key sent
+    this way is used in memory and never written.
+    """
+
+    permission_classes = [permissions.IsAuthenticated, IsSuperadmin]
+
+    def post(self, request):
+        from core import brex
+
+        # get_or_create, matching IntegrationsView.put, so that using a
+        # credential always has something to hang an audit row on.
+        integration, _ = Integration.objects.get_or_create(provider=brex.PROVIDER)
+
+        candidate = str(request.data.get('api_key') or '').strip()
+        base_url = str(request.data.get('base_url') or '').strip()
+
+        if candidate or base_url:
+            # A throwaway copy, so an unsaved key cannot reach the database.
+            probe = Integration(
+                provider=brex.PROVIDER,
+                base_url=base_url or integration.base_url,
+                encrypted_api_key=integration.encrypted_api_key,
+            )
+            if candidate:
+                probe.set_api_key(candidate)
+        else:
+            probe = integration
+
+        result = brex.test_connection(probe)
+
+        self.log_action('TEST', integration, {
+            'provider': brex.PROVIDER,
+            'status': result['status'],
+            'latency_ms': result['latency_ms'],
+            # Which key was tested, never the key itself.
+            'key_fingerprint': probe.key_fingerprint,
+            'unsaved_key': bool(candidate),
+            'granted_scopes': [s['scope'] for s in result['scopes'] if s['ok']],
+            'missing_scopes': [s['scope'] for s in result['scopes'] if not s['ok']],
+        })
+
+        # The test itself succeeded even when the answer is "this token is no
+        # good", so the HTTP status stays 200 and the payload carries the verdict.
+        return Response(result)
+
+
 class IntegrationTestView(APIView):
     """Run an integration once, on demand, and report what happened."""
 

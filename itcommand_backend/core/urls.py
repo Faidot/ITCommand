@@ -17,7 +17,7 @@ from .views import (
     IncomeSourceViewSet, CostOverviewView, RecurringIncomeViewSet,
     PettyCashTransactionViewSet, DirectPaymentViewSet, RecurringBillViewSet, BillPaymentViewSet,
     BillViewSet,
-    FinanceDashboardView, SettingsView, ListOfValuesView, ListOfValuesItemView, IntegrationsView, IntegrationTestView, AuditLogViewSet, LocationViewSet,
+    FinanceDashboardView, SettingsView, ListOfValuesView, ListOfValuesItemView, IntegrationsView, IntegrationTestView, BrexConnectionTestView, AuditLogViewSet, LocationViewSet,
     CalendarFeedView, MyCalendarFeedView,
     NetworkIntegrationViewSet, DiscoveredHostViewSet, NetworkScanViewSet,
     RunNetworkScanView, DiscoveryOptionsView,
@@ -143,6 +143,7 @@ urlpatterns = [
     path('lov/values/<int:pk>/', ListOfValuesItemView.as_view(), name='list_of_values_item'),
     path('integrations/', IntegrationsView.as_view(), name='integrations'),
     path('integrations/test/', IntegrationTestView.as_view(), name='integration_test'),
+    path('integrations/brex/test/', BrexConnectionTestView.as_view(), name='brex_connection_test'),
     path('calendar/me/', MyCalendarFeedView.as_view(), name='my_calendar_feed'),
     path('calendar/<str:token>.ics', CalendarFeedView.as_view(), name='calendar_feed'),
     # Helpdesk

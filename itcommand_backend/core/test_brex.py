@@ -1,9 +1,11 @@
+import urllib.error
 from datetime import date, timedelta
 from decimal import Decimal
 from io import StringIO
 from unittest import mock
 
 from django.core.management import call_command
+from django.core.management.base import CommandError
 from django.test import TestCase
 from django.urls import reverse
 from django.utils import timezone
@@ -12,6 +14,7 @@ from rest_framework.test import APIClient
 
 from core import brex
 from core.models import (
+    AppSettings,
     AuditLog,
     Integration,
     PaymentCard,
@@ -121,7 +124,7 @@ class SyncTests(TestCase):
         self.subscription = service_at("Anthropic", "Claude Pro")
         self.today = timezone.localdate()
 
-    def fake_pages(self, cards, transactions, *, truncated=False):
+    def fake_pages(self, cards, transactions, *, truncated=""):
         def _paged(_integration, path, params=None):
             return (cards if "cards" in path else transactions), "", truncated
         return mock.patch("core.brex._paged", side_effect=_paged)
@@ -211,7 +214,7 @@ class SyncTests(TestCase):
     def test_an_auth_failure_is_explained_and_recorded(self):
         with mock.patch(
             "core.brex._paged",
-            return_value=([], "Brex rejected the token (401). Generate a new one and paste it again.", False),
+            return_value=([], "Brex rejected the token (401). Generate a new one and paste it again.", ""),
         ):
             summary, error = brex.run_sync(self.integration)
         self.assertIn("401", error)
@@ -280,7 +283,28 @@ class PaginationTests(TestCase):
 
         self.assertEqual(len(items), brex.MAX_PAGES)
         self.assertEqual(error, "", "running out of budget is not a request error")
-        self.assertTrue(truncated, "more data existed at Brex than was read")
+        self.assertIn("page limit", truncated, "the reason has to reach the operator")
+
+    def test_running_out_of_wall_clock_stops_the_walk(self):
+        """Retries make this reachable: 20 pages riding out a rate limit."""
+        endless = [
+            {"items": [{"id": str(n)}], "next_cursor": f"c{n}"}
+            for n in range(brex.MAX_PAGES)
+        ]
+        with self.pages(*endless):
+            items, error, truncated = brex._paged(
+                self.integration, "/v2/cards", budget_seconds=-1
+            )
+
+        self.assertEqual(items, [], "the budget is checked before each page")
+        self.assertEqual(error, "")
+        self.assertIn("budget", truncated)
+
+    def test_a_completed_walk_reports_no_truncation(self):
+        with self.pages({"items": [{"id": "a"}]}):
+            _items, error, truncated = brex._paged(self.integration, "/v2/cards")
+        self.assertEqual(error, "")
+        self.assertEqual(truncated, "")
 
     def test_a_failure_mid_walk_returns_what_it_had_and_the_error(self):
         with mock.patch(
@@ -317,8 +341,8 @@ class PartialSyncTests(TestCase):
         def _paged(_integration, path, params=None):
             # Only the charge walk runs out of budget.
             if "cards" in path:
-                return card, "", False
-            return charge, "", True
+                return card, "", ""
+            return charge, "", "the 20-page limit was reached"
 
         with mock.patch("core.brex._paged", side_effect=_paged):
             summary, error = brex.run_sync(self.integration)
@@ -341,8 +365,8 @@ class PartialSyncTests(TestCase):
 
         def _paged(_integration, path, params=None):
             if "cards" in path:
-                return card, "", False
-            return charge, "Brex rejected the token (401).", False
+                return card, "", ""
+            return charge, "Brex rejected the token (401).", ""
 
         with mock.patch("core.brex._paged", side_effect=_paged):
             brex.run_sync(self.integration)
@@ -355,7 +379,7 @@ class PartialSyncTests(TestCase):
 
     def test_a_clean_run_is_still_reported_as_ok(self):
         def _paged(_integration, path, params=None):
-            return [], "", False
+            return [], "", ""
 
         with mock.patch("core.brex._paged", side_effect=_paged):
             brex.run_sync(self.integration)
@@ -537,6 +561,391 @@ class IntegrationAuditTests(TestCase):
         )
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("YYYY-MM-DD", response.data["detail"])
+
+
+def http_error(code, *, headers=None, reason="Boom"):
+    """A urllib HTTPError as `urlopen` would raise it."""
+    return urllib.error.HTTPError(
+        "https://platform.brexapis.com/v2/cards", code, reason, headers or {}, None
+    )
+
+
+class TypedErrorTests(TestCase):
+    """Each failure mode has to be distinguishable, because each has its own fix."""
+
+    def setUp(self):
+        self.integration = Integration.objects.create(provider="BREX", is_enabled=True)
+        self.integration.set_api_key("test-token")
+        self.integration.save()
+
+    def raising(self, exc):
+        return mock.patch("core.brex.urllib.request.urlopen", side_effect=exc)
+
+    def test_401_is_an_auth_error_and_is_not_retried(self):
+        with self.raising(http_error(401)) as urlopen:
+            with self.assertRaises(brex.BrexAuthError) as caught:
+                brex._request(self.integration, "/v2/cards", sleep=lambda _: None)
+        self.assertEqual(urlopen.call_count, 1, "a bad token will not fix itself")
+        self.assertIn("401", str(caught.exception))
+        self.assertFalse(caught.exception.retryable)
+
+    def test_403_says_the_scope_must_be_granted_at_token_creation(self):
+        with self.raising(http_error(403)):
+            with self.assertRaises(brex.BrexScopeError) as caught:
+                brex._request(self.integration, "/v2/cards", sleep=lambda _: None)
+        message = str(caught.exception)
+        self.assertIn("regenerate the token", message.lower())
+        self.assertIn("scope", message.lower())
+
+    def test_429_is_retried_and_then_reported(self):
+        slept = []
+        with self.raising(http_error(429)) as urlopen:
+            with self.assertRaises(brex.BrexRateLimited):
+                brex._request(self.integration, "/v2/cards", sleep=slept.append)
+        self.assertEqual(urlopen.call_count, brex.MAX_ATTEMPTS)
+        self.assertEqual(len(slept), brex.MAX_ATTEMPTS - 1)
+        self.assertEqual(slept, [1.0, 2.0, 4.0], "backoff should double")
+
+    def test_a_retry_after_header_wins_over_the_computed_backoff(self):
+        slept = []
+        with self.raising(http_error(429, headers={"Retry-After": "7"})):
+            with self.assertRaises(brex.BrexRateLimited):
+                brex._request(self.integration, "/v2/cards", sleep=slept.append)
+        self.assertEqual(slept, [7.0, 7.0, 7.0])
+
+    def test_an_absurd_retry_after_is_capped(self):
+        slept = []
+        with self.raising(http_error(429, headers={"Retry-After": "99999"})):
+            with self.assertRaises(brex.BrexRateLimited):
+                brex._request(self.integration, "/v2/cards", sleep=slept.append)
+        self.assertTrue(all(s == brex.MAX_RETRY_AFTER_SECONDS for s in slept))
+
+    def test_a_retry_after_http_date_is_understood(self):
+        when = timezone.now() + timedelta(seconds=20)
+        header = when.strftime("%a, %d %b %Y %H:%M:%S GMT")
+        seconds = brex._retry_after_seconds({"Retry-After": header})
+        self.assertIsNotNone(seconds)
+        self.assertGreater(seconds, 10)
+        self.assertLess(seconds, 30)
+
+    def test_a_retry_after_date_without_a_zone_is_read_as_utc(self):
+        """The 'GMT' form parses as aware, so this is the branch that was untested."""
+        when = timezone.now() + timedelta(seconds=20)
+        header = when.strftime("%a, %d %b %Y %H:%M:%S -0000")
+        seconds = brex._retry_after_seconds({"Retry-After": header})
+        self.assertIsNotNone(seconds)
+        self.assertGreater(seconds, 10)
+        self.assertLess(seconds, 30)
+
+    def test_a_past_or_malformed_retry_after_never_goes_negative(self):
+        past = (timezone.now() - timedelta(hours=1)).strftime("%a, %d %b %Y %H:%M:%S GMT")
+        self.assertEqual(brex._retry_after_seconds({"Retry-After": past}), 0.0)
+        self.assertEqual(brex._retry_after_seconds({"Retry-After": "-5"}), 0.0)
+        self.assertIsNone(brex._retry_after_seconds({"Retry-After": "soon please"}))
+        self.assertIsNone(brex._retry_after_seconds({}))
+        self.assertIsNone(brex._retry_after_seconds(None))
+
+    def test_5xx_is_retried_as_a_server_error(self):
+        with self.raising(http_error(503)) as urlopen:
+            with self.assertRaises(brex.BrexServerError):
+                brex._request(self.integration, "/v2/cards", sleep=lambda _: None)
+        self.assertEqual(urlopen.call_count, brex.MAX_ATTEMPTS)
+
+    def test_a_network_failure_is_retried_as_unavailable(self):
+        with self.raising(urllib.error.URLError("no route to host")):
+            with self.assertRaises(brex.BrexUnavailable) as caught:
+                brex._request(self.integration, "/v2/cards", sleep=lambda _: None)
+        self.assertTrue(caught.exception.retryable)
+
+    def test_a_transient_failure_that_clears_succeeds(self):
+        """The whole point of retrying: one 429 must not fail the sync."""
+        body = mock.MagicMock()
+        body.read.return_value = b'{"items": []}'
+        ok = mock.MagicMock()
+        ok.__enter__.return_value = body
+
+        with mock.patch(
+            "core.brex.urllib.request.urlopen",
+            side_effect=[http_error(429), http_error(503), ok],
+        ):
+            payload = brex._request(
+                self.integration, "/v2/cards", sleep=lambda _: None
+            )
+        self.assertEqual(payload, {"items": []})
+
+    def test_non_json_is_a_bad_response_not_a_crash(self):
+        body = mock.MagicMock()
+        body.read.return_value = b"<html>login</html>"
+        ok = mock.MagicMock()
+        ok.__enter__.return_value = body
+        with mock.patch("core.brex.urllib.request.urlopen", return_value=ok):
+            with self.assertRaises(brex.BrexBadResponse):
+                brex._request(self.integration, "/v2/cards", sleep=lambda _: None)
+
+    def test_no_token_is_not_configured_rather_than_an_auth_failure(self):
+        self.integration.set_api_key("")
+        self.integration.save()
+        with self.assertRaises(brex.BrexNotConfigured):
+            brex._request(self.integration, "/v2/cards", sleep=lambda _: None)
+
+    def test_the_best_effort_wrapper_still_returns_a_string(self):
+        """`_get` keeps the contract the sync path is built on."""
+        with self.raising(http_error(401)):
+            payload, error = brex._get(
+                self.integration, "/v2/cards", sleep=lambda _: None
+            )
+        self.assertIsNone(payload)
+        self.assertIn("401", error)
+
+    def test_the_token_never_appears_in_any_error_text(self):
+        for exc in (http_error(401), http_error(403), http_error(500),
+                    urllib.error.URLError("boom")):
+            with self.raising(exc):
+                _payload, error = brex._get(
+                    self.integration, "/v2/cards", sleep=lambda _: None
+                )
+            self.assertNotIn("test-token", error)
+
+
+class AutomationRetryTests(TestCase):
+    """A failed sync must not be recorded as the day's work being done."""
+
+    def setUp(self):
+        self.integration = Integration.objects.create(provider="BREX", is_enabled=True)
+        self.integration.set_api_key("test-token")
+        self.integration.save()
+
+    def test_a_failed_sync_raises_so_the_runner_retries(self):
+        with mock.patch(
+            "core.brex._paged", return_value=([], "Brex is rate-limiting the request (429).", "")
+        ):
+            with self.assertRaises(CommandError) as caught:
+                call_command("sync_brex", stdout=StringIO(), stderr=StringIO())
+        self.assertIn("429", str(caught.exception))
+
+    def test_run_automation_does_not_mark_a_failed_sync_as_done(self):
+        """The bug this fixes: one 429 used to cost a whole day of syncing."""
+        with mock.patch(
+            "core.brex._paged", return_value=([], "Brex rejected the token (401).", "")
+        ):
+            with self.assertRaises(CommandError):
+                call_command(
+                    "run_automation", "--once",
+                    stdout=StringIO(), stderr=StringIO(),
+                )
+
+        marker = AppSettings.objects.filter(
+            key="automation.sync_brex.last_success"
+        ).first()
+        self.assertIsNone(
+            marker, "a failed run must not leave a success marker for today"
+        )
+
+    def test_a_successful_sync_does_mark_the_day_done(self):
+        """The control for the test above — without it, that one proves nothing."""
+        with mock.patch("core.brex._paged", return_value=([], "", "")):
+            try:
+                call_command(
+                    "run_automation", "--once", stdout=StringIO(), stderr=StringIO()
+                )
+            except CommandError:
+                # Other daily commands are out of scope here; only the Brex
+                # marker is being asserted.
+                pass
+
+        marker = AppSettings.objects.filter(
+            key="automation.sync_brex.last_success"
+        ).first()
+        self.assertIsNotNone(marker)
+        self.assertEqual(marker.value, timezone.localdate().isoformat())
+
+    def test_a_partial_sync_is_not_treated_as_a_failure(self):
+        """It stored real rows; raising would make the runner redo them hourly."""
+        def _paged(_integration, path, params=None):
+            return [], "", "" if "cards" in path else "the 20-page limit was reached"
+
+        with mock.patch("core.brex._paged", side_effect=_paged):
+            out = StringIO()
+            call_command("sync_brex", stdout=out, stderr=StringIO())
+
+        self.assertIn("Incomplete", out.getvalue())
+        self.integration.refresh_from_db()
+        self.assertEqual(self.integration.last_status, "PARTIAL")
+
+
+class ConnectionTestTests(TestCase):
+    """The scope checklist, and what each failure tells the operator to do."""
+
+    def setUp(self):
+        self.integration = Integration.objects.create(provider="BREX", is_enabled=True)
+        self.integration.set_api_key("test-token")
+        self.integration.save()
+
+    def responder(self, *, identity=None, fail=None):
+        """Patch `_request` to answer per path. `fail` maps path fragment -> exc."""
+        fail = fail or {}
+
+        def _request(_integration, path, params=None, **kwargs):
+            for fragment, exc in fail.items():
+                if fragment in path:
+                    raise exc
+            if path.endswith("/users/me"):
+                return identity if identity is not None else {
+                    "first_name": "Sam", "last_name": "Lee", "email": "sam@example.invalid",
+                }
+            return {"items": []}
+
+        return mock.patch("core.brex._request", side_effect=_request)
+
+    def test_a_healthy_token_reports_every_scope_granted(self):
+        with self.responder():
+            result = brex.test_connection(self.integration)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["status"], "OK")
+        self.assertEqual(len(result["scopes"]), len(brex.SCOPE_PROBES))
+        self.assertTrue(all(s["ok"] for s in result["scopes"]))
+        self.assertEqual(result["identity"]["email"], "sam@example.invalid")
+        self.assertIsInstance(result["latency_ms"], int)
+
+    def test_a_bad_token_fails_fast_without_probing_every_scope(self):
+        with self.responder(fail={"/v2/": brex.BrexAuthError("401 rejected")}) as fake:
+            result = brex.test_connection(self.integration)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "AUTH_FAILED")
+        self.assertEqual(result["scopes"], [])
+        self.assertEqual(
+            fake.call_count, 1, "eight copies of the same failure helps nobody"
+        )
+
+    def test_a_missing_required_scope_fails_and_names_it(self):
+        with self.responder(fail={"/v2/cards": brex.BrexScopeError("403 no scope")}):
+            result = brex.test_connection(self.integration)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["status"], "MISSING_SCOPES")
+        self.assertIn("cards.readonly", result["message"])
+        self.assertIn("regenerate", result["message"].lower())
+        cards = next(s for s in result["scopes"] if s["scope"] == "cards.readonly")
+        self.assertFalse(cards["ok"])
+        self.assertEqual(cards["code"], "scope")
+
+    def test_a_missing_optional_scope_is_partial_not_broken(self):
+        with self.responder(fail={"/v2/vendors": brex.BrexScopeError("403 no scope")}):
+            result = brex.test_connection(self.integration)
+
+        self.assertTrue(result["ok"], "the sync still works without vendors")
+        self.assertEqual(result["status"], "PARTIAL")
+        self.assertIn("vendors.readonly", result["message"])
+
+    def test_a_token_without_users_readonly_still_reports_its_scopes(self):
+        """/v2/users/me needs a scope the sync itself does not."""
+        with self.responder(fail={"/users": brex.BrexScopeError("403 no scope")}):
+            result = brex.test_connection(self.integration)
+
+        self.assertIsNone(result["identity"])
+        self.assertEqual(result["status"], "PARTIAL")
+        cards = next(s for s in result["scopes"] if s["scope"] == "cards.readonly")
+        self.assertTrue(cards["ok"], "cards must still be probed")
+
+    def test_an_unreachable_api_is_reported_as_such(self):
+        with self.responder(fail={"/v2/": brex.BrexUnavailable("no route")}):
+            result = brex.test_connection(self.integration)
+        self.assertEqual(result["status"], "UNREACHABLE")
+
+    def test_no_token_saved_is_its_own_verdict(self):
+        self.integration.set_api_key("")
+        self.integration.save()
+        result = brex.test_connection(self.integration)
+        self.assertEqual(result["status"], "NOT_CONFIGURED")
+
+    def test_probes_read_one_record_and_do_not_retry(self):
+        seen = []
+
+        def _request(_integration, path, params=None, **kwargs):
+            seen.append((path, params, kwargs.get("max_attempts")))
+            return {"items": []}
+
+        with mock.patch("core.brex._request", side_effect=_request):
+            brex.test_connection(self.integration)
+
+        probes = [row for row in seen if not row[0].endswith("/users/me")]
+        self.assertTrue(all(params == {"limit": 1} for _, params, _ in probes))
+        self.assertTrue(
+            all(attempts == 1 for _, _, attempts in seen),
+            "somebody is waiting; a retry storm would hold the request open",
+        )
+
+
+class ConnectionTestEndpointTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.superadmin = create_user("brex-test@example.com", "SUPERADMIN")
+        self.client.force_authenticate(self.superadmin)
+        self.url = reverse("brex_connection_test")
+
+    def healthy(self):
+        def _request(_integration, path, params=None, **kwargs):
+            if path.endswith("/users/me"):
+                return {"first_name": "Sam", "email": "sam@example.invalid"}
+            return {"items": []}
+        return mock.patch("core.brex._request", side_effect=_request)
+
+    def test_it_reports_the_scope_checklist(self):
+        Integration.objects.create(provider="BREX").set_api_key("k")
+        with self.healthy():
+            response = self.client.post(self.url, {}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data["scopes"]), len(brex.SCOPE_PROBES))
+
+    def test_an_unsaved_key_can_be_tested_without_being_stored(self):
+        with self.healthy():
+            response = self.client.post(
+                self.url, {"api_key": "bxt_unsaved_candidate"}, format="json"
+            )
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertTrue(response.data["ok"])
+        stored = Integration.objects.get(provider="BREX")
+        self.assertFalse(
+            stored.has_api_key, "testing a key must not save it"
+        )
+        self.assertNotIn("bxt_unsaved_candidate", str(response.data))
+
+    def test_the_test_is_audited_with_the_fingerprint_not_the_key(self):
+        with self.healthy():
+            self.client.post(self.url, {"api_key": "bxt_unsaved_candidate"}, format="json")
+
+        entry = AuditLog.objects.filter(model_name="Integration").last()
+        self.assertEqual(entry.action, "TEST")
+        self.assertEqual(
+            entry.changes["key_fingerprint"],
+            Integration.fingerprint_for("bxt_unsaved_candidate"),
+        )
+        self.assertTrue(entry.changes["unsaved_key"])
+        self.assertNotIn("bxt_unsaved_candidate", str(entry.changes))
+        self.assertIn("cards.readonly", entry.changes["granted_scopes"])
+
+    def test_a_bad_token_answers_200_with_a_failing_verdict(self):
+        """The request worked; the verdict is the payload, not the HTTP status."""
+        with mock.patch(
+            "core.brex._request", side_effect=brex.BrexAuthError("401 rejected")
+        ):
+            response = self.client.post(self.url, {"api_key": "wrong"}, format="json")
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertFalse(response.data["ok"])
+        self.assertEqual(response.data["status"], "AUTH_FAILED")
+
+    def test_a_non_superadmin_is_rejected(self):
+        client = APIClient()
+        client.force_authenticate(
+            create_user("nosy2@example.com", create_role("NOSY2", view=True).slug)
+        )
+        response = client.post(self.url, {"api_key": "x"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
 
 
 class ServicePayloadTests(TestCase):
