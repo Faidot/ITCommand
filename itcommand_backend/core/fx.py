@@ -26,14 +26,28 @@ def get_rate(currency, base=None, on_date=None):
     Uses the most recent rate on or before `on_date`, so a report for last
     month is not rewritten by today's rate.
     """
+    rate, _as_of = rate_with_date(currency, base=base, on_date=on_date)
+    return rate
+
+
+def rate_with_date(currency, base=None, on_date=None):
+    """`get_rate`, plus the `as_of` of the row it actually used.
+
+    Returns (rate, as_of), both None when there is no rate. `as_of` matters
+    to anything that stores a converted figure: the rate used may be days
+    older than the date asked for, and "converted at a six-day-old rate" is
+    something a reader should be able to see rather than infer.
+
+    `as_of` is None for a same-currency conversion — no row was consulted.
+    """
     from core.models import ExchangeRate
 
     base = (base or reporting_currency()).upper()
     currency = (currency or "").upper()
     if not currency:
-        return None
+        return None, None
     if currency == base:
-        return Decimal("1")
+        return Decimal("1"), None
 
     on_date = on_date or timezone.localdate()
 
@@ -42,11 +56,11 @@ def get_rate(currency, base=None, on_date=None):
             base_currency=base, currency=currency, as_of__lte=on_date
         )
         .order_by("-as_of")
-        .values_list("rate", flat=True)
+        .values_list("rate", "as_of")
         .first()
     )
-    if direct:
-        return Decimal(direct)
+    if direct and direct[0]:
+        return Decimal(direct[0]), direct[1]
 
     # A rate stored the other way round is just as good.
     inverse = (
@@ -54,11 +68,11 @@ def get_rate(currency, base=None, on_date=None):
             base_currency=currency, currency=base, as_of__lte=on_date
         )
         .order_by("-as_of")
-        .values_list("rate", flat=True)
+        .values_list("rate", "as_of")
         .first()
     )
-    if inverse and Decimal(inverse) > 0:
-        return Decimal("1") / Decimal(inverse)
+    if inverse and inverse[0] and Decimal(inverse[0]) > 0:
+        return Decimal("1") / Decimal(inverse[0]), inverse[1]
 
     # Cross rate via a shared base (e.g. EUR->USD and PKR->USD gives EUR->PKR).
     shared = (
@@ -73,7 +87,7 @@ def get_rate(currency, base=None, on_date=None):
                 base_currency=shared, currency=currency, as_of__lte=on_date
             )
             .order_by("-as_of")
-            .values_list("rate", flat=True)
+            .values_list("rate", "as_of")
             .first()
         )
         base_to_shared = (
@@ -81,13 +95,18 @@ def get_rate(currency, base=None, on_date=None):
                 base_currency=shared, currency=base, as_of__lte=on_date
             )
             .order_by("-as_of")
-            .values_list("rate", flat=True)
+            .values_list("rate", "as_of")
             .first()
         )
-        if to_shared and base_to_shared and Decimal(base_to_shared) > 0:
-            return Decimal(to_shared) / Decimal(base_to_shared)
+        if to_shared and base_to_shared and to_shared[0] and Decimal(base_to_shared[0]) > 0:
+            # Two rows go into a cross rate. The older one bounds how current
+            # the result is, so that is the date worth recording.
+            return (
+                Decimal(to_shared[0]) / Decimal(base_to_shared[0]),
+                min(to_shared[1], base_to_shared[1]),
+            )
 
-    return None
+    return None, None
 
 
 def convert(amount, from_currency, to_currency=None, on_date=None):

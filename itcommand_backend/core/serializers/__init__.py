@@ -9,6 +9,7 @@ from .onboarding import *
 from .seating import *
 from .vendors import *
 from .estate import *
+from .payments import *
 from .procurement import *
 from .network import *
 from .kb import *

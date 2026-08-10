@@ -6,11 +6,13 @@ import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import {
   Building,
+  Check,
   Eye,
   EyeOff,
   ExternalLink,
   KeyRound,
   Layers,
+  Loader2,
   Lock,
   MapPin,
   Network,
@@ -1812,19 +1814,138 @@ interface IntegrationRow {
   is_enabled: boolean;
   base_url: string;
   has_api_key: boolean;
+  /** Short SHA-256 prefix — identifies which key is installed, is not part of it. */
+  key_fingerprint: string;
+  key_set_at: string | null;
+  key_expires_at: string | null;
+  key_expires_in_days: number | null;
+  expiry_warning_days: number;
+  credential_state: "MISSING" | "OK" | "UNREADABLE";
   last_status: string;
   last_message: string;
   last_sync_at: string | null;
+  /** The last failure, kept even after a later run succeeds. */
+  last_error: string;
+  last_error_at: string | null;
+  /** Set while a run is waiting for the automation service to pick it up. */
+  sync_requested_at: string;
   /** The credential is stored for a feature that does not exist yet, so the UI
    *  must not imply a live sync. */
   config_only?: boolean;
 }
 
+interface ScopeResult {
+  scope: string;
+  label: string;
+  required: boolean;
+  ok: boolean;
+  code: string;
+  detail: string;
+}
+
+interface ConnectionTest {
+  ok: boolean;
+  status: "OK" | "PARTIAL" | "MISSING_SCOPES" | "AUTH_FAILED" | "UNREACHABLE" | "NOT_CONFIGURED";
+  code: string;
+  message: string;
+  latency_ms: number;
+  identity: { name: string; email: string } | null;
+  scopes: ScopeResult[];
+}
+
+/**
+ * The per-scope checklist.
+ *
+ * A scope is refused at token-creation time, so "not granted" is not
+ * something the app can fix — the panel has to say that plainly, or people
+ * will look for a setting that does not exist.
+ */
+function ConnectionTestPanel({ result }: { result: ConnectionTest }) {
+  const tone =
+    result.status === "OK"
+      ? "border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30"
+      : result.ok
+        ? "border-amber-300 bg-amber-50 dark:bg-amber-950/30"
+        : "border-red-300 bg-red-50 dark:bg-red-950/30";
+
+  return (
+    <div className={`space-y-3 rounded-md border p-3 ${tone}`}>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        {result.ok ? (
+          <ShieldCheck className="h-4 w-4 text-emerald-600" />
+        ) : (
+          <ShieldAlert className="h-4 w-4 text-red-600" />
+        )}
+        <span className="font-medium">{result.message}</span>
+        <span className="text-xs text-muted-foreground">{result.latency_ms} ms</span>
+      </div>
+
+      {result.identity && (
+        <p className="text-xs text-muted-foreground">
+          Token belongs to {result.identity.name || "an unnamed user"}
+          {result.identity.email ? ` (${result.identity.email})` : ""}
+        </p>
+      )}
+
+      {result.scopes.length > 0 && (
+        <ul className="space-y-1">
+          {result.scopes.map((scope) => (
+            <li key={scope.scope} className="flex items-start gap-2 text-xs">
+              {scope.ok ? (
+                <Check className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emerald-600" />
+              ) : (
+                <X
+                  className={`mt-0.5 h-3.5 w-3.5 shrink-0 ${
+                    scope.required ? "text-red-600" : "text-amber-600"
+                  }`}
+                />
+              )}
+              <span className="min-w-0">
+                <span className="font-mono">{scope.scope}</span>
+                <span className="text-muted-foreground"> — {scope.label}</span>
+                {scope.required && (
+                  <span className="ml-1 text-muted-foreground">(required)</span>
+                )}
+                {!scope.ok && scope.code === "scope" && (
+                  <span className="block text-muted-foreground">
+                    Not granted. Scopes are chosen when the token is created and
+                    cannot be added later — regenerate the token with this one ticked.
+                  </span>
+                )}
+                {!scope.ok && scope.code !== "scope" && (
+                  <span className="block text-muted-foreground">{scope.detail}</span>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** What the expiry date means right now, or null when none is set. */
+function expiryNotice(row: IntegrationRow) {
+  const days = row.key_expires_in_days;
+  if (days === null || days === undefined) return null;
+  if (days < 0) {
+    return { tone: "red" as const, text: `Key expired ${Math.abs(days)} day${Math.abs(days) === 1 ? "" : "s"} ago` };
+  }
+  if (days <= row.expiry_warning_days) {
+    return { tone: "amber" as const, text: `Key expires in ${days} day${days === 1 ? "" : "s"}` };
+  }
+  return { tone: "muted" as const, text: `Key expires in ${days} days` };
+}
+
 function IntegrationsTab({ role }: { role?: string }) {
   const [rows, setRows] = useState<IntegrationRow[]>([]);
   const [loading, setLoading] = useState(true);
-  const [drafts, setDrafts] = useState<Record<string, { api_key: string; base_url: string }>>({});
+  const [drafts, setDrafts] = useState<
+    Record<string, { api_key: string; base_url: string; key_expires_at: string }>
+  >({});
   const [busy, setBusy] = useState<string | null>(null);
+  const [testing, setTesting] = useState<string | null>(null);
+  const [tests, setTests] = useState<Record<string, ConnectionTest>>({});
 
   const load = async () => {
     try {
@@ -1838,6 +1959,16 @@ function IntegrationsTab({ role }: { role?: string }) {
   };
 
   useEffect(() => { void load(); }, []);
+
+  // A queued sync finishes on the automation service's clock, not ours, so
+  // the page has to look again rather than wait on a response that already
+  // came back. Stops as soon as nothing is pending.
+  const anyQueued = rows.some((row) => row.sync_requested_at);
+  useEffect(() => {
+    if (!anyQueued) return;
+    const timer = setInterval(() => void load(), 10000);
+    return () => clearInterval(timer);
+  }, [anyQueued]);
 
   if (role !== "SUPERADMIN") {
     return (
@@ -1857,7 +1988,10 @@ function IntegrationsTab({ role }: { role?: string }) {
     try {
       await api.put("/integrations/", { provider: row.provider, ...changes });
       toast.success(`${row.label} updated`);
-      setDrafts((d) => ({ ...d, [row.provider]: { api_key: "", base_url: "" } }));
+      setDrafts((d) => ({
+        ...d,
+        [row.provider]: { api_key: "", base_url: "", key_expires_at: "" },
+      }));
       await load();
     } catch (err) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -1867,12 +2001,50 @@ function IntegrationsTab({ role }: { role?: string }) {
     }
   };
 
+  /**
+   * Check a token without saving it first.
+   *
+   * The typed-but-unsaved key is sent deliberately: otherwise the only way to
+   * find out whether a token works is to commit it and run a full sync.
+   */
+  const testConnection = async (row: IntegrationRow, draftKey: string, draftUrl: string) => {
+    setTesting(row.provider);
+    try {
+      const res = await api.post<ConnectionTest>("/integrations/brex/test/", {
+        ...(draftKey ? { api_key: draftKey } : {}),
+        ...(draftUrl ? { base_url: draftUrl } : {}),
+      });
+      setTests((t) => ({ ...t, [row.provider]: res.data }));
+      if (res.data.status === "OK") toast.success(res.data.message);
+      else if (res.data.ok) toast.warning(res.data.message);
+      else toast.error(res.data.message);
+    } catch {
+      toast.error("Could not run the connection test");
+    } finally {
+      setTesting(null);
+    }
+  };
+
   const runNow = async (row: IntegrationRow) => {
     setBusy(row.provider);
     try {
       const res = await api.post("/integrations/test/", { provider: row.provider });
-      if (res.data?.ok) toast.success(res.data.output || "Completed");
-      else toast.error(res.data?.output || "The provider returned an error");
+      // A long sync is handed to the automation service rather than run in
+      // the request, so there is no result yet — say so and start watching.
+      if (res.data?.queued) {
+        toast.info(res.data.output || "Sync queued");
+        await load();
+        return;
+      }
+      // PARTIAL means rows were written but data is missing — a green toast
+      // would claim a clean run that did not happen.
+      if (res.data?.status === "PARTIAL") {
+        toast.warning(res.data.output || "Completed with missing data");
+      } else if (res.data?.ok) {
+        toast.success(res.data.output || "Completed");
+      } else {
+        toast.error(res.data?.output || "The provider returned an error");
+      }
       await load();
     } catch {
       toast.error("Could not run the integration");
@@ -1888,7 +2060,8 @@ function IntegrationsTab({ role }: { role?: string }) {
       <ExchangeRatesPanel />
 
       {rows.map((row) => {
-        const draft = drafts[row.provider] || { api_key: "", base_url: "" };
+        const draft = drafts[row.provider] || { api_key: "", base_url: "", key_expires_at: "" };
+        const expiry = expiryNotice(row);
         return (
           <Card key={row.provider}>
             <CardHeader>
@@ -1904,9 +2077,36 @@ function IntegrationsTab({ role }: { role?: string }) {
                     Stored for later — no sync yet
                   </Badge>
                 )}
+                {row.sync_requested_at && (
+                  <Badge variant="outline" className="border-blue-300 text-blue-700">
+                    <Loader2 className="mr-1 h-3 w-3 animate-spin" /> Sync queued
+                  </Badge>
+                )}
                 {row.last_status === "OK" && <Badge variant="outline">Last run OK</Badge>}
+                {row.last_status === "PARTIAL" && (
+                  <Badge variant="outline" className="border-amber-300 text-amber-700">
+                    Last run incomplete
+                  </Badge>
+                )}
                 {row.last_status === "ERROR" && (
                   <Badge variant="outline" className="border-red-300 text-red-700">Last run failed</Badge>
+                )}
+                {row.credential_state === "UNREADABLE" && (
+                  <Badge variant="outline" className="border-red-300 text-red-700">
+                    Key unreadable
+                  </Badge>
+                )}
+                {expiry && expiry.tone !== "muted" && (
+                  <Badge
+                    variant="outline"
+                    className={
+                      expiry.tone === "red"
+                        ? "border-red-300 text-red-700"
+                        : "border-amber-300 text-amber-700"
+                    }
+                  >
+                    {expiry.text}
+                  </Badge>
                 )}
               </CardTitle>
               <p className="text-sm text-muted-foreground">{row.description}</p>
@@ -1945,14 +2145,82 @@ function IntegrationsTab({ role }: { role?: string }) {
                     <p className="text-xs text-muted-foreground">
                       Stored encrypted and never shown again after saving.
                     </p>
+                    {row.credential_state === "UNREADABLE" && (
+                      <p className="text-xs text-red-600">
+                        A key is stored but cannot be decrypted —
+                        VAULT_ENCRYPTION_KEY has changed since it was saved.
+                        Paste the key again to re-encrypt it.
+                      </p>
+                    )}
+                    {row.has_api_key && (
+                      <p className="text-xs text-muted-foreground">
+                        {row.key_fingerprint ? (
+                          <>
+                            Fingerprint <span className="font-mono">{row.key_fingerprint}</span>
+                          </>
+                        ) : (
+                          "Fingerprint unknown — saved before fingerprinting; re-save to record one"
+                        )}
+                        {row.key_set_at
+                          ? ` · set ${new Date(row.key_set_at).toLocaleDateString()}`
+                          : ""}
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {row.needs_api_key && (
+                  <div className="space-y-1.5">
+                    <label className="text-sm font-medium">Key expires (optional)</label>
+                    <Input
+                      type="date"
+                      value={
+                        draft.key_expires_at ||
+                        (row.key_expires_at ? row.key_expires_at.slice(0, 10) : "")
+                      }
+                      onChange={(e) =>
+                        setDrafts((d) => ({
+                          ...d,
+                          [row.provider]: { ...draft, key_expires_at: e.target.value },
+                        }))
+                      }
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {expiry
+                        ? `${expiry.text}. Warns from ${row.expiry_warning_days} days out.`
+                        : `No provider here reports its own expiry, so enter it to be warned ${row.expiry_warning_days} days ahead.`}
+                    </p>
                   </div>
                 )}
               </div>
 
+              {tests[row.provider] && <ConnectionTestPanel result={tests[row.provider]} />}
+
               {row.last_message && (
-                <p className={`text-xs ${row.last_status === "ERROR" ? "text-red-600" : "text-muted-foreground"}`}>
+                <p
+                  className={`text-xs ${
+                    row.last_status === "ERROR"
+                      ? "text-red-600"
+                      : row.last_status === "PARTIAL"
+                        ? "text-amber-700"
+                        : "text-muted-foreground"
+                  }`}
+                >
                   {row.last_sync_at ? `${new Date(row.last_sync_at).toLocaleString()} — ` : ""}
                   {row.last_message}
+                </p>
+              )}
+
+              {/* Shown only when the current state is healthy — otherwise
+                  last_message already says it, and repeating it reads as two
+                  separate problems. */}
+              {row.last_error && row.last_status === "OK" && (
+                <p className="text-xs text-muted-foreground">
+                  Last failure
+                  {row.last_error_at
+                    ? ` on ${new Date(row.last_error_at).toLocaleString()}`
+                    : ""}
+                  : {row.last_error}
                 </p>
               )}
 
@@ -1963,6 +2231,9 @@ function IntegrationsTab({ role }: { role?: string }) {
                     void save(row, {
                       base_url: draft.base_url || row.base_url,
                       ...(draft.api_key ? { api_key: draft.api_key } : {}),
+                      ...(draft.key_expires_at
+                        ? { key_expires_at: draft.key_expires_at }
+                        : {}),
                     })
                   }
                 >
@@ -1975,6 +2246,27 @@ function IntegrationsTab({ role }: { role?: string }) {
                 >
                   {row.is_enabled ? "Disable" : "Enable"}
                 </Button>
+                {/* Brex can prove a token is live in about a second, so the
+                    cheap check goes before the expensive one. Enabled with an
+                    unsaved key in the box, which is the point. */}
+                {row.provider === "BREX" && (
+                  <Button
+                    variant="outline"
+                    disabled={
+                      testing === row.provider || (!row.has_api_key && !draft.api_key)
+                    }
+                    onClick={() =>
+                      void testConnection(row, draft.api_key, draft.base_url)
+                    }
+                  >
+                    {testing === row.provider ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <ShieldCheck className="mr-2 h-4 w-4" />
+                    )}
+                    Test connection
+                  </Button>
+                )}
                 {/* Config-only providers have nothing to run — the endpoint
                     would 400, and offering the button implies a sync exists. */}
                 {!row.config_only && (

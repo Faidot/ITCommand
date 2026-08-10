@@ -12,5 +12,6 @@ from .procurement import *
 from .network import *
 from .kb import *
 from .estate import *
+from .payments import *
 from .calendar import *
 from .discovery import *

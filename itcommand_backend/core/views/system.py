@@ -3,9 +3,11 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework_simplejwt.tokens import RefreshToken
+from django.conf import settings
 from django.contrib.auth import authenticate
 from django.db.models import Sum
 from django.utils import timezone
+from django.utils.dateparse import parse_date
 from datetime import date, timedelta
 import random
 import string
@@ -127,11 +129,16 @@ class FinanceDashboardView(APIView):
             'recent_expenses': recent_expenses,
         })
 
-class IntegrationsView(APIView):
+class IntegrationsView(AuditLogMixin, APIView):
     """Configure third-party integrations from Settings.
 
     API keys are write-only: a caller can set or clear one, but the stored
-    value is never returned — only whether a key is present.
+    value is never returned — only whether a key is present, its fingerprint
+    and when it was set.
+
+    Every change is audited. Installing a credential is a privileged act and
+    used to leave no trace of who did it; the audit row carries the key's
+    fingerprint so one key can be told from another without recording either.
     """
 
     permission_classes = [permissions.IsAuthenticated, IsSuperadmin]
@@ -152,10 +159,43 @@ class IntegrationsView(APIView):
             'is_enabled': bool(integration and integration.is_enabled),
             'base_url': (integration.base_url if integration else '') or spec.get('default_base_url', ''),
             'has_api_key': bool(integration and integration.has_api_key),
+            # A short SHA-256 prefix, not part of the key. Lets an operator
+            # confirm which credential is installed without revealing it.
+            'key_fingerprint': integration.key_fingerprint if integration else '',
+            'key_set_at': integration.key_set_at if integration else None,
+            'key_expires_at': integration.key_expires_at if integration else None,
+            'key_expires_in_days': integration.key_expires_in_days if integration else None,
+            'expiry_warning_days': Integration.EXPIRY_WARNING_DAYS,
+            # MISSING / OK / UNREADABLE — so a rotated VAULT_ENCRYPTION_KEY is
+            # reported as itself rather than as an absent credential.
+            'credential_state': (
+                integration.credential_state if integration
+                else Integration.CREDENTIAL_MISSING
+            ),
             'last_status': integration.last_status if integration else '',
             'last_message': integration.last_message if integration else '',
             'last_sync_at': integration.last_sync_at if integration else None,
+            # Kept when a later run succeeds, so "it works now but it has been
+            # flapping" is answerable rather than silently overwritten.
+            'last_error': integration.last_error if integration else '',
+            'last_error_at': integration.last_error_at if integration else None,
+            # Set while a run is waiting for the automation service to pick it
+            # up, so the UI can say "queued" instead of looking idle.
+            'sync_requested_at': self._pending.get(provider, ''),
         }
+
+    @property
+    def _pending(self):
+        """{provider: requested_at} for queued runs, fetched once per request."""
+        from core import automation_queue
+
+        if not hasattr(self, '_pending_cache'):
+            self._pending_cache = {
+                provider: automation_queue.pending(command)
+                for provider, command in IntegrationTestView.COMMANDS.items()
+                if command in IntegrationTestView.QUEUED_COMMANDS
+            }
+        return self._pending_cache
 
     def get(self, request):
         existing = {i.provider: i for i in Integration.objects.all()}
@@ -175,11 +215,33 @@ class IntegrationsView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        integration, _ = Integration.objects.get_or_create(provider=provider)
+        integration, created = Integration.objects.get_or_create(provider=provider)
+
+        # Captured before mutating, so the audit row can say what changed
+        # without ever holding the credential itself.
+        was_enabled = integration.is_enabled
+        was_base_url = integration.base_url
+        previous_fingerprint = integration.key_fingerprint
+        changes = {'provider': provider}
+
         if 'is_enabled' in request.data:
             integration.is_enabled = bool(request.data['is_enabled'])
         if 'base_url' in request.data:
             integration.base_url = (request.data.get('base_url') or '').strip()
+
+        if 'key_expires_at' in request.data:
+            raw_expiry = request.data.get('key_expires_at')
+            if raw_expiry in (None, ''):
+                integration.key_expires_at = None
+            else:
+                parsed = parse_date(str(raw_expiry))
+                if parsed is None:
+                    return Response(
+                        {'detail': 'key_expires_at must be a date in YYYY-MM-DD form.'},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                integration.key_expires_at = parsed
+
         if request.data.get('clear_api_key'):
             integration.set_api_key('')
         elif request.data.get('api_key'):
@@ -193,7 +255,82 @@ class IntegrationsView(APIView):
 
         integration.updated_by = request.user
         integration.save()
+
+        # Record the credential change first — it is the one people audit for.
+        if integration.key_fingerprint != previous_fingerprint:
+            if integration.has_api_key:
+                changes['credential'] = 'replaced' if previous_fingerprint else 'set'
+                changes['key_fingerprint'] = integration.key_fingerprint
+                if previous_fingerprint:
+                    changes['previous_key_fingerprint'] = previous_fingerprint
+            else:
+                changes['credential'] = 'cleared'
+                changes['previous_key_fingerprint'] = previous_fingerprint
+        if was_enabled != integration.is_enabled:
+            changes['is_enabled'] = {'from': was_enabled, 'to': integration.is_enabled}
+        if was_base_url != integration.base_url:
+            changes['base_url'] = {'from': was_base_url, 'to': integration.base_url}
+        if 'key_expires_at' in request.data:
+            changes['key_expires_at'] = (
+                integration.key_expires_at.isoformat() if integration.key_expires_at else None
+            )
+
+        self.log_action('CREATE' if created else 'UPDATE', integration, changes)
         return Response(self._serialize(integration, provider, spec))
+
+
+class BrexConnectionTestView(AuditLogMixin, APIView):
+    """Prove a Brex token is live and report which scopes it was granted.
+
+    Separate from `IntegrationTestView`, which runs a full sync. This only
+    reads one record per endpoint, so it answers "is this token any good?"
+    in about a second instead of pulling ninety days of charges.
+
+    A key may be supplied in the body to test it *before* saving — otherwise
+    there is no way to check a token without first committing it. A key sent
+    this way is used in memory and never written.
+    """
+
+    permission_classes = [permissions.IsAuthenticated, IsSuperadmin]
+
+    def post(self, request):
+        from core import brex
+
+        # get_or_create, matching IntegrationsView.put, so that using a
+        # credential always has something to hang an audit row on.
+        integration, _ = Integration.objects.get_or_create(provider=brex.PROVIDER)
+
+        candidate = str(request.data.get('api_key') or '').strip()
+        base_url = str(request.data.get('base_url') or '').strip()
+
+        if candidate or base_url:
+            # A throwaway copy, so an unsaved key cannot reach the database.
+            probe = Integration(
+                provider=brex.PROVIDER,
+                base_url=base_url or integration.base_url,
+                encrypted_api_key=integration.encrypted_api_key,
+            )
+            if candidate:
+                probe.set_api_key(candidate)
+        else:
+            probe = integration
+
+        result = brex.test_connection(probe)
+
+        self.log_action('TEST', integration, {
+            'provider': brex.PROVIDER,
+            'status': result['status'],
+            'latency_ms': result['latency_ms'],
+            # Which key was tested, never the key itself.
+            'key_fingerprint': probe.key_fingerprint,
+            'unsaved_key': bool(candidate),
+            'granted_scopes': [s['scope'] for s in result['scopes'] if s['ok']],
+            'missing_scopes': [s['scope'] for s in result['scopes'] if not s['ok']],
+        })
+
+        # The test itself succeeded even when the answer is "this token is no
+        # good", so the HTTP status stays 200 and the payload carries the verdict.
+        return Response(result)
 
 
 class IntegrationTestView(APIView):
@@ -202,6 +339,9 @@ class IntegrationTestView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsSuperadmin]
 
     COMMANDS = {'EXCHANGE_RATES': 'fetch_exchange_rates', 'BREX': 'sync_brex'}
+    #: Commands too slow to run inside a request. Everything else is a single
+    #: call and finishes well inside a normal response.
+    QUEUED_COMMANDS = {'sync_brex'}
 
     def post(self, request):
         from io import StringIO
@@ -234,18 +374,53 @@ class IntegrationTestView(APIView):
                 {'detail': f"Nothing to run for '{provider}'."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        # A full sync pages through months of data. Running it inside this
+        # request would hold a Gunicorn worker for minutes — with three
+        # workers, a couple of clicks takes most of the site down. Hand it to
+        # the automation runner and answer immediately.
+        if command in self.QUEUED_COMMANDS:
+            from core import automation_queue
+
+            requested = automation_queue.request_run(
+                command, requested_by=request.user.email
+            )
+            return Response({
+                'ok': True,
+                'queued': True,
+                'requested_at': requested,
+                'poll_seconds': settings.AUTOMATION_POLL_SECONDS,
+                'output': (
+                    'Sync queued. The automation service picks it up within '
+                    f'{settings.AUTOMATION_POLL_SECONDS} seconds; this page '
+                    'will update when it finishes.'
+                ),
+            })
+
         out, err = StringIO(), StringIO()
         try:
             call_command(command, stdout=out, stderr=err)
         except Exception as exc:  # a provider error must not 500 the page
             return Response(
-                {'ok': False, 'output': f'{type(exc).__name__}: {exc}'},
+                {
+                    'ok': False,
+                    'output': Integration.clean_message(f'{type(exc).__name__}: {exc}'),
+                },
                 status=status.HTTP_200_OK,
             )
         problem = err.getvalue().strip()
+        # A partial run wrote real rows and reported why it is incomplete, so
+        # it is neither a green tick nor a failure. Pass the status through and
+        # let the UI say so.
+        last_status = Integration.objects.filter(
+            provider=provider
+        ).values_list('last_status', flat=True).first() or ''
         return Response({
             'ok': not problem,
-            'output': problem or out.getvalue().strip() or 'Completed.',
+            'status': last_status,
+            'output': Integration.clean_message(
+                problem or out.getvalue().strip() or 'Completed.'
+            ),
         })
 
 

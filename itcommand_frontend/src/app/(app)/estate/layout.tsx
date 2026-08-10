@@ -16,7 +16,7 @@
 
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { Globe, KeyRound, LayoutDashboard, Plus, Server } from "lucide-react";
+import { CreditCard, Globe, KeyRound, LayoutDashboard, Plus, Server } from "lucide-react";
 
 import { can } from "@/lib/permissions";
 import { useAuthStore } from "@/store/authStore";
@@ -29,6 +29,7 @@ const TABS = [
   { href: "/estate/properties", label: "Properties", icon: Globe },
   { href: "/estate/accounts", label: "Accounts", icon: KeyRound },
   { href: "/estate/services", label: "Services", icon: Server },
+  { href: "/estate/payments", label: "Cards & charges", icon: CreditCard },
 ];
 
 function SubNav() {

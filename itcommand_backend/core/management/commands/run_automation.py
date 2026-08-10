@@ -13,6 +13,7 @@ from django.core.management import call_command, get_commands
 from django.core.management.base import BaseCommand, CommandError
 from django.utils import timezone
 
+from core import automation_queue
 from core.models.system import AppSettings
 
 
@@ -52,6 +53,16 @@ class Command(BaseCommand):
             local_now = timezone.localtime(now)
             failures = []
             interval_commands = set(settings.AUTOMATION_INTERVAL_COMMANDS)
+
+            # On-demand runs first. Somebody is watching the page waiting for
+            # one of these, and the schedule below can wait a cycle.
+            for command_name in automation_queue.pending_commands():
+                # Cleared before running, so a command that fails does not
+                # leave its request behind to be retried every cycle forever.
+                automation_queue.clear_request(command_name)
+                self.stdout.write(f"==> Running {command_name} (requested)")
+                if not self._run(command_name, announce=False):
+                    failures.append(command_name)
 
             for command_name in settings.AUTOMATION_DAILY_COMMANDS:
                 # An interval command may still be present in an existing
@@ -133,7 +144,7 @@ class Command(BaseCommand):
 
             time.sleep(poll_seconds)
 
-    def _run(self, command_name):
+    def _run(self, command_name, *, announce=True):
         # A command named in a deployment's .env that no longer exists is a
         # configuration leftover, not a failure to retry every cycle forever.
         # Phase 5 removed four of them; treating that as success means the
@@ -148,7 +159,8 @@ class Command(BaseCommand):
             )
             return True
 
-        self.stdout.write(f"==> Running {command_name}")
+        if announce:
+            self.stdout.write(f"==> Running {command_name}")
         try:
             call_command(command_name, stdout=self.stdout, stderr=self.stderr)
         except Exception as exc:
