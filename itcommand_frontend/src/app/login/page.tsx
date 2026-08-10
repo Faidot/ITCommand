@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
+import { landingRoute } from "@/lib/permissions";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -55,7 +56,9 @@ export default function LoginPage() {
       const { user, access, refresh } = response.data;
       setAuth(user, access, refresh);
       toast.success("Successfully logged in");
-      router.push("/dashboard");
+      // Not always /dashboard: that page needs the `dashboard` module, and a
+      // role without it landed on "Access Denied" every time it signed in.
+      router.push(landingRoute(user));
     } catch (error) {
       console.error(error);
       const err = error as { response?: { data?: { detail?: string } } };

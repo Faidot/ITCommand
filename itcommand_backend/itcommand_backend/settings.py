@@ -69,6 +69,9 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    # Last: it reads request.user, so it has to sit after authentication, and
+    # it only records what already happened.
+    'core.presence.LastSeenMiddleware',
 ]
 
 ROOT_URLCONF = 'itcommand_backend.urls'

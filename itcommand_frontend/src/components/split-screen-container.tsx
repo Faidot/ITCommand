@@ -4,8 +4,17 @@ import * as React from "react"
 import { useSplitScreenStore } from "@/store/splitScreenStore"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "./ui/select"
 import { X, Columns2 } from "lucide-react"
+import { useAuthStore } from "@/store/authStore"
+import { can, moduleForPath } from "@/lib/permissions"
 import { Button } from "./ui/button"
 
+/**
+ * Pages offerable in the right-hand pane.
+ *
+ * The module each belongs to is derived from its URL via `moduleForPath`,
+ * rather than tagged here, so this list cannot drift out of step with the
+ * route guard: if a page is gated, the same rule gates its split-screen entry.
+ */
 const SPLIT_PAGES = [
   { label: "Dashboard", url: "/dashboard", group: "Overview" },
   { label: "Users", url: "/users", group: "People" },
@@ -13,7 +22,11 @@ const SPLIT_PAGES = [
   { label: "Onboarding", url: "/onboarding", group: "People" },
   { label: "Asset Inventory", url: "/assets", group: "Assets" },
   { label: "Asset Notes", url: "/asset-notes", group: "Assets" },
-  { label: "Software Licenses", url: "/licenses", group: "Assets" },
+  // Digital Estate replaced Software Licenses in Phase 5. The old /licenses
+  // entry outlived the route it pointed at and offered a guaranteed 404.
+  { label: "Digital Estate", url: "/estate/dashboard", group: "Assets" },
+  { label: "Estate Services", url: "/estate/services", group: "Assets" },
+  { label: "Cards & Charges", url: "/estate/payments", group: "Assets" },
   { label: "Seating Plan", url: "/seating", group: "Assets" },
   { label: "Vendors", url: "/vendors", group: "Procurement" },
   { label: "Purchase Requests", url: "/procurement/requests", group: "Procurement" },
@@ -41,8 +54,18 @@ const SPLIT_PAGES = [
 
 export function SplitScreenContainer({ children }: { children: React.ReactNode }) {
   const { isSplit, rightPageUrl, setRightPage, toggleSplit } = useSplitScreenStore()
+  const { user } = useAuthStore()
   const [isBare, setIsBare] = React.useState(false)
   const [isMobile, setIsMobile] = React.useState(false)
+
+  // Only pages this role can actually open. The list was unfiltered, so a user
+  // with one module was offered thirty pages that would all refuse them.
+  const pages = React.useMemo(() => {
+    return SPLIT_PAGES.filter((page) => {
+      const mod = moduleForPath(page.url)
+      return !mod || can(user, mod, "view")
+    })
+  }, [user])
 
   React.useEffect(() => {
     if (typeof window !== "undefined") {
@@ -67,7 +90,18 @@ export function SplitScreenContainer({ children }: { children: React.ReactNode }
     return <div className="flex-1 w-full h-full overflow-auto">{children}</div>
   }
 
-  const selectedPage = SPLIT_PAGES.find(p => p.url === rightPageUrl)
+  // The store defaults the right pane to /dashboard, which this role may not
+  // be allowed to open — that would put "Access Denied" inside the pane the
+  // moment split screen is switched on. Fall back to the first page they can.
+  const activeUrl = pages.some(p => p.url === rightPageUrl)
+    ? rightPageUrl
+    : pages[0]?.url
+
+  if (!activeUrl) {
+    return <div className="flex-1 w-full h-full overflow-auto">{children}</div>
+  }
+
+  const selectedPage = pages.find(p => p.url === activeUrl)
 
   return (
     <div className="flex w-full h-[calc(100vh-8rem)] gap-4 relative animate-in fade-in zoom-in-95 duration-500">
@@ -84,12 +118,12 @@ export function SplitScreenContainer({ children }: { children: React.ReactNode }
             <div className="flex items-center justify-center size-7 rounded-lg bg-primary/10 text-primary shadow-inner">
               <Columns2 className="h-4 w-4" />
             </div>
-            <Select value={rightPageUrl} onValueChange={setRightPage}>
+            <Select value={activeUrl} onValueChange={setRightPage}>
               <SelectTrigger className="w-[200px] h-8 text-xs bg-background/50 border-border/50 hover:bg-background/80 transition-colors rounded-xl">
                 <SelectValue placeholder="Select page..." />
               </SelectTrigger>
               <SelectContent className="max-h-[400px] rounded-2xl border-border/50 backdrop-blur-2xl">
-                {SPLIT_PAGES.map(page => (
+                {pages.map(page => (
                   <SelectItem key={page.url} value={page.url} className="text-xs rounded-lg mx-1 focus:bg-primary/10">
                     <span className="text-muted-foreground mr-1">{page.group} /</span> {page.label}
                   </SelectItem>
@@ -110,8 +144,8 @@ export function SplitScreenContainer({ children }: { children: React.ReactNode }
         {/* Iframe content */}
         <div className="flex-1 relative bg-transparent overflow-hidden">
           <iframe 
-            key={rightPageUrl}
-            src={`${rightPageUrl}?layout=bare`} 
+            key={activeUrl}
+            src={`${activeUrl}?layout=bare`} 
             className="w-full h-full border-0 animate-in fade-in-0 duration-300"
             title={selectedPage?.label || "Split View"}
           />

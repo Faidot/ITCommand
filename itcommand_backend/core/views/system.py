@@ -4,6 +4,7 @@ from rest_framework.response import Response
 from rest_framework.decorators import action
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import authenticate
+from django.db import models
 from django.db.models import Sum
 from django.utils import timezone
 from datetime import date, timedelta
@@ -12,7 +13,7 @@ import string
 from core.models import *
 from core.serializers import *
 from core.encryption import decrypt_value
-from core.mixins import AuditLogMixin
+from core.mixins import AuditLogMixin, record_audit
 from core.permissions import IsSuperadmin, IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher, VaultAccessPermission, UserManagementPermission, HasModulePermission
 from rest_framework.pagination import PageNumberPagination
 
@@ -27,6 +28,18 @@ class LogoutView(APIView):
                 return Response({"detail": "Refresh token is required."}, status=status.HTTP_400_BAD_REQUEST)
             token = RefreshToken(refresh_token)
             token.blacklist()
+            # Logged after the token is actually revoked, so the row means the
+            # session ended rather than that somebody clicked the button.
+            record_audit(request, 'LOGOUT', obj=request.user, user=request.user)
+            request.user.mark_signed_out()
+            # The JWT is still valid on this request, so without this the
+            # presence middleware would stamp last_seen_at after the sign-out
+            # and show the user as still online.
+            #
+            # Set on the underlying Django request, not DRF's wrapper: the
+            # middleware sees the former, and DRF only proxies attribute
+            # *reads* down to it, not writes.
+            request._request.skip_presence = True
             return Response(status=status.HTTP_205_RESET_CONTENT)
         except Exception as e:
             return Response({"detail": str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -448,6 +461,58 @@ class LocationViewSet(AuditLogMixin, viewsets.ModelViewSet):
         if active is not None:
             qs = qs.filter(is_active=active.lower() == 'true')
         return qs
+
+
+class ActiveUsersView(APIView):
+    """Who has used the app recently, and who signed in or out today.
+
+    Presence here is "last seen", not a live connection. JWT sessions are
+    stateless — nothing is held open to observe — so the honest claim is
+    "active in the last N minutes", and the payload says so rather than
+    implying a socket that does not exist.
+
+    Superadmin only, matching the audit log this sits beside: who is at their
+    desk is exactly the kind of thing that should not be broadly readable.
+    """
+
+    permission_classes = [permissions.IsAuthenticated, IsSuperadmin]
+
+    def get(self, request):
+        window = User.ONLINE_WINDOW_SECONDS
+        now = timezone.now()
+        cutoff = now - timedelta(seconds=window)
+
+        online = (
+            User.objects.filter(is_active=True, last_seen_at__gte=cutoff)
+            .exclude(last_logout_at__gte=models.F('last_seen_at'))
+            .order_by('-last_seen_at')
+        )
+        recent = (
+            User.objects.filter(is_active=True, last_seen_at__lt=cutoff)
+            .order_by('-last_seen_at')[:20]
+        )
+
+        def row(user):
+            return {
+                'id': user.id,
+                'full_name': user.full_name or user.email,
+                'email': user.email,
+                'role': user.role,
+                'last_seen_at': user.last_seen_at,
+                'last_login_at': user.last_login_at,
+                'last_logout_at': user.last_logout_at,
+                'seconds_ago': (
+                    int((now - user.last_seen_at).total_seconds())
+                    if user.last_seen_at else None
+                ),
+            }
+
+        return Response({
+            'window_seconds': window,
+            'online': [row(u) for u in online],
+            'recent': [row(u) for u in recent],
+            'online_count': online.count(),
+        })
 
 
 class AuditLogPagination(PageNumberPagination):
