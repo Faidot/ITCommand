@@ -51,3 +51,43 @@ export function moduleForPath(pathname: string): string | null {
   }
   return null;
 }
+
+/**
+ * Where to send someone after they sign in.
+ *
+ * Everyone used to land on /dashboard, which needs the `dashboard` module.
+ * A role without it — an estate manager, say — was shown "Access Denied" on
+ * every single login, with a working sidebar right next to it. Landing on
+ * something you can actually use is the difference between "no access" and
+ * "no account".
+ *
+ * Order matters: it mirrors the sidebar, so the first thing in the nav is the
+ * first thing considered. Falls back to /dashboard when nothing matches, so a
+ * user with no modules at all still gets the guard's explanation rather than a
+ * blank screen or a redirect loop.
+ */
+const LANDING_ROUTES: Array<[string, string]> = [
+  ["dashboard", "/dashboard"],
+  ["estate", "/estate/dashboard"],
+  ["assets", "/assets"],
+  ["helpdesk", "/helpdesk"],
+  ["users", "/users"],
+  ["departments", "/departments"],
+  ["onboarding", "/onboarding"],
+  ["seating", "/seating"],
+  ["vendors", "/vendors"],
+  ["procurement", "/procurement/requests"],
+  ["network", "/network"],
+  ["kb", "/kb"],
+  ["vault", "/vault/passwords"],
+  ["finance", "/finance/budget"],
+  ["reports", "/reports"],
+  ["settings", "/settings"],
+];
+
+export function landingRoute(user: PermUser | null | undefined): string {
+  for (const [module, url] of LANDING_ROUTES) {
+    if (can(user, module, "view")) return url;
+  }
+  return "/dashboard";
+}

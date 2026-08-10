@@ -13,7 +13,7 @@ import secrets
 from core.models import *
 from core.serializers import *
 from core.encryption import decrypt_value
-from core.mixins import AuditLogMixin
+from core.mixins import AuditLogMixin, record_audit
 from core.permissions import IsSuperadmin, IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher, VaultAccessPermission, UserManagementPermission, HasModulePermission
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.throttling import ScopedRateThrottle
@@ -40,12 +40,23 @@ class LoginView(APIView):
         
         user = authenticate(email=email, password=password)
         if not user:
+            # Recorded without a user: a failed attempt is the one sign-in
+            # event with nobody to attribute it to, and the one most worth
+            # keeping. The email is stored so repeated attempts on one account
+            # are visible; the password never is.
+            record_audit(request, 'LOGIN_FAILED', changes={'email': email})
             return Response({'detail': 'Invalid email or password.'}, status=status.HTTP_401_UNAUTHORIZED)
-            
+
         if not user.is_active:
+            record_audit(
+                request, 'LOGIN_FAILED', obj=user,
+                changes={'email': email, 'reason': 'account inactive'},
+            )
             return Response({'detail': 'This account is inactive.'}, status=status.HTTP_403_FORBIDDEN)
-            
+
         tokens = get_tokens_for_user(user)
+        record_audit(request, 'LOGIN', obj=user, user=user, changes={'email': user.email})
+        user.touch_seen(force=True)
         return Response({
             'access': tokens['access'],
             'refresh': tokens['refresh'],

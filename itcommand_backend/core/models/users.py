@@ -83,6 +83,65 @@ class User(AbstractUser):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # ── presence ────────────────────────────────────────────────────────────
+    #
+    # "Who is using the app right now" without a websocket. JWT sessions are
+    # stateless, so there is nothing to count — the only honest signal is when
+    # somebody last made a request. That is what these hold, and why the UI
+    # says "active in the last 5 minutes" rather than claiming live presence
+    # it cannot actually observe.
+    last_seen_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    last_login_at = models.DateTimeField(null=True, blank=True)
+    #: Cleared on sign-in, set on sign-out. A session that simply expired
+    #: leaves this null, which is the truth: nobody saw them leave.
+    last_logout_at = models.DateTimeField(null=True, blank=True)
+
+    #: How stale `last_seen_at` may be before somebody counts as gone.
+    ONLINE_WINDOW_SECONDS = 300
+    #: Don't write on every request — once a minute per user is enough to
+    #: drive a five-minute window, and turns a per-request UPDATE into a rare one.
+    SEEN_WRITE_INTERVAL_SECONDS = 60
+
+    def touch_seen(self, force=False):
+        """Record that this user is active. Cheap and heavily throttled."""
+        from django.utils import timezone
+
+        now = timezone.now()
+        if not force and self.last_seen_at:
+            age = (now - self.last_seen_at).total_seconds()
+            if age < self.SEEN_WRITE_INTERVAL_SECONDS:
+                return False
+
+        fields = ['last_seen_at']
+        self.last_seen_at = now
+        if force:
+            self.last_login_at = now
+            self.last_logout_at = None
+            fields += ['last_login_at', 'last_logout_at']
+        # update_fields keeps this off every other column, so a presence ping
+        # cannot overwrite a concurrent edit to the same row.
+        User.objects.filter(pk=self.pk).update(**{f: getattr(self, f) for f in fields})
+        return True
+
+    def mark_signed_out(self):
+        from django.utils import timezone
+
+        now = timezone.now()
+        self.last_logout_at = now
+        User.objects.filter(pk=self.pk).update(last_logout_at=now, last_seen_at=now)
+
+    @property
+    def is_online(self):
+        from django.utils import timezone
+
+        if not self.last_seen_at:
+            return False
+        if self.last_logout_at and self.last_logout_at >= self.last_seen_at:
+            return False
+        return (
+            timezone.now() - self.last_seen_at
+        ).total_seconds() <= self.ONLINE_WINDOW_SECONDS
+
     USERNAME_FIELD = 'email'
     REQUIRED_FIELDS = [] # empty because email is the USERNAME_FIELD
 
