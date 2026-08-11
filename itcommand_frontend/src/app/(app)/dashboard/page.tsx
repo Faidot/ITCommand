@@ -1,70 +1,165 @@
 "use client";
 
 /**
- * The admin dashboard: every module's headline numbers, on one screen.
+ * The admin dashboard.
  *
- * Two rules drive the whole layout.
+ * Keeps the layout that worked — KPI row, charts, module grid, alerts and
+ * activity — and sharpens it rather than replacing it.
  *
- * **It fits the viewport.** The grid is sized from `100dvh` and every tile
- * shares the leftover height, so a wall display shows the same board a laptop
- * does — larger, not longer. Scrolling a status board defeats the point of
- * having one. Below `sm` that stops being achievable: eleven modules on a
- * 375px phone would be too small to read, so there and only there the grid
- * scrolls rather than shrinking into illegibility.
+ * Two things changed beyond styling:
  *
- * **It shows only what you may see.** The API already zeroes out modules a
- * role cannot view, which meant an estate-only user saw "Assets 0" — a number
- * that reads as a fact about the company when it is really a fact about their
- * permissions. Tiles are now filtered by the same `can()` the sidebar uses, so
- * an absent module is absent rather than falsely empty.
+ * **Sizing.** Headline numbers and card padding scale with
+ * `clamp(min, preferred + vw, max)`, so the same board is legible on a phone,
+ * a laptop and a wall-mounted TV. Breakpoints alone jump: a 1440px laptop and
+ * a 3840px display land in the same bucket and render identical 24px figures,
+ * which is small from across a room.
+ *
+ * **Permissions.** The API zeroes out modules a role cannot view, so an
+ * estate-only user was shown "Assets 0" — a number that reads as a fact about
+ * the company when it is really a fact about their access. Cards are filtered
+ * by the same `can()` the sidebar uses, so a module you lack is absent rather
+ * than falsely empty.
  */
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import {
-  Activity, BookOpen, Box, Building, Globe, Headset, Map, Network,
-  RefreshCw, ShoppingCart, UserPlus, Users, Wallet,
+  Users, Box, Wallet, Receipt, TrendingUp, CalendarDays, Activity,
+  Headset, Globe, ShoppingCart, Building, Network, UserPlus, Map,
+  BookOpen, ShieldAlert, ArrowRight, DollarSign, RefreshCw,
 } from "lucide-react";
-import { toast } from "sonner";
-
 import api from "@/lib/api";
+import { toast } from "sonner";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer,
+  PieChart, Pie, Cell, LineChart, Line, Legend,
+} from "recharts";
+
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Skeleton } from "@/components/ui/skeleton";
 import { useMoney } from "@/lib/currency";
 import { can } from "@/lib/permissions";
 import { useAuthStore } from "@/store/authStore";
-import { Button } from "@/components/ui/button";
-import { Skeleton } from "@/components/ui/skeleton";
 
-import { FLUID, ModuleTile, TrendStrip } from "./dashboard-ui";
+const COLORS = ["#6366f1", "#10b981", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#84cc16"];
 
-interface Dashboard {
-  kpis: Record<string, number>;
-  income_vs_expense: { month: string; income: number; expense: number }[];
-  helpdesk: Record<string, number>;
-  estate: Record<string, number | string | boolean | unknown[]>;
-  procurement: Record<string, number>;
-  vendors: Record<string, number>;
-  network: Record<string, number>;
-  onboarding: Record<string, number>;
-  seating: Record<string, number>;
-  kb: Record<string, number>;
-  warranties_expiring: unknown[];
-  contracts_expiring: unknown[];
-}
-
-const num = (v: unknown): number => {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : 0;
+const ACT_COLOR: Record<string, string> = {
+  EXPENSE: "text-red-500", ASSET: "text-blue-500", TICKET: "text-sky-500", PROCUREMENT: "text-indigo-500",
 };
 
+/** The headline figure scales with the viewport; everything else follows Tailwind. */
+const FIGURE = "text-[clamp(1.35rem,0.9vw+1rem,2.25rem)]";
+const MODULE_FIGURE = "text-[clamp(1rem,0.55vw+0.8rem,1.6rem)]";
+
+/** Soft tinted chip behind each icon — colour without shouting. */
+const TINT: Record<string, string> = {
+  indigo: "bg-indigo-500/10 text-indigo-600 dark:text-indigo-400",
+  emerald: "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400",
+  amber: "bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  sky: "bg-sky-500/10 text-sky-600 dark:text-sky-400",
+  rose: "bg-rose-500/10 text-rose-600 dark:text-rose-400",
+  cyan: "bg-cyan-500/10 text-cyan-600 dark:text-cyan-400",
+  teal: "bg-teal-500/10 text-teal-600 dark:text-teal-400",
+  green: "bg-green-500/10 text-green-600 dark:text-green-400",
+  orange: "bg-orange-500/10 text-orange-600 dark:text-orange-400",
+};
+
+interface KpiProps {
+  icon: React.ElementType;
+  label: string;
+  value: React.ReactNode;
+  sub?: React.ReactNode;
+  href?: string;
+  tone?: string;
+  tint?: keyof typeof TINT;
+}
+
+function Kpi({ icon: Icon, label, value, sub, href, tone, tint = "indigo" }: KpiProps) {
+  const inner = (
+    <Card
+      className={`h-full overflow-hidden border-border/60 transition-all ${
+        href ? "cursor-pointer hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg hover:shadow-primary/5" : ""
+      }`}
+    >
+      <CardContent className="flex h-full flex-col justify-between gap-2 p-[clamp(0.75rem,0.8vw,1.35rem)]">
+        <div className="flex items-start justify-between gap-2">
+          <span className="truncate text-xs font-medium uppercase tracking-wide text-muted-foreground">
+            {label}
+          </span>
+          <span className={`shrink-0 rounded-lg p-1.5 ${TINT[tint]}`}>
+            <Icon className="h-4 w-4" />
+          </span>
+        </div>
+        <div>
+          <div className={`font-semibold leading-none tabular-nums ${FIGURE} ${tone || ""}`}>{value}</div>
+          {sub && <p className="mt-1.5 truncate text-xs text-muted-foreground">{sub}</p>}
+        </div>
+      </CardContent>
+    </Card>
+  );
+  return href ? <Link href={href} className="block h-full">{inner}</Link> : inner;
+}
+
+interface ModuleStat {
+  label: string;
+  value: React.ReactNode;
+  tone?: string;
+}
+
+function ModuleCard({
+  icon: Icon, title, href, tint = "indigo", stats,
+}: {
+  icon: React.ElementType;
+  title: string;
+  href: string;
+  tint?: keyof typeof TINT;
+  stats: ModuleStat[];
+}) {
+  return (
+    <Link href={href} className="block h-full">
+      <Card className="group h-full overflow-hidden border-border/60 transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg hover:shadow-primary/5">
+        <CardContent className="p-[clamp(0.75rem,0.8vw,1.35rem)]">
+          <div className="mb-3 flex items-center justify-between gap-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <span className={`shrink-0 rounded-lg p-1.5 ${TINT[tint]}`}>
+                <Icon className="h-4 w-4" />
+              </span>
+              <span className="truncate text-sm font-semibold">{title}</span>
+            </div>
+            <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground/40 transition-all group-hover:translate-x-0.5 group-hover:text-primary" />
+          </div>
+          <div className="grid grid-cols-3 gap-2">
+            {stats.map((s) => (
+              <div key={s.label} className="min-w-0">
+                <div className={`truncate font-semibold tabular-nums ${MODULE_FIGURE} ${s.tone || ""}`}>
+                  {s.value}
+                </div>
+                <div className="truncate text-[10px] uppercase tracking-wide text-muted-foreground">
+                  {s.label}
+                </div>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+    </Link>
+  );
+}
+
+/* eslint-disable @typescript-eslint/no-explicit-any */
 export default function DashboardPage() {
   const money = useMoney();
   const user = useAuthStore((s) => s.user);
-  const [data, setData] = useState<Dashboard | null>(null);
+  const [data, setData] = useState<any>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async (silent = false) => {
     if (silent) setRefreshing(true);
     try {
-      const res = await api.get<Dashboard>("/dashboard/");
+      const res = await api.get("/dashboard/");
       setData(res.data);
     } catch {
       toast.error("Failed to load dashboard data");
@@ -73,231 +168,252 @@ export default function DashboardPage() {
     }
   }, []);
 
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(() => { void load(); }, [load]);
 
   if (!data) {
     return (
-      <div className="grid h-[calc(100dvh-9rem)] grid-cols-2 gap-3 lg:grid-cols-4">
-        {Array.from({ length: 8 }).map((_, i) => (
-          <Skeleton key={i} className="h-full w-full rounded-xl" />
-        ))}
+      <div className="mx-auto max-w-[1800px] space-y-6 p-4">
+        <Skeleton className="h-9 w-56" />
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
+          {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-28 rounded-xl" />)}
+        </div>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          <Skeleton className="h-80 rounded-xl lg:col-span-2" />
+          <Skeleton className="h-80 rounded-xl" />
+        </div>
       </div>
     );
   }
 
   const k = data.kpis;
-  const estate = data.estate;
+  const show = (m: string) => can(user, m, "view");
 
-  // Each entry names the module it belongs to, so one `can()` filter governs
-  // the whole board — the same rule the sidebar and route guard already use.
-  const tiles: {
-    module: string;
-    node: React.ReactNode;
-  }[] = [
-    {
-      module: "users",
-      node: (
-        <ModuleTile
-          key="users" icon={Users} title="People" href="/users"
-          headline={num(k.total_users)}
-          stats={[
-            { label: "active", value: num(k.active_users), tone: "ok" },
-            { label: "inactive", value: num(k.total_users) - num(k.active_users), tone: "muted" },
-          ]}
-        />
-      ),
-    },
-    {
-      module: "assets",
-      node: (
-        <ModuleTile
-          key="assets" icon={Box} title="Assets" href="/assets"
-          headline={num(k.total_assets)}
-          alert={data.warranties_expiring.length ? `${data.warranties_expiring.length} warranty` : undefined}
-          stats={[
-            { label: "assigned", value: num(k.assets_assigned) },
-            { label: "value", value: money(num(k.asset_value)) },
-          ]}
-        />
-      ),
-    },
-    {
-      module: "finance",
-      node: (
-        <ModuleTile
-          key="finance" icon={Wallet} title="Budget" href="/finance/budget"
-          headline={`${num(k.budget_used_pct).toFixed(0)}%`}
-          headlineTone={num(k.budget_used_pct) > 90 ? "bad" : num(k.budget_used_pct) > 75 ? "warn" : "ok"}
-          stats={[
-            { label: "spent", value: money(num(k.total_spent)) },
-            { label: "budget", value: money(num(k.total_budget)) },
-            { label: "bills 7d", value: num(k.upcoming_bills_count) },
-          ]}
-        />
-      ),
-    },
-    {
-      module: "helpdesk",
-      node: (
-        <ModuleTile
-          key="helpdesk" icon={Headset} title="Helpdesk" href="/helpdesk/tickets"
-          headline={num(data.helpdesk.open)}
-          headlineTone={num(data.helpdesk.overdue) > 0 ? "warn" : "ok"}
-          alert={num(data.helpdesk.overdue) ? `${num(data.helpdesk.overdue)} overdue` : undefined}
-          stats={[
-            { label: "unassigned", value: num(data.helpdesk.unassigned), tone: num(data.helpdesk.unassigned) ? "warn" : undefined },
-            { label: "resolved", value: num(data.helpdesk.resolved), tone: "ok" },
-            { label: "total", value: num(data.helpdesk.total) },
-          ]}
-        />
-      ),
-    },
-    {
-      module: "estate",
-      node: (
-        <ModuleTile
-          key="estate" icon={Globe} title="Digital Estate" href="/estate/dashboard"
-          headline={money(num(estate.monthly_cost))}
-          alert={num(estate.accounts_missing_mfa) ? `${num(estate.accounts_missing_mfa)} no MFA` : undefined}
-          stats={[
-            { label: "services", value: num(estate.active) },
-            { label: "properties", value: num(estate.properties) },
-            { label: "renewing 60d", value: num(estate.expiring_soon), tone: num(estate.expiring_soon) ? "warn" : undefined },
-            { label: "orphans", value: num(estate.orphans), tone: num(estate.orphans) ? "warn" : undefined },
-          ]}
-        />
-      ),
-    },
-    {
-      module: "network",
-      node: (
-        <ModuleTile
-          key="network" icon={Network} title="Network" href="/network"
-          headline={`${num(data.network.online)}/${num(data.network.total)}`}
-          headlineTone={num(data.network.offline) ? "warn" : "ok"}
-          stats={[
-            { label: "offline", value: num(data.network.offline), tone: num(data.network.offline) ? "bad" : undefined },
-            { label: "warranty 30d", value: num(data.network.warranty_expiring) },
-          ]}
-        />
-      ),
-    },
-    {
-      module: "procurement",
-      node: (
-        <ModuleTile
-          key="procurement" icon={ShoppingCart} title="Procurement" href="/procurement/requests"
-          headline={num(data.procurement.pending)}
-          headlineTone={num(data.procurement.pending) ? "warn" : "ok"}
-          stats={[
-            { label: "approved", value: num(data.procurement.approved), tone: "ok" },
-            { label: "estimated", value: money(num(data.procurement.est_total)) },
-          ]}
-        />
-      ),
-    },
-    {
-      module: "vendors",
-      node: (
-        <ModuleTile
-          key="vendors" icon={Building} title="Vendors" href="/vendors"
-          headline={num(data.vendors.total)}
-          alert={data.contracts_expiring.length ? `${data.contracts_expiring.length} contract` : undefined}
-          stats={[
-            { label: "active", value: num(data.vendors.active), tone: "ok" },
-            { label: "expiring 90d", value: num(data.vendors.contracts_expiring), tone: num(data.vendors.contracts_expiring) ? "warn" : undefined },
-          ]}
-        />
-      ),
-    },
-    {
-      module: "onboarding",
-      node: (
-        <ModuleTile
-          key="onboarding" icon={UserPlus} title="Onboarding" href="/onboarding"
-          headline={num(data.onboarding.in_progress)}
-          headlineTone={num(data.onboarding.overdue) ? "warn" : undefined}
-          stats={[
-            { label: "not started", value: num(data.onboarding.not_started) },
-            { label: "overdue", value: num(data.onboarding.overdue), tone: num(data.onboarding.overdue) ? "bad" : undefined },
-          ]}
-        />
-      ),
-    },
-    {
-      module: "seating",
-      node: (
-        <ModuleTile
-          key="seating" icon={Map} title="Seating" href="/seating"
-          headline={`${num(data.seating.pct)}%`}
-          stats={[
-            { label: "occupied", value: num(data.seating.occupied) },
-            { label: "seats", value: num(data.seating.total) },
-          ]}
-        />
-      ),
-    },
-    {
-      module: "kb",
-      node: (
-        <ModuleTile
-          key="kb" icon={BookOpen} title="Knowledge Base" href="/kb"
-          headline={num(data.kb.published)}
-          stats={[
-            { label: "total", value: num(data.kb.total) },
-            { label: "views", value: num(data.kb.views) },
-          ]}
-        />
-      ),
-    },
-  ];
+  // Only the KPIs this role can actually see. The API already blanks the rest,
+  // and a zero that means "hidden" is indistinguishable from one that means
+  // "none" — so they are removed rather than shown empty.
+  const kpis = [
+    show("users") && <Kpi key="u" icon={Users} label="Users" value={k.total_users} sub={`${k.active_users} active`} href="/users" tint="indigo" />,
+    show("assets") && <Kpi key="a" icon={Box} label="Assets" value={k.total_assets} sub={`${k.assets_assigned} assigned · ${money(k.asset_value)}`} href="/assets" tint="sky" />,
+    show("finance") && <Kpi key="b" icon={Wallet} label="Budget Used" value={`${(k.budget_used_pct ?? 0).toFixed(0)}%`} sub={`${money(k.total_spent)} / ${money(k.total_budget)}`} href="/finance/budget" tint="emerald" tone={k.budget_used_pct > 90 ? "text-red-600 dark:text-red-400" : ""} />,
+    show("helpdesk") && <Kpi key="t" icon={Headset} label="Open Tickets" value={k.open_tickets} sub={`${k.overdue_tickets} overdue`} href="/helpdesk/tickets" tint="rose" tone={k.overdue_tickets > 0 ? "text-amber-600 dark:text-amber-400" : ""} />,
+    show("network") && <Kpi key="n" icon={Network} label="Devices Online" value={`${k.devices_online}/${k.devices_total}`} href="/network" tint="cyan" tone="text-emerald-600 dark:text-emerald-400" />,
+    show("finance") && <Kpi key="r" icon={Receipt} label="Bills (7d)" value={k.upcoming_bills_count} sub={money(k.upcoming_bills_amount)} href="/finance/recurring-bills" tint="amber" />,
+  ].filter(Boolean);
 
-  const visible = tiles.filter((t) => can(user, t.module, "view"));
-  const showTrend = can(user, "finance", "view") && data.income_vs_expense.length > 0;
+  const modules = [
+    show("helpdesk") && <ModuleCard key="h" icon={Headset} title="Helpdesk" href="/helpdesk" tint="sky" stats={[
+      { label: "Open", value: data.helpdesk.open },
+      { label: "Overdue", value: data.helpdesk.overdue, tone: data.helpdesk.overdue ? "text-red-600 dark:text-red-400" : "" },
+      { label: "Unassigned", value: data.helpdesk.unassigned },
+    ]} />,
+    show("estate") && <ModuleCard key="e" icon={Globe} title="Digital Estate" href="/estate/dashboard" tint="amber" stats={[
+      { label: "Services", value: data.estate?.active ?? 0 },
+      { label: "Renewing", value: data.estate?.expiring_soon ?? 0, tone: data.estate?.expiring_soon ? "text-amber-600 dark:text-amber-400" : "" },
+      { label: "No MFA", value: data.estate?.accounts_missing_mfa ?? 0, tone: data.estate?.accounts_missing_mfa ? "text-red-600 dark:text-red-400" : "" },
+    ]} />,
+    show("procurement") && <ModuleCard key="p" icon={ShoppingCart} title="Procurement" href="/procurement/requests" tint="indigo" stats={[
+      { label: "Pending", value: data.procurement.pending, tone: data.procurement.pending ? "text-amber-600 dark:text-amber-400" : "" },
+      { label: "Approved", value: data.procurement.approved },
+      { label: "Value", value: money(data.procurement.est_total) },
+    ]} />,
+    show("vendors") && <ModuleCard key="v" icon={Building} title="Vendors" href="/vendors" tint="teal" stats={[
+      { label: "Total", value: data.vendors.total },
+      { label: "Active", value: data.vendors.active },
+      { label: "Expiring", value: data.vendors.contracts_expiring, tone: data.vendors.contracts_expiring ? "text-amber-600 dark:text-amber-400" : "" },
+    ]} />,
+    show("network") && <ModuleCard key="n" icon={Network} title="Network" href="/network" tint="cyan" stats={[
+      { label: "Online", value: data.network.online, tone: "text-emerald-600 dark:text-emerald-400" },
+      { label: "Offline", value: data.network.offline, tone: data.network.offline ? "text-red-600 dark:text-red-400" : "" },
+      { label: "Warranty", value: data.network.warranty_expiring },
+    ]} />,
+    show("onboarding") && <ModuleCard key="o" icon={UserPlus} title="Onboarding" href="/onboarding" tint="green" stats={[
+      { label: "Active", value: data.onboarding.in_progress },
+      { label: "Pending", value: data.onboarding.not_started },
+      { label: "Overdue", value: data.onboarding.overdue, tone: data.onboarding.overdue ? "text-red-600 dark:text-red-400" : "" },
+    ]} />,
+    show("seating") && <ModuleCard key="s" icon={Map} title="Seating" href="/seating" tint="rose" stats={[
+      { label: "Seats", value: data.seating.total },
+      { label: "Occupied", value: data.seating.occupied },
+      { label: "Rate", value: `${data.seating.pct}%` },
+    ]} />,
+    show("kb") && <ModuleCard key="k" icon={BookOpen} title="Knowledge Base" href="/kb" tint="orange" stats={[
+      { label: "Published", value: data.kb.published },
+      { label: "Total", value: data.kb.total },
+      { label: "Views", value: data.kb.views },
+    ]} />,
+  ].filter(Boolean);
+
+  const hasAlerts = data.warranties_expiring?.length || data.contracts_expiring?.length;
 
   return (
-    // `dvh` not `vh`: on mobile browsers the toolbar collapses on scroll and
-    // `vh` keeps the old height, leaving a strip cut off the bottom.
-    // Fixed height above `sm` so nothing scrolls; auto below it, where fitting
-    // eleven modules on screen would mean text nobody can read.
-    <div className="flex flex-col gap-[clamp(0.4rem,0.6vh,1rem)] sm:h-[calc(100dvh-9rem)] sm:overflow-hidden">
-      <div className="flex shrink-0 items-center justify-between gap-2">
+    // max-w widened from 7xl: on a large display the old cap left the board in
+    // a narrow column with empty space either side.
+    <div className="mx-auto max-w-[1800px] space-y-6 p-4">
+      <div className="flex flex-wrap items-end justify-between gap-3">
         <div className="min-w-0">
-          <h1 className={`truncate font-semibold tracking-tight ${FLUID.title}`}>Dashboard</h1>
-          <p className={`truncate text-muted-foreground ${FLUID.caption}`}>
-            {visible.length} module{visible.length === 1 ? "" : "s"} you can see
-          </p>
+          <h1 className="text-[clamp(1.25rem,0.6vw+1.05rem,2rem)] font-semibold tracking-tight">
+            Dashboard
+          </h1>
+          <p className="text-sm text-muted-foreground">A complete overview of your IT Command Center</p>
         </div>
         <Button variant="outline" size="sm" onClick={() => void load(true)} disabled={refreshing}>
-          <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+          <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+          Refresh
         </Button>
       </div>
 
-      {visible.length === 0 ? (
-        <div className="flex flex-1 items-center justify-center rounded-xl border text-sm text-muted-foreground">
-          Your role has no modules assigned. Contact an administrator.
-        </div>
-      ) : (
-        <div
-          className={`grid min-h-0 flex-1 auto-rows-fr grid-cols-2 sm:grid-cols-3 xl:grid-cols-4 2xl:grid-cols-5 ${FLUID.gap}`}
-        >
-          {visible.map((t) => t.node)}
+      {kpis.length > 0 && (
+        <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">{kpis}</div>
+      )}
 
-          {showTrend && (
-            <div
-              className={`col-span-2 flex min-h-0 min-w-0 flex-col overflow-hidden rounded-xl border bg-card ${FLUID.pad}`}
-            >
-              <div className="flex shrink-0 items-center gap-1.5">
-                <Activity className="h-[clamp(0.75rem,0.6vw,1.5rem)] w-[clamp(0.75rem,0.6vw,1.5rem)] shrink-0 text-muted-foreground" />
-                <span className={`truncate font-medium ${FLUID.label}`}>Income vs expense · 6 months</span>
-              </div>
-              <TrendStrip points={data.income_vs_expense} format={money} />
-            </div>
+      {/* Charts */}
+      {(show("finance") || show("helpdesk")) && (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+          {show("finance") && (
+            <Card className="border-border/60 lg:col-span-2">
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <span className={`rounded-lg p-1.5 ${TINT.emerald}`}><DollarSign className="h-4 w-4" /></span>
+                  Income vs Expense · 6 months
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="h-[clamp(16rem,22vh+9rem,26rem)] min-h-[16rem]">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={data.income_vs_expense} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-border" />
+                    <XAxis dataKey="month" tickLine={false} axisLine={false} fontSize={12} />
+                    <YAxis tickLine={false} axisLine={false} fontSize={12} width={48} />
+                    <RechartsTooltip formatter={(v: any) => money(v)} contentStyle={{ borderRadius: 12, fontSize: 12 }} />
+                    <Legend iconType="circle" wrapperStyle={{ fontSize: 12 }} />
+                    <Line type="monotone" dataKey="income" name="Income" stroke="#10b981" strokeWidth={2.5} dot={false} />
+                    <Line type="monotone" dataKey="expense" name="Expense" stroke="#ef4444" strokeWidth={2.5} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+          )}
+
+          {show("helpdesk") && (
+            <Card className="border-border/60">
+              <CardHeader className="pb-2">
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <span className={`rounded-lg p-1.5 ${TINT.sky}`}><Headset className="h-4 w-4" /></span>
+                  Tickets by Status
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="flex h-[clamp(16rem,22vh+9rem,26rem)] min-h-[16rem] items-center justify-center">
+                {data.tickets_by_status?.length ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <PieChart>
+                      <Pie data={data.tickets_by_status} cx="50%" cy="50%" innerRadius="52%" outerRadius="80%" paddingAngle={3} dataKey="value"
+                        label={({ name, percent }: any) => `${name} ${((percent ?? 0) * 100).toFixed(0)}%`}>
+                        {data.tickets_by_status.map((_: any, i: number) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                      </Pie>
+                      <RechartsTooltip contentStyle={{ borderRadius: 12, fontSize: 12 }} />
+                    </PieChart>
+                  </ResponsiveContainer>
+                ) : <p className="text-sm text-muted-foreground">No tickets.</p>}
+              </CardContent>
+            </Card>
           )}
         </div>
       )}
+
+      {modules.length > 0 && (
+        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">{modules}</div>
+      )}
+
+      {/* Alerts + expenses + activity */}
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+        <Card className="border-border/60">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <span className={`rounded-lg p-1.5 ${TINT.amber}`}><ShieldAlert className="h-4 w-4" /></span>
+              Expiring Soon
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ScrollArea className="h-72 pr-3">
+              {hasAlerts ? (
+                <div className="space-y-2">
+                  {data.warranties_expiring.map((w: any, i: number) => (
+                    <div key={`w${i}`} className="flex items-center justify-between gap-2 border-b pb-2 text-sm last:border-0">
+                      <div className="min-w-0">
+                        <div className="truncate font-medium">{w.name}</div>
+                        <div className="text-xs text-muted-foreground">Warranty · {w.tag}</div>
+                      </div>
+                      <Badge variant={w.days <= 14 ? "destructive" : "secondary"}>{w.days}d</Badge>
+                    </div>
+                  ))}
+                  {data.contracts_expiring.map((c: any, i: number) => (
+                    <div key={`c${i}`} className="flex items-center justify-between gap-2 border-b pb-2 text-sm last:border-0">
+                      <div className="min-w-0">
+                        <div className="truncate font-medium">{c.title}</div>
+                        <div className="text-xs text-muted-foreground">Contract · {c.vendor}</div>
+                      </div>
+                      <Badge variant={c.days <= 30 ? "destructive" : "secondary"}>{c.days}d</Badge>
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="text-sm text-muted-foreground">Nothing expiring soon.</p>}
+            </ScrollArea>
+          </CardContent>
+        </Card>
+
+        {show("finance") && (
+          <Card className="border-border/60">
+            <CardHeader className="pb-2">
+              <CardTitle className="flex items-center gap-2 text-base">
+                <span className={`rounded-lg p-1.5 ${TINT.indigo}`}><TrendingUp className="h-4 w-4" /></span>
+                Monthly Expenses
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="h-72">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={data.monthly_expenses} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} className="stroke-border" />
+                  <XAxis dataKey="month" tickLine={false} axisLine={false} fontSize={12} />
+                  <YAxis tickLine={false} axisLine={false} fontSize={12} width={48} />
+                  <RechartsTooltip formatter={(v: any) => money(v)} contentStyle={{ borderRadius: 12, fontSize: 12 }} />
+                  <Bar dataKey="amount" fill="#6366f1" radius={[6, 6, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </CardContent>
+          </Card>
+        )}
+
+        <Card className="border-border/60">
+          <CardHeader className="pb-2">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <span className={`rounded-lg p-1.5 ${TINT.emerald}`}><Activity className="h-4 w-4" /></span>
+              Recent Activity
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ScrollArea className="h-72 pr-3">
+              {data.recent_activity?.length > 0 ? (
+                <div className="space-y-3">
+                  {data.recent_activity.map((act: any, i: number) => (
+                    <div key={i} className="flex flex-col space-y-1 border-b pb-3 last:border-0 last:pb-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="truncate text-sm font-medium">{act.title}</span>
+                        {act.amount !== null && (
+                          <span className={`text-xs font-bold ${ACT_COLOR[act.type] || ""}`}>{money(act.amount)}</span>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <CalendarDays className="h-3 w-3" />
+                        <span>{act.date}</span>
+                        <Badge variant="outline" className="text-[10px] uppercase">{act.type}</Badge>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : <p className="text-sm text-muted-foreground">No recent activity.</p>}
+            </ScrollArea>
+          </CardContent>
+        </Card>
+      </div>
     </div>
   );
 }
