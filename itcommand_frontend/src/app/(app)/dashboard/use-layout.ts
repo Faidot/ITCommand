@@ -14,7 +14,7 @@
  * saved layout cannot hide a new module or resurrect a removed one.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 /** Column spans a card may take on the 12-column grid. */
 export const WIDTHS = [2, 3, 4, 6, 12] as const;
@@ -47,10 +47,19 @@ export function useDashboardLayout(
   const [layout, setLayout] = useState<CardLayout[]>(defaults);
   const [loaded, setLoaded] = useState(false);
 
-  // Read once on mount. Rendering the default first and correcting after
-  // avoids a hydration mismatch: the server has no localStorage to read.
+  // `defaults` is rebuilt by the caller on every render, so depending on its
+  // identity would re-run the effect below forever — it sets state, which
+  // triggers the render that rebuilds it. Depend on what the array *says*
+  // instead, and read the current value through a ref.
+  const signature = useMemo(() => defaults.map((d) => d.id).join("|"), [defaults]);
+  const defaultsRef = useRef(defaults);
+  defaultsRef.current = defaults;
+
+  // Read once per user / card set. Rendering the default first and correcting
+  // after avoids a hydration mismatch: the server has no localStorage to read.
   useEffect(() => {
     if (typeof window === "undefined") return;
+    const defaults = defaultsRef.current;
     let stored: CardLayout[] = [];
     try {
       const raw = window.localStorage.getItem(KEY(userId));
@@ -77,7 +86,8 @@ export function useDashboardLayout(
 
     setLayout(kept.length ? [...kept, ...appended] : defaults);
     setLoaded(true);
-  }, [userId, defaults]);
+    // Signature, not the array: see the note above.
+  }, [userId, signature]);
 
   const persist = useCallback(
     (next: CardLayout[]) => {
@@ -123,8 +133,8 @@ export function useDashboardLayout(
     } catch {
       /* nothing to clear */
     }
-    setLayout(defaults);
-  }, [userId, defaults]);
+    setLayout(defaultsRef.current);
+  }, [userId]);
 
   return { layout, loaded, move, resize, toggle, reset };
 }
