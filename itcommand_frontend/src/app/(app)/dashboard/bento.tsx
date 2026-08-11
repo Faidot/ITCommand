@@ -14,8 +14,30 @@
  */
 
 import Link from "next/link";
+import { Eye, EyeOff, GripVertical, Minus, Plus } from "lucide-react";
+
+import type { CardLayout, Height, Width } from "./use-layout";
+import { HEIGHTS, WIDTHS } from "./use-layout";
 
 /* ────────────────────────────── shell ────────────────────────────── */
+
+/**
+ * Tailwind's JIT only emits class names it can see as literal strings, so a
+ * computed `xl:col-span-${w}` is never generated. Every span a card can take
+ * is spelled out here instead.
+ */
+export const SPAN: Record<Width, string> = {
+  2: "col-span-6 md:col-span-3 xl:col-span-2",
+  3: "col-span-6 md:col-span-4 xl:col-span-3",
+  4: "col-span-12 md:col-span-6 xl:col-span-4",
+  6: "col-span-12 md:col-span-6 xl:col-span-6",
+  12: "col-span-12",
+};
+
+export const MIN_H: Record<Height, string> = {
+  1: "min-h-[12rem]",
+  2: "min-h-[25rem]",
+};
 
 export function Bento({
   span = "col-span-12 md:col-span-6 xl:col-span-3",
@@ -41,6 +63,147 @@ export function Bento({
     <Link href={href} className={`${span} block min-w-0`}>{card}</Link>
   ) : (
     <div className={`${span} min-w-0`}>{card}</div>
+  );
+}
+
+/* ─────────────────────── editable placement ──────────────────────── */
+
+/**
+ * A card in edit mode: draggable, resizable, hideable.
+ *
+ * Native HTML5 drag rather than a library. What this needs is reordering a
+ * flat list and changing a column span — a drag-and-drop grid package would
+ * be around 60KB for that, and the app has no such dependency today.
+ *
+ * The link is deliberately dropped while editing. A card that both drags and
+ * navigates fires the navigation on any drag the browser decides was a click,
+ * and losing your arrangement to a stray pixel of movement is worse than
+ * having to leave edit mode to follow a link.
+ */
+export function EditableBento({
+  card,
+  index,
+  dragging,
+  over,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onDragEnd,
+  onResize,
+  onToggle,
+  children,
+}: {
+  card: CardLayout;
+  index: number;
+  dragging: boolean;
+  over: boolean;
+  onDragStart: (i: number) => void;
+  onDragOver: (i: number) => void;
+  onDrop: (i: number) => void;
+  onDragEnd: () => void;
+  onResize: (id: string, patch: Partial<Pick<CardLayout, "w" | "h">>) => void;
+  onToggle: (id: string) => void;
+  children: React.ReactNode;
+}) {
+  const wIndex = WIDTHS.indexOf(card.w);
+  const hIndex = HEIGHTS.indexOf(card.h);
+
+  const step = (axis: "w" | "h", delta: number) => {
+    if (axis === "w") {
+      const next = WIDTHS[Math.min(WIDTHS.length - 1, Math.max(0, wIndex + delta))];
+      onResize(card.id, { w: next });
+    } else {
+      const next = HEIGHTS[Math.min(HEIGHTS.length - 1, Math.max(0, hIndex + delta))];
+      onResize(card.id, { h: next });
+    }
+  };
+
+  return (
+    <div
+      draggable
+      onDragStart={(e) => {
+        // Firefox will not start a drag without data on the transfer.
+        e.dataTransfer.setData("text/plain", card.id);
+        e.dataTransfer.effectAllowed = "move";
+        onDragStart(index);
+      }}
+      onDragOver={(e) => {
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        onDragOver(index);
+      }}
+      onDrop={(e) => {
+        e.preventDefault();
+        onDrop(index);
+      }}
+      onDragEnd={onDragEnd}
+      className={`${SPAN[card.w]} ${MIN_H[card.h]} min-w-0 cursor-grab active:cursor-grabbing ${
+        dragging ? "opacity-40" : ""
+      } ${over && !dragging ? "ring-2 ring-primary ring-offset-2 ring-offset-background rounded-2xl" : ""}`}
+    >
+      <div
+        className={`relative flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border-2 border-dashed bg-card p-[clamp(0.85rem,0.9vw,1.5rem)] ${
+          card.hidden ? "border-border/60 opacity-40" : "border-primary/40"
+        }`}
+      >
+        {/* Controls sit above the card content and swallow their own clicks so
+            a resize never registers as the start of a drag. */}
+        <div
+          className="absolute right-1.5 top-1.5 z-10 flex items-center gap-0.5 rounded-lg border bg-background/95 p-0.5 shadow-sm"
+          draggable={false}
+          onDragStart={(e) => e.stopPropagation()}
+        >
+          <GripVertical className="h-3.5 w-3.5 cursor-grab text-muted-foreground" />
+          <Ctl label="Narrower" disabled={wIndex === 0} onClick={() => step("w", -1)}>
+            <Minus className="h-3 w-3" />
+          </Ctl>
+          <span className="min-w-[1.4rem] text-center text-[10px] font-semibold tabular-nums text-muted-foreground">
+            {card.w}
+          </span>
+          <Ctl label="Wider" disabled={wIndex === WIDTHS.length - 1} onClick={() => step("w", 1)}>
+            <Plus className="h-3 w-3" />
+          </Ctl>
+          <span className="mx-0.5 h-3 w-px bg-border" />
+          <Ctl
+            label={card.h === 2 ? "Shorter" : "Taller"}
+            onClick={() => step("h", card.h === 2 ? -1 : 1)}
+          >
+            <span className="text-[10px] font-semibold">{card.h === 2 ? "▁" : "▄"}</span>
+          </Ctl>
+          <Ctl label={card.hidden ? "Show" : "Hide"} onClick={() => onToggle(card.id)}>
+            {card.hidden ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+          </Ctl>
+        </div>
+
+        <div className="pointer-events-none flex h-full min-h-0 flex-col">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Ctl({
+  label, onClick, disabled, children,
+}: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      title={label}
+      aria-label={label}
+      disabled={disabled}
+      onClick={(e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        onClick();
+      }}
+      className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-30"
+    >
+      {children}
+    </button>
   );
 }
 
