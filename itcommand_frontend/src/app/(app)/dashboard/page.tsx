@@ -157,7 +157,7 @@ export default function DashboardPage() {
 
         {/* Budget gauge — the hero metric */}
         {show("finance") && (
-          <Bento span="col-span-12 md:col-span-6 xl:col-span-3" href="/finance/budget" className="min-h-[13rem]">
+          <Bento span="col-span-12 md:col-span-6 xl:col-span-3" href="/finance/budget" className="min-h-[12rem]">
             <CardLabel icon={Wallet}>Budget used</CardLabel>
             <TickArc
               pct={budgetPct}
@@ -185,11 +185,15 @@ export default function DashboardPage() {
                 {num(estate.active)} services · {num(estate.properties)} properties
               </span>
             </div>
-            {num(estate.accounts_missing_mfa) > 0 && (
-              <Badge className="mt-2 w-fit border-transparent bg-red-500/10 text-[10px] text-red-600 dark:text-red-400">
-                {num(estate.accounts_missing_mfa)} accounts without MFA
-              </Badge>
-            )}
+            <Meter
+              label={num(estate.accounts_missing_mfa) ? "Accounts without MFA" : "Renewing in 60d"}
+              value={num(estate.accounts_missing_mfa) || num(estate.expiring_soon)}
+              max={Math.max(1, num(estate.active))}
+              display={num(estate.accounts_missing_mfa)
+                ? `${num(estate.accounts_missing_mfa)}`
+                : `${num(estate.expiring_soon)}`}
+              tone={num(estate.accounts_missing_mfa) ? "bg-red-500" : "bg-amber-500"}
+            />
           </Bento>
         )}
 
@@ -214,7 +218,7 @@ export default function DashboardPage() {
 
         {/* Income vs expense */}
         {show("finance") && (
-          <Bento span="col-span-12 xl:col-span-5" className="min-h-[13rem]">
+          <Bento span="col-span-12 xl:col-span-5" href="/reports/financial" className="min-h-[12rem]">
             <CardLabel icon={TrendingUp} action={
               <div className="flex items-center gap-3">
                 <Key tone="bg-primary">Income</Key>
@@ -279,7 +283,7 @@ export default function DashboardPage() {
 
         {/* Network health arc */}
         {show("network") && (
-          <Bento span="col-span-12 md:col-span-6 xl:col-span-3" href="/network" className="min-h-[13rem]">
+          <Bento span="col-span-12 md:col-span-6 xl:col-span-3" href="/network" className="min-h-[12rem]">
             <CardLabel icon={Network}>Network health</CardLabel>
             <TickArc
               pct={devicesTotal ? (devicesOnline / devicesTotal) * 100 : 0}
@@ -320,9 +324,12 @@ export default function DashboardPage() {
                 {num(data.procurement?.approved)} approved
               </span>
             </div>
-            <span className="truncate text-xs font-medium tabular-nums">
-              {money(num(data.procurement?.est_total))}
-            </span>
+            <Meter
+              label="Approved"
+              value={num(data.procurement?.approved)}
+              max={Math.max(1, num(data.procurement?.total))}
+              display={money(num(data.procurement?.est_total))}
+            />
           </Bento>
         )}
 
@@ -336,11 +343,15 @@ export default function DashboardPage() {
                 {num(data.vendors?.active)} active
               </span>
             </div>
-            {num(data.vendors?.contracts_expiring) > 0 && (
-              <Badge className="w-fit border-transparent bg-amber-500/10 text-[10px] text-amber-700 dark:text-amber-400">
-                {num(data.vendors.contracts_expiring)} contracts expiring
-              </Badge>
-            )}
+            <Meter
+              label={num(data.vendors?.contracts_expiring) ? "Contracts expiring" : "Active"}
+              value={num(data.vendors?.active)}
+              max={Math.max(1, num(data.vendors?.total))}
+              display={num(data.vendors?.contracts_expiring)
+                ? `${num(data.vendors.contracts_expiring)} soon`
+                : `${num(data.vendors?.active)}/${num(data.vendors?.total)}`}
+              tone={num(data.vendors?.contracts_expiring) ? "bg-amber-500" : "bg-primary"}
+            />
           </Bento>
         )}
 
@@ -354,11 +365,13 @@ export default function DashboardPage() {
                 {num(data.onboarding?.not_started)} not started
               </span>
             </div>
-            {num(data.onboarding?.overdue) > 0 && (
-              <Badge className="w-fit border-transparent bg-red-500/10 text-[10px] text-red-600 dark:text-red-400">
-                {num(data.onboarding.overdue)} overdue
-              </Badge>
-            )}
+            <Meter
+              label={num(data.onboarding?.overdue) ? "Overdue" : "In progress"}
+              value={num(data.onboarding?.overdue) || num(data.onboarding?.in_progress)}
+              max={Math.max(1, num(data.onboarding?.in_progress) + num(data.onboarding?.not_started))}
+              display={num(data.onboarding?.overdue) ? `${num(data.onboarding.overdue)} late` : `${num(data.onboarding?.in_progress)}`}
+              tone={num(data.onboarding?.overdue) ? "bg-red-500" : "bg-primary"}
+            />
           </Bento>
         )}
 
@@ -377,13 +390,13 @@ export default function DashboardPage() {
         )}
 
         {/* Expiring soon */}
-        <Bento span="col-span-12 md:col-span-6 xl:col-span-4">
+        <Bento span="col-span-12 md:col-span-6 xl:col-span-4" href="/reports/assets">
           <CardLabel icon={ShieldAlert} action={
             alerts.length ? <span className="text-xs font-semibold tabular-nums">{alerts.length}</span> : undefined
           }>
             Expiring soon
           </CardLabel>
-          <ScrollArea className="h-[13rem] pr-3">
+          <ScrollArea className="h-[11.5rem] pr-3">
             {alerts.length ? (
               <div className="space-y-2">
                 {alerts.map((a, i) => (
@@ -405,9 +418,9 @@ export default function DashboardPage() {
         </Bento>
 
         {/* Recent activity */}
-        <Bento span="col-span-12 md:col-span-6 xl:col-span-4">
+        <Bento span="col-span-12 md:col-span-6 xl:col-span-4" href="/settings/audit-log">
           <CardLabel icon={Activity}>Recent activity</CardLabel>
-          <ScrollArea className="h-[13rem] pr-3">
+          <ScrollArea className="h-[11.5rem] pr-3">
             {data.recent_activity?.length ? (
               <div className="space-y-2">
                 {data.recent_activity.map((act: any, i: number) => (
@@ -437,7 +450,7 @@ export default function DashboardPage() {
 
         {/* Who's online — superadmin only, and only when the API answered */}
         {presence && (
-          <Bento span="col-span-12 md:col-span-6 xl:col-span-4">
+          <Bento span="col-span-12 md:col-span-6 xl:col-span-4" href="/settings/audit-log">
             <CardLabel icon={Users} action={
               <span className="text-[11px] text-muted-foreground">
                 last {Math.round(presence.window_seconds / 60)} min
@@ -445,7 +458,7 @@ export default function DashboardPage() {
             }>
               Signed in now
             </CardLabel>
-            <ScrollArea className="h-[13rem] pr-3">
+            <ScrollArea className="h-[11.5rem] pr-3">
               {presence.online.length ? (
                 <div className="space-y-1.5">
                   {presence.online.map((p) => (

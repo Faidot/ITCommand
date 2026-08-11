@@ -136,7 +136,7 @@ export function TickArc({
 
   return (
     <div className="relative flex min-h-0 flex-1 items-center justify-center">
-      <svg viewBox="0 0 200 104" className="h-full max-h-[13rem] w-full" role="img" aria-label={`${label ?? ""} ${safe}%`}>
+      <svg viewBox="0 0 200 104" className="h-full max-h-[8.5rem] w-full" role="img" aria-label={`${label ?? ""} ${safe}%`}>
         {Array.from({ length: ticks }).map((_, i) => {
           // −180°..0°: a half circle opening upward.
           const angle = Math.PI + (i / (ticks - 1)) * Math.PI;
@@ -210,24 +210,47 @@ export function PairedBars({
   points: { month: string; income: number; expense: number }[];
   format: (n: number) => string;
 }) {
-  const peak = Math.max(1, ...points.flatMap((p) => [p.income, p.expense]));
+  const peak = Math.max(...points.flatMap((p) => [p.income, p.expense]), 0);
+
+  // Nothing to plot is worth saying out loud. An axis with no bars reads as a
+  // broken chart, and the reason — no *approved* expense in the window — is
+  // not something a reader can infer from an empty card.
+  if (peak <= 0) {
+    return (
+      <div className="flex min-h-0 flex-1 items-center justify-center px-4 text-center">
+        <p className="text-xs text-muted-foreground">
+          No approved income or expense in the last 6 months.
+        </p>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex min-h-0 flex-1 items-end gap-[clamp(0.3rem,0.7vw,1.1rem)] pt-2">
+    <div className="flex min-h-0 flex-1 gap-[clamp(0.3rem,0.7vw,1.1rem)] pt-2">
       {points.map((p) => (
-        <div key={p.month} className="flex min-w-0 flex-1 flex-col items-center gap-1">
-          <div className="flex h-full w-full items-end justify-center gap-1">
+        <div key={p.month} className="flex min-w-0 flex-1 flex-col">
+          {/*
+            Bars are absolutely positioned against this box.
+            A percentage height needs a parent whose height is definite; an
+            earlier version put `items-end` on the row, which stopped the
+            columns stretching, left their height as auto, and collapsed every
+            bar to nothing. Anchoring to a relative box sidesteps that entirely.
+          */}
+          <div className="relative min-h-0 flex-1">
             <div
-              className="w-1/2 rounded-t-md bg-primary transition-all"
-              style={{ height: `${Math.max(2, (p.income / peak) * 100)}%` }}
+              className="absolute bottom-0 left-[8%] w-[36%] rounded-t-md bg-primary transition-all"
+              style={{ height: `${Math.max(3, (p.income / peak) * 100)}%` }}
               title={`Income ${format(p.income)}`}
             />
             <div
-              className="w-1/2 rounded-t-md bg-primary/25 transition-all"
-              style={{ height: `${Math.max(2, (p.expense / peak) * 100)}%` }}
+              className="absolute bottom-0 right-[8%] w-[36%] rounded-t-md bg-primary/30 transition-all"
+              style={{ height: `${Math.max(3, (p.expense / peak) * 100)}%` }}
               title={`Expense ${format(p.expense)}`}
             />
           </div>
-          <span className="truncate text-[10px] text-muted-foreground">{p.month}</span>
+          <span className="mt-1.5 truncate text-center text-[10px] text-muted-foreground">
+            {p.month}
+          </span>
         </div>
       ))}
     </div>
