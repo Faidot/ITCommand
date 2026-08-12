@@ -287,3 +287,26 @@ html[data-text="xl"] { font-size: 125%; }
 ) {
   background-color: hsl(var(--primary)) !important;
 }
+
+/* ── decorative background blobs ────────────────────────────────────────── */
+
+/* Three viewport-sized elements with filter: blur(80px), animating forever,
+   behind every page. That is a large, permanent compositing job: any repaint
+   forces the blurred layers to be recomposited, which on integrated graphics
+   shows up as the whole screen shimmering when the mouse moves.
+   They are decoration, so they are the first thing to stop when somebody has
+   asked for less motion or no blur. */
+[data-motion="reduced"] .app-blob,
+[data-motion="none"] .app-blob {
+  animation: none !important;
+}
+[data-blur="off"] .app-blob {
+  display: none !important;
+}
+
+/* A dialog must never be see-through. `bg-background` is already on it, but
+   stating it against the slot means no utility merge or later override can
+   quietly drop it and leave the page legible through the panel. */
+[data-slot="dialog-content"] {
+  background-color: hsl(var(--background));
+}
