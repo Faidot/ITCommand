@@ -14,15 +14,17 @@
  * was not — "send me the accounts page" meant "open the hub and click".
  */
 
+import { useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { CreditCard, Globe, KeyRound, LayoutDashboard, Plus, Server } from "lucide-react";
+import { CreditCard, Globe, KeyRound, LayoutDashboard, Plus, Server, Upload } from "lucide-react";
 
 import { can } from "@/lib/permissions";
 import { useAuthStore } from "@/store/authStore";
 import { Button } from "@/components/ui/button";
 
 import { AddServiceProvider, useAddServiceDialog } from "./add-service-context";
+import { EstateImportDialog } from "./import-dialog";
 
 const TABS = [
   { href: "/estate/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -65,7 +67,11 @@ function SubNav() {
 function EstateShell({ children }: { children: React.ReactNode }) {
   const user = useAuthStore((state) => state.user);
   const canAdd = can(user, "estate", "add");
-  const { open: openAddService } = useAddServiceDialog();
+  // Bulk import is admin-only on the API, so the button follows the same rule
+  // rather than offering something that will answer 403.
+  const canImport = user?.role === "ADMIN" || user?.role === "SUPERADMIN";
+  const { open: openAddService, bump } = useAddServiceDialog();
+  const [importing, setImporting] = useState(false);
 
   return (
     <div className="space-y-4">
@@ -78,6 +84,11 @@ function EstateShell({ children }: { children: React.ReactNode }) {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {canImport && (
+            <Button variant="outline" size="sm" onClick={() => setImporting(true)}>
+              <Upload className="mr-2 h-4 w-4" /> Bulk import
+            </Button>
+          )}
           {canAdd && (
             <Button size="sm" onClick={() => openAddService()}>
               <Plus className="mr-2 h-4 w-4" /> Add service
@@ -88,6 +99,12 @@ function EstateShell({ children }: { children: React.ReactNode }) {
 
       <SubNav />
       {children}
+
+      <EstateImportDialog
+        open={importing}
+        onOpenChange={setImporting}
+        onImported={bump}
+      />
     </div>
   );
 }

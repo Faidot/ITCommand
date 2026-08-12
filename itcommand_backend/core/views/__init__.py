@@ -13,5 +13,6 @@ from .network import *
 from .kb import *
 from .estate import *
 from .payments import *
+from .estate_import import *
 from .calendar import *
 from .discovery import *

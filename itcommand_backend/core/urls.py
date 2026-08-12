@@ -31,6 +31,7 @@ from .views import (
     KBCategoryViewSet, KBTagViewSet, KBArticleViewSet, KBDashboardView, KBSuggestView,
     ProviderViewSet, ProviderAccountViewSet, PropertyViewSet, ServiceViewSet,
     PaymentCardViewSet, ServicePaymentViewSet, CardAccountViewSet,
+    EstateImportOptionsView, EstateImportTemplateView, EstateImportValidateView, EstateImportCommitView,
     EstateDashboardView, EstateOverviewView, EstateGapsView, EstateSettingsView, ExchangeRateViewSet,
 )
 from .reports import (
@@ -173,6 +174,11 @@ urlpatterns = [
     path('estate/overview/', EstateOverviewView.as_view(), name='estate_overview'),
     path('estate/gaps/', EstateGapsView.as_view(), name='estate_gaps'),
     path('estate/settings/', EstateSettingsView.as_view(), name='estate_settings'),
+    # Bulk import: options, blank template, dry-run validation, then commit.
+    path('estate/import/options/', EstateImportOptionsView.as_view(), name='estate_import_options'),
+    path('estate/import/template/', EstateImportTemplateView.as_view(), name='estate_import_template'),
+    path('estate/import/validate/', EstateImportValidateView.as_view(), name='estate_import_validate'),
+    path('estate/import/commit/', EstateImportCommitView.as_view(), name='estate_import_commit'),
     # KB
     path('kb/dashboard/', KBDashboardView.as_view(), name='kb_dashboard'),
     path('kb/suggest/', KBSuggestView.as_view(), name='kb_suggest'),
