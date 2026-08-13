@@ -933,7 +933,9 @@ def layer_catalog(settings=None):
     """
     settings = settings or estate_settings()
     tracked = tracked_layers(settings)
-    remainder = [code for code in estate.SERVICE_TYPE_CODES if code not in tracked]
+    # The admin-extended set, not the frozen tuple: a type added in Settings
+    # has to be selectable when adding a service, or adding it did nothing.
+    remainder = [code for code in estate.service_type_codes() if code not in tracked]
     return [
         {
             "layer": code,

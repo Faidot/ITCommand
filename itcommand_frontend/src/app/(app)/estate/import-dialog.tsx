@@ -38,6 +38,8 @@ interface Resource {
   key: string;
   label: string;
   notes: string;
+  /** Record types this sheet may bring into existence as a side effect. */
+  creates: string[];
   columns: ColumnInfo[];
 }
 
@@ -50,6 +52,8 @@ interface RowReport {
 
 interface Report {
   sheet_errors: string[];
+  /** Exactly what a master sheet will create, deduplicated across rows. */
+  will_create: string[];
   rows: RowReport[];
   total: number;
   valid: number;
@@ -70,7 +74,7 @@ export function EstateImportDialog({
   open,
   onOpenChange,
   onImported,
-  defaultResource = "services",
+  defaultResource = "master",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -193,6 +197,14 @@ export function EstateImportDialog({
             {active?.notes && (
               <p className="text-xs text-muted-foreground">{active.notes}</p>
             )}
+            {active?.creates?.length ? (
+              <p className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                Creates missing {active.creates.join(", ").toLowerCase()} as it goes.
+                Check the list before importing — a misspelled name makes a new
+                record rather than matching the existing one.
+              </p>
+            ) : null}
             {active && (
               <div className="flex flex-wrap gap-1 pt-1">
                 {active.columns.map((c) => (
@@ -287,6 +299,22 @@ export function EstateImportDialog({
                     ))}
                   </div>
                 </ScrollArea>
+              )}
+
+              {report.will_create.length > 0 && (
+                <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 dark:border-amber-900 dark:bg-amber-950/30">
+                  <p className="mb-1.5 text-xs font-semibold text-amber-900 dark:text-amber-200">
+                    Will also create {report.will_create.length} new record
+                    {report.will_create.length === 1 ? "" : "s"}
+                  </p>
+                  <div className="flex flex-wrap gap-1">
+                    {report.will_create.map((item) => (
+                      <Badge key={item} variant="outline" className="font-normal">
+                        {item}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
               )}
 
               {report.can_commit ? (

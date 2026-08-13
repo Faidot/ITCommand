@@ -27,6 +27,7 @@ import {
 import { toast } from "sonner";
 
 import api from "@/lib/api";
+import { EstateTypesPanel } from "./estate-types-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -742,6 +743,10 @@ export function DigitalEstateTab({ role }: { role?: string }) {
           {new Date(settings.updated_at).toLocaleDateString()}
         </p>
       )}
+
+      {/* Adding a type is an estate question, so it is answered here rather
+          than only under List of Values, where nobody thinks to look. */}
+      <EstateTypesPanel />
     </div>
   );
 }

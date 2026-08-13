@@ -342,3 +342,176 @@ class UploadGuardTests(TestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertFalse(response.data["can_commit"])
         self.assertIn("could not be read", str(response.data["sheet_errors"]))
+
+
+class MasterSheetTests(TestCase):
+    """One row that creates its own provider, account and property."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.client.force_authenticate(create_user("master@example.invalid", "ADMIN"))
+        self.owner = create_user("ops-owner@example.invalid", create_role("M_OWNER", view=True).slug)
+
+    def rows(self, **over):
+        row = {
+            "provider": "Cloudflare", "email": "ops@example.invalid", "type": "DNS",
+            "identifier": "terafort.com DNS", "property": "terafort.com",
+            "kind": "INFRA", "status": "ACTIVE", "renewal": "2027-01-31",
+            "auto": "Yes", "cost": "1200", "currency": "PKR", "cycle": "YEARLY",
+            "owner": "ops-owner@example.invalid", "mfa": "APP",
+            "console": "", "notes": "",
+        }
+        row.update(over)
+        return [list(row.values())]
+
+    def post(self, url_name, rows):
+        return self.client.post(
+            reverse(url_name),
+            {"resource": "master", "file": sheet("master", rows)},
+            format="multipart",
+        )
+
+    def test_one_row_creates_the_whole_chain(self):
+        """The point of the master sheet: a blank system in one upload."""
+        response = self.post("estate_import_commit", self.rows())
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+
+        provider = Provider.objects.get(name="Cloudflare")
+        account = ProviderAccount.objects.get(account_email="ops@example.invalid")
+        prop = Property.objects.get(name="terafort.com")
+        service = Service.objects.get()
+
+        self.assertEqual(account.provider, provider)
+        self.assertEqual(account.owner, self.owner)
+        self.assertEqual(account.mfa_type, "APP")
+        self.assertEqual(service.provider_account, account)
+        self.assertEqual(service.property, prop)
+        self.assertEqual(prop.kind, "INFRA")
+        self.assertEqual(service.cost, Decimal("1200"))
+
+    def test_validation_says_what_it_will_create_before_writing(self):
+        """A misspelled provider silently making a second one is the hazard."""
+        response = self.post("estate_import_validate", self.rows())
+
+        self.assertTrue(response.data["can_commit"])
+        blob = str(response.data["will_create"])
+        self.assertIn("Cloudflare", blob)
+        self.assertIn("ops@example.invalid", blob)
+        self.assertIn("terafort.com", blob)
+        self.assertEqual(Provider.objects.count(), 0, "validation must not write")
+
+    def test_repeated_names_in_one_sheet_create_one_record_each(self):
+        rows = self.rows() + self.rows(identifier="terafort.com CDN", type="CDN")
+        check = self.post("estate_import_validate", rows)
+        # One provider, one account, one property — not two of each.
+        self.assertEqual(len(check.data["will_create"]), 3, check.data["will_create"])
+
+        self.post("estate_import_commit", rows)
+        self.assertEqual(Provider.objects.count(), 1)
+        self.assertEqual(ProviderAccount.objects.count(), 1)
+        self.assertEqual(Property.objects.count(), 1)
+        self.assertEqual(Service.objects.count(), 2)
+
+    def test_an_existing_provider_is_reused_case_insensitively(self):
+        Provider.objects.create(name="Cloudflare", slug="cloudflare")
+        self.post("estate_import_commit", self.rows(provider="cloudflare"))
+        self.assertEqual(Provider.objects.count(), 1)
+
+    def test_nothing_is_created_when_a_row_fails(self):
+        rows = self.rows() + self.rows(identifier="second", type="NOT_A_TYPE")
+        response = self.post("estate_import_commit", rows)
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Provider.objects.count(), 0, "no half-built chain")
+        self.assertEqual(ProviderAccount.objects.count(), 0)
+        self.assertEqual(Service.objects.count(), 0)
+
+    def test_a_blank_property_leaves_the_service_orphaned(self):
+        self.post("estate_import_commit", self.rows(property="", kind=""))
+        self.assertEqual(Property.objects.count(), 0)
+        self.assertIsNone(Service.objects.get().property)
+
+    def test_reimporting_updates_the_service_and_creates_nothing_new(self):
+        self.post("estate_import_commit", self.rows())
+        self.post("estate_import_commit", self.rows(cost="1500"))
+
+        self.assertEqual(Provider.objects.count(), 1)
+        self.assertEqual(Service.objects.count(), 1)
+        self.assertEqual(Service.objects.get().cost, Decimal("1500"))
+
+
+class ExtensibleTypeTests(TestCase):
+    """A type added in Settings has to work everywhere, or adding it did nothing."""
+
+    def setUp(self):
+        self.client = APIClient()
+        self.client.force_authenticate(create_user("types@example.invalid", "ADMIN"))
+
+    def add_type(self, code, label):
+        from core.models import ListOfValues
+
+        return ListOfValues.objects.create(
+            group="subscription_category", code=code, label=label, is_active=True
+        )
+
+    def test_a_custom_service_type_becomes_selectable(self):
+        self.add_type("PODCAST", "Podcast hosting")
+        from core import estate
+
+        self.assertIn("PODCAST", estate.service_type_codes())
+        self.assertEqual(estate.service_type_label("PODCAST"), "Podcast hosting")
+
+    def test_a_custom_type_passes_model_validation(self):
+        """Choices are a callable, so this works without a migration."""
+        self.add_type("PODCAST", "Podcast hosting")
+        provider = Provider.objects.create(name="Acme", slug="acme")
+        account = ProviderAccount.objects.create(provider=provider, account_email="a@example.invalid")
+
+        service = Service(
+            service_type="PODCAST", identifier="Show", provider=provider,
+            provider_account=account, cost=0, billing_cycle="MONTHLY",
+        )
+        service.full_clean()
+        service.save()
+        self.assertEqual(Service.objects.get().service_type, "PODCAST")
+
+    def test_the_importer_accepts_a_custom_type(self):
+        """It read the frozen tuple before, so a custom type was rejected."""
+        self.add_type("PODCAST", "Podcast hosting")
+        spec = estate_import.build_specs()["master"]
+        column = spec.column("Service type")
+        self.assertIn("PODCAST", [c for c, _ in column.choices])
+
+    def test_a_custom_type_never_counts_as_a_stack_gap(self):
+        """Only the seven built-in roles are stack positions."""
+        self.add_type("PODCAST", "Podcast hosting")
+        from core import estate
+
+        self.assertFalse(estate.is_stack_type("PODCAST"))
+
+
+    def test_adding_a_type_takes_effect_immediately(self):
+        """Cached for query count, so invalidation has to be wired up."""
+        from core import estate
+
+        estate.service_type_codes()  # warm the cache
+        self.add_type("NEWSLETTER", "Newsletter platform")
+        self.assertIn("NEWSLETTER", estate.service_type_codes())
+
+    def test_removing_a_type_takes_effect_immediately(self):
+        from core import estate
+
+        value = self.add_type("TEMPORARY", "Temporary")
+        self.assertIn("TEMPORARY", estate.service_type_codes())
+        value.delete()
+        self.assertNotIn("TEMPORARY", estate.service_type_codes())
+
+    def test_reading_types_does_not_query_per_call(self):
+        """This is what turned a 10-query endpoint into 1380."""
+        from core import estate
+
+        self.add_type("PODCAST", "Podcast hosting")
+        estate.service_type_codes()  # warm
+        with self.assertNumQueries(0):
+            for _ in range(50):
+                estate.service_type_codes()

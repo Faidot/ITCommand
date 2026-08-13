@@ -69,6 +69,7 @@ def _report(results, sheet_errors):
             "row": r.row,
             "action": r.action,
             "errors": r.errors,
+            "plan_new": r.plan_new,
             # A short human summary of the row, so the report is readable
             # without cross-referencing the spreadsheet.
             "summary": " · ".join(
@@ -79,8 +80,17 @@ def _report(results, sheet_errors):
         for r in results
     ]
     bad = [r for r in results if r.errors]
+    # Deduplicated across the sheet: twenty services at one new provider is
+    # one provider to create, and saying so twenty times would bury the point.
+    will_create = []
+    for r in results:
+        for item in r.plan_new:
+            if item not in will_create:
+                will_create.append(item)
+
     return {
         "sheet_errors": sheet_errors,
+        "will_create": will_create,
         "rows": rows,
         "total": len(results),
         "valid": len(results) - len(bad),
@@ -104,6 +114,7 @@ class EstateImportOptionsView(APIView):
                     "key": s.key,
                     "label": s.label,
                     "notes": s.notes,
+                    "creates": list(s.creates),
                     "columns": [
                         {
                             "name": c.name,

@@ -62,6 +62,9 @@ class ImportSpec:
     #: another. Receives (values dict) and may raise ValueError.
     finalise: Callable | None = None
     notes: str = ""
+    #: Record types this sheet may create as a side effect, named in the UI so
+    #: the consequence of a typo is visible before committing.
+    creates: tuple = ()
 
     def column(self, name):
         for c in self.columns:
@@ -185,7 +188,7 @@ def find_department(raw, column):
 
 def build_specs():
     """Built lazily so model imports stay out of module import time."""
-    kinds = tuple(estate.PROPERTY_KINDS)
+    kinds = tuple(estate.property_kind_choices())
 
     properties = ImportSpec(
         key="properties",
@@ -261,8 +264,8 @@ def build_specs():
             Column("Account email", "Which login at that provider pays for it.",
                    required=True, example="ops@example.com"),
             Column("Service type", "Its role in the stack.", required=True,
-                   choices=estate.SERVICE_TYPES, example="DNS",
-                   resolve=lambda raw, col: as_choice(raw, col, estate.SERVICE_TYPES)),
+                   choices=tuple(estate.service_type_choices()), example="DNS",
+                   resolve=lambda raw, col: as_choice(raw, col, estate.service_type_choices())),
             Column("Identifier", "What it is called on the invoice or console.",
                    required=True, example="terafort.com DNS"),
             Column("Property", "What it keeps running. Blank means orphaned.",
@@ -287,7 +290,70 @@ def build_specs():
         finalise=_derive_provider,
     )
 
-    return {s.key: s for s in (properties, accounts, services)}
+    # ── the master sheet ────────────────────────────────────────────────
+    #
+    # The three sheets above each require their dependencies to exist first:
+    # you cannot import a service until its account exists, and not that until
+    # its provider does. For an estate being entered from scratch that means
+    # three passes in a fixed order, and knowing that order.
+    #
+    # This one takes a whole service in a single row and creates whatever is
+    # missing beneath it. The cost is that a typo in a provider name silently
+    # creates a second provider, so the validation report says exactly what it
+    # is about to create *before* anything is written — see `plan_new` below.
+
+    master = ImportSpec(
+        key="master",
+        label="Master sheet (creates everything)",
+        model_path="core.Service",
+        match_on=("provider_account", "identifier"),
+        creates=("Provider", "Provider account", "Property"),
+        notes=(
+            "One row per service. Providers, accounts and properties named "
+            "here are created if they do not exist yet, so an estate can be "
+            "entered from a blank system in one upload. Check the 'will "
+            "create' list before importing — a misspelled provider makes a "
+            "second provider rather than matching the first."
+        ),
+        columns=[
+            Column("Provider", "Created if it does not exist.", required=True,
+                   example="Cloudflare"),
+            Column("Account email", "The login that pays. Created under the "
+                   "provider if new.", required=True, example="ops@example.com"),
+            Column("Service type", "Its role in the stack.", required=True,
+                   choices=tuple(estate.service_type_choices()), example="DNS",
+                   resolve=lambda raw, col: as_choice(raw, col, estate.service_type_choices())),
+            Column("Identifier", "What it is called on the invoice or console.",
+                   required=True, example="terafort.com DNS"),
+            Column("Property", "Created if new. Blank leaves the service orphaned.",
+                   example="terafort.com"),
+            Column("Property kind", "Only used when the property is created.",
+                   choices=kinds, example=kinds[0][0] if kinds else "",
+                   resolve=lambda raw, col: as_choice(raw, col, kinds)),
+            Column("Status", "Current state.", choices=estate.SERVICE_STATUSES,
+                   example="ACTIVE",
+                   resolve=lambda raw, col: as_choice(raw, col, estate.SERVICE_STATUSES)),
+            Column("Renewal date", "YYYY-MM-DD. Blank if it does not renew.",
+                   example="2027-01-31", resolve=as_date),
+            Column("Auto renew", "Yes or No.", example="Yes", resolve=as_bool),
+            Column("Cost", "Per billing cycle. Numbers only.", example="1200",
+                   resolve=as_decimal),
+            Column("Currency", "Three-letter code.", example="PKR"),
+            Column("Billing cycle", "How often it is charged.",
+                   choices=estate.BILLING_CYCLES, example="YEARLY",
+                   resolve=lambda raw, col: as_choice(raw, col, estate.BILLING_CYCLES)),
+            Column("Account owner email", "Only used when the account is "
+                   "created. Must match an existing user.",
+                   example="sam@example.com", resolve=find_user),
+            Column("MFA type", "Only used when the account is created.",
+                   choices=estate.MFA_TYPES, example="APP",
+                   resolve=lambda raw, col: as_choice(raw, col, estate.MFA_TYPES)),
+            Column("Console URL", "Where the service is managed.", example=""),
+            Column("Notes", "Free text.", example=""),
+        ],
+    )
+
+    return {s.key: s for s in (master, properties, accounts, services)}
 
 
 #: Column name -> model field. Kept apart from the spec so the sheet can be
@@ -301,6 +367,13 @@ FIELD_MAP = {
         "Provider": "provider", "Account email": "account_email",
         "Auth type": "auth_type", "MFA type": "mfa_type", "Owner email": "owner",
         "Console URL": "console_url", "Active": "is_active", "Notes": "notes",
+    },
+    "master": {
+        "Service type": "service_type", "Identifier": "identifier",
+        "Status": "status", "Renewal date": "renewal_date",
+        "Auto renew": "auto_renew", "Cost": "cost", "Currency": "currency",
+        "Billing cycle": "billing_cycle", "Console URL": "console_url",
+        "Notes": "notes",
     },
     "services": {
         "Service type": "service_type", "Identifier": "identifier",
@@ -390,6 +463,11 @@ class RowResult:
     values: dict = field(default_factory=dict)
     errors: list = field(default_factory=list)
     action: str = "create"  # or "update"
+    #: Human descriptions of records this row will bring into existence, e.g.
+    #: ["Provider 'Cloudflare'"]. Shown before committing, because a
+    #: misspelled name silently creating a second provider is the one real
+    #: hazard of a sheet that creates its own dependencies.
+    plan_new: list = field(default_factory=list)
 
 
 #: Row 1 headers, 2 guidance, 3 example. Data starts at 4 — but a sheet where
@@ -481,9 +559,80 @@ def read_rows(file_obj, spec, limit=2000):
         results.append(result)
 
     _resolve_service_accounts(spec, results)
+    _resolve_master(spec, results)
     _mark_duplicates(spec, results, seen_keys)
-    _mark_existing(spec, results)
+    if spec.key != "master":
+        _mark_existing(spec, results)
     return results, []
+
+
+def _resolve_master(spec, results):
+    """Work out, per row, what already exists and what will be created.
+
+    Nothing is written here — validation must stay side-effect free. Each row
+    records the objects it *would* create so the report can show them, and
+    keeps the raw text for `commit` to act on.
+
+    Names seen earlier in the same sheet count as existing, so twenty services
+    at one provider plan one provider, not twenty.
+    """
+    if spec.key != "master":
+        return
+    from core.models import Property, Provider, ProviderAccount
+
+    planned_providers = set()
+    planned_properties = set()
+    planned_accounts = set()
+
+    for result in results:
+        provider_raw = str(result.values.pop("_Provider", "") or "").strip()
+        email_raw = str(result.values.pop("_Account email", "") or "").strip()
+        property_raw = str(result.values.pop("_Property", "") or "").strip()
+        kind = result.values.pop("_Property kind", "") or "OTHER"
+        owner = result.values.pop("_Account owner email", None)
+        mfa = result.values.pop("_MFA type", "") or ""
+
+        if result.errors:
+            continue
+
+        result.values["_new"] = {
+            "provider": provider_raw, "email": email_raw,
+            "property": property_raw, "kind": kind,
+            "owner": owner, "mfa": mfa,
+        }
+
+        provider = (
+            Provider.objects.filter(name__iexact=provider_raw).first()
+            or Provider.objects.filter(slug__iexact=provider_raw).first()
+        )
+        if not provider and provider_raw.lower() not in planned_providers:
+            planned_providers.add(provider_raw.lower())
+            result.plan_new.append(f"Provider “{provider_raw}”")
+
+        account_key = (provider_raw.lower(), email_raw.lower())
+        account = None
+        if provider:
+            account = ProviderAccount.objects.filter(
+                provider=provider, account_email__iexact=email_raw
+            ).first()
+        if not account and account_key not in planned_accounts:
+            planned_accounts.add(account_key)
+            result.plan_new.append(f"Account “{email_raw}” at {provider_raw}")
+
+        if property_raw:
+            existing = Property.objects.filter(name__iexact=property_raw).first()
+            if not existing and property_raw.lower() not in planned_properties:
+                planned_properties.add(property_raw.lower())
+                result.plan_new.append(f"Property “{property_raw}”")
+
+        # A row is an update only when the exact service already exists.
+        if account:
+            match = __import__("django.apps", fromlist=["apps"]).apps.get_model(
+                "core.Service"
+            ).objects.filter(
+                provider_account=account, identifier=result.values.get("identifier")
+            ).exists()
+            result.action = "update" if match else "create"
 
 
 def _resolve_service_accounts(spec, results):
@@ -581,6 +730,9 @@ def commit(spec, results):
     if any(r.errors for r in results):
         raise ValueError("Refusing to import a sheet that has errors.")
 
+    if spec.key == "master":
+        return _commit_master(results)
+
     model = apps.get_model(spec.model_path)
     created = updated = 0
 
@@ -598,6 +750,84 @@ def commit(spec, results):
             obj = model(**{**lookup, **values})
             obj.full_clean()
             obj.save()
+            created += 1
+
+    return created, updated
+
+
+def _commit_master(results):
+    """Create the provider, account and property a row needs, then the service.
+
+    Called from inside `commit`, so it is already in that transaction: a row
+    that fails halfway does not leave a provider and an account behind with no
+    service attached.
+
+    get_or_create on a case-insensitive lookup rather than a bare create, so
+    "Cloudflare" and "cloudflare" in the same sheet resolve to one provider.
+    """
+    from django.utils.text import slugify
+
+    from core.models import Property, Provider, ProviderAccount, Service
+
+    created = updated = 0
+
+    for result in results:
+        plan = result.values.pop("_new", {})
+        values = dict(result.values)
+
+        provider_name = plan.get("provider", "")
+        provider = (
+            Provider.objects.filter(name__iexact=provider_name).first()
+            or Provider.objects.filter(slug__iexact=provider_name).first()
+        )
+        if not provider:
+            base = slugify(provider_name)[:60] or "provider"
+            slug = base
+            # Two different names can slugify the same; the slug is unique.
+            suffix = 2
+            while Provider.objects.filter(slug=slug).exists():
+                slug = f"{base[:56]}-{suffix}"
+                suffix += 1
+            provider = Provider.objects.create(name=provider_name, slug=slug)
+
+        email = plan.get("email", "")
+        account = ProviderAccount.objects.filter(
+            provider=provider, account_email__iexact=email
+        ).first()
+        if not account:
+            account = ProviderAccount.objects.create(
+                provider=provider,
+                account_email=email,
+                owner=plan.get("owner"),
+                mfa_type=plan.get("mfa") or "UNKNOWN",
+            )
+
+        property_name = plan.get("property", "")
+        prop = None
+        if property_name:
+            prop = Property.objects.filter(name__iexact=property_name).first()
+            if not prop:
+                prop = Property.objects.create(
+                    name=property_name, kind=plan.get("kind") or "OTHER"
+                )
+
+        service = Service.objects.filter(
+            provider_account=account, identifier=values.get("identifier")
+        ).first()
+        payload = {**values, "provider": provider, "provider_account": account}
+        if prop is not None:
+            payload["property"] = prop
+
+        if service:
+            for key, value in payload.items():
+                setattr(service, key, value)
+            service.full_clean()
+            service.save()
+            updated += 1
+        else:
+            service = Service(**payload)
+            service.full_clean()
+            service.save()
             created += 1
 
     return created, updated
