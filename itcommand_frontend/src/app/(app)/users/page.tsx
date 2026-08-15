@@ -21,6 +21,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
 import { useAuthStore } from "@/store/authStore";
 
 import { Button } from "@/components/ui/button";
@@ -305,8 +306,13 @@ export default function UsersPage() {
     }
   };
 
-  const copyToClipboard = () => {
-    navigator.clipboard.writeText(generatedPassword);
+  const copyToClipboard = async () => {
+    if (!(await copyText(generatedPassword))) {
+      // The password is on screen, so there is still a way forward — but the
+      // tick must not appear for a copy that did not happen.
+      toast.error("Could not copy. Select the password above and copy it by hand.");
+      return;
+    }
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -695,7 +701,7 @@ export default function UsersPage() {
           </DialogHeader>
           <div className="flex items-center space-x-2 mt-4 bg-neutral-100 dark:bg-neutral-900 p-3 rounded-lg border border-neutral-200 dark:border-neutral-800">
             <code className="flex-1 text-sm font-mono tracking-wider">{generatedPassword}</code>
-            <Button size="icon" variant="ghost" onClick={copyToClipboard}>
+            <Button size="icon" variant="ghost" onClick={() => void copyToClipboard()}>
               {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
             </Button>
           </div>

@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { Download, MonitorSmartphone, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
+import { downloadBlob } from "@/lib/download";
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, PieChart, Pie, Cell } from "recharts";
 
 import { Button } from "@/components/ui/button";
@@ -32,13 +33,7 @@ export default function AssetReportsPage() {
   const handleExport = async () => {
     try {
       const res = await api.get('/reports/export/assets/?format=excel', { responseType: 'blob' });
-      const url = window.URL.createObjectURL(new Blob([res.data]));
-      const link = document.createElement('a');
-      link.href = url;
-      link.setAttribute('download', 'assets_export.xlsx');
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
+      downloadBlob(res.data as BlobPart, "assets_export.xlsx");
     } catch {
       toast.error("Export failed");
     }

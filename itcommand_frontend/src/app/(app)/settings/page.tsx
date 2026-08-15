@@ -33,6 +33,7 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
 import api from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
 import { AppearanceTab } from "./appearance-tab";
 import { ResetTab } from "./reset-tab";
 import { useAuthStore } from "@/store/authStore";
@@ -2396,9 +2397,9 @@ function CalendarTab() {
             <Input readOnly value={feed.url} className="flex-1 min-w-[16rem] font-mono text-xs" />
             <Button
               variant="outline"
-              onClick={() => {
-                void navigator.clipboard.writeText(feed.url);
-                toast.success("Link copied");
+              onClick={async () => {
+                if (await copyText(feed.url)) toast.success("Link copied");
+                else toast.error("Could not copy. Select the link and copy it by hand.");
               }}
             >
               <Copy className="mr-2 h-4 w-4" /> Copy

@@ -17,6 +17,7 @@ import {
 import { toast } from "sonner";
 
 import api from "@/lib/api";
+import { downloadBlob } from "@/lib/download";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -145,12 +146,7 @@ export function EstateImportDialog({
       const res = await api.get(`/estate/import/template/?resource=${resource}`, {
         responseType: "blob",
       });
-      const url = URL.createObjectURL(res.data as Blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `estate-${resource}-template.xlsx`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(res.data as Blob, `estate-${resource}-template.xlsx`);
     } catch (reason) {
       toast.error(errorText(reason, "Could not build that template."));
     } finally {
