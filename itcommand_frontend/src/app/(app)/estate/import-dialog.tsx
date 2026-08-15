@@ -40,7 +40,9 @@ interface Resource {
   notes: string;
   /** Record types this sheet may bring into existence as a side effect. */
   creates: string[];
-  columns: ColumnInfo[];
+  columns?: ColumnInfo[];
+  /** Set on the workbook: one entry per tab, in the order they are filled in. */
+  tabs?: Resource[];
 }
 
 interface RowReport {
@@ -48,6 +50,16 @@ interface RowReport {
   action: "create" | "update";
   errors: string[];
   summary: string;
+}
+
+interface TabReport {
+  key: string;
+  label: string;
+  rows: RowReport[];
+  total: number;
+  invalid: number;
+  to_create: number;
+  to_update: number;
 }
 
 interface Report {
@@ -63,6 +75,26 @@ interface Report {
   can_commit: boolean;
   created?: number;
   updated?: number;
+  /** Present when the workbook was uploaded: the same report, per tab. */
+  workbook?: boolean;
+  tabs?: TabReport[];
+}
+
+function Columns({ columns }: { columns: ColumnInfo[] }) {
+  return (
+    <div className="flex flex-wrap gap-1">
+      {columns.map((c) => (
+        <Badge
+          key={c.name}
+          variant="outline"
+          title={c.choices.length ? `${c.help}\nDropdown: ${c.choices.join(", ")}` : c.help}
+          className={c.required ? "border-primary/50 text-primary" : "text-muted-foreground"}
+        >
+          {c.name}{c.required ? " *" : ""}
+        </Badge>
+      ))}
+    </div>
+  );
 }
 
 function errorText(reason: unknown, fallback: string): string {
@@ -74,7 +106,7 @@ export function EstateImportDialog({
   open,
   onOpenChange,
   onImported,
-  defaultResource = "master",
+  defaultResource = "workbook",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -92,8 +124,10 @@ export function EstateImportDialog({
 
   useEffect(() => {
     if (!open) return;
-    api.get<{ resources: Resource[] }>("/estate/import/options/")
-      .then((r) => setResources(r.data.resources))
+    api.get<{ workbook?: Resource; resources: Resource[] }>("/estate/import/options/")
+      // The workbook first: it is the one that does not make you work out
+      // which sheet to upload before which.
+      .then((r) => setResources([...(r.data.workbook ? [r.data.workbook] : []), ...r.data.resources]))
       .catch(() => toast.error("Only an admin can bulk import."));
   }, [open]);
 
@@ -144,7 +178,7 @@ export function EstateImportDialog({
       const data = (reason as { response?: { data?: Report } })?.response?.data;
       // A rejected commit still carries the row report — showing it beats a
       // toast that says "it failed" and nothing about which row.
-      if (data?.rows) setReport(data);
+      if (data?.rows || data?.tabs) setReport(data);
       toast.error(errorText(reason, "That sheet could not be imported."));
     } finally {
       setBusy("");
@@ -165,8 +199,10 @@ export function EstateImportDialog({
             <FileSpreadsheet className="h-5 w-5" /> Bulk import
           </DialogTitle>
           <DialogDescription>
-            Download the template, fill it in, then upload it. Nothing is saved
-            until the whole sheet passes — one bad row stops all of it.
+            Download the template, fill it in, then upload it. The cells have
+            dropdowns and date pickers, so most columns are picked rather than
+            typed. Nothing is saved until every row passes — one bad row stops
+            all of it.
           </DialogDescription>
         </DialogHeader>
 
@@ -178,7 +214,7 @@ export function EstateImportDialog({
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <Select value={resource} onValueChange={pick}>
-                <SelectTrigger className="w-[220px]">
+                <SelectTrigger className="w-[260px]">
                   <SelectValue placeholder="Choose" />
                 </SelectTrigger>
                 <SelectContent>
@@ -205,20 +241,19 @@ export function EstateImportDialog({
                 record rather than matching the existing one.
               </p>
             ) : null}
-            {active && (
-              <div className="flex flex-wrap gap-1 pt-1">
-                {active.columns.map((c) => (
-                  <Badge
-                    key={c.name}
-                    variant="outline"
-                    title={c.help}
-                    className={c.required ? "border-primary/50 text-primary" : "text-muted-foreground"}
-                  >
-                    {c.name}{c.required ? " *" : ""}
-                  </Badge>
-                ))}
-              </div>
-            )}
+            {active?.tabs?.length
+              ? active.tabs.map((tab) => (
+                  <div key={tab.key} className="pt-1">
+                    <p className="mb-1 text-xs font-medium">
+                      {tab.label} tab
+                      <span className="ml-1.5 font-normal text-muted-foreground">
+                        {tab.notes}
+                      </span>
+                    </p>
+                    <Columns columns={tab.columns ?? []} />
+                  </div>
+                ))
+              : active && <div className="pt-1"><Columns columns={active.columns ?? []} /></div>}
           </div>
 
           {/* 2 — upload */}
@@ -283,13 +318,39 @@ export function EstateImportDialog({
                 </div>
               )}
 
+              {report.tabs?.length ? (
+                <div className="flex flex-wrap gap-2 text-xs">
+                  {report.tabs.map((tab) => (
+                    <Badge
+                      key={tab.key}
+                      variant="outline"
+                      className={tab.invalid ? "border-red-300 text-red-700" : "text-muted-foreground"}
+                    >
+                      {tab.label}: {tab.total} row{tab.total === 1 ? "" : "s"}
+                      {tab.invalid > 0 && `, ${tab.invalid} with problems`}
+                    </Badge>
+                  ))}
+                </div>
+              ) : null}
+
               {report.invalid > 0 && (
                 <ScrollArea className="h-56 rounded-lg border">
                   <div className="divide-y">
-                    {report.rows.filter((r) => r.errors.length).map((r) => (
-                      <div key={r.row} className="p-2.5">
+                    {(report.tabs?.length
+                      ? report.tabs.flatMap((tab) =>
+                          tab.rows
+                            .filter((r) => r.errors.length)
+                            // The tab is named on every row: "row 12" is
+                            // ambiguous in a file with three sheets.
+                            .map((r) => ({ ...r, tab: tab.label })),
+                        )
+                      : report.rows
+                          .filter((r) => r.errors.length)
+                          .map((r) => ({ ...r, tab: "" }))
+                    ).map((r) => (
+                      <div key={`${r.tab}-${r.row}`} className="p-2.5">
                         <p className="text-xs font-semibold">
-                          Row {r.row}
+                          {r.tab ? `${r.tab} · row ${r.row}` : `Row ${r.row}`}
                           {r.summary && <span className="font-normal text-muted-foreground"> · {r.summary}</span>}
                         </p>
                         {r.errors.map((e, i) => (

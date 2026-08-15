@@ -65,6 +65,14 @@ class ImportSpec:
     #: Record types this sheet may create as a side effect, named in the UI so
     #: the consequence of a typo is visible before committing.
     creates: tuple = ()
+    #: Cross-row pass, after every row is coerced. Receives
+    #: (spec, results, context) and may add errors or `plan_new` entries.
+    #: `context` is shared by every sheet of one workbook, which is how the
+    #: Services tab knows about an account the Accounts tab has not written yet.
+    resolve_rows: Callable | None = None
+    #: Writer, for sheets that create their own dependencies. Receives
+    #: (results) and returns (created, updated). None uses the generic writer.
+    commit_rows: Callable | None = None
 
     def column(self, name):
         for c in self.columns:
@@ -288,6 +296,7 @@ def build_specs():
             Column("Notes", "Free text.", example=""),
         ],
         finalise=_derive_provider,
+        resolve_rows=_resolve_service_accounts,
     )
 
     # ── the master sheet ────────────────────────────────────────────────
@@ -351,9 +360,362 @@ def build_specs():
             Column("Console URL", "Where the service is managed.", example=""),
             Column("Notes", "Free text.", example=""),
         ],
+        resolve_rows=_resolve_master,
+        commit_rows=_commit_master,
     )
 
     return {s.key: s for s in (master, properties, accounts, services)}
+
+
+# ---------------------------------------------------------------------------
+# The workbook — one file, one tab per record type
+# ---------------------------------------------------------------------------
+#
+# The single sheets above each solve half the problem. The three separate ones
+# demand that you already have providers, accounts and properties, in that
+# order, across three uploads. The master sheet fixes the ordering but pays for
+# it by folding a whole account into every service row: enter twelve services
+# on one login and you type that login's owner and MFA twelve times, and the
+# twelve had better agree.
+#
+# This is the shape people actually want. Accounts are entered once, on the
+# Accounts tab, with their own columns. Services name the account that pays and
+# nothing more. One upload, imported in dependency order inside one
+# transaction.
+#
+# What makes it work is `context`: a dict passed to every tab's resolver in
+# order, carrying the names the earlier tabs are about to create. Without it
+# the Services tab would reject an account that is sitting three tabs to the
+# left, unwritten, and the whole point would be lost.
+
+#: Tab title -> spec key, in dependency order. Order is load-bearing twice:
+#: validation walks it so later tabs see earlier tabs' pending records, and
+#: commit walks it so a row's dependencies exist by the time it is written.
+WORKBOOK_TABS = (
+    ("Properties", "wb_properties"),
+    ("Accounts", "wb_accounts"),
+    ("Services", "wb_services"),
+)
+
+
+def _seen(context, bucket):
+    return context.setdefault(bucket, set())
+
+
+def _resolve_wb_properties(spec, results, context):
+    """Register property names, so the Services tab does not plan to create them."""
+    for result in results:
+        name = str(result.values.get("name", "") or "").strip()
+        if name:
+            _seen(context, "properties").add(name.lower())
+
+
+def _find_provider_cached(name, memo):
+    """Provider by name or slug, looked up once per name per pass.
+
+    Rows overwhelmingly share providers — twenty services on one Cloudflare
+    login — so without this a 2000-row workbook runs the same two queries two
+    thousand times to reach the same answer.
+    """
+    key = name.lower()
+    if key not in memo:
+        from core.models import Provider
+
+        memo[key] = (
+            Provider.objects.filter(name__iexact=name).first()
+            or Provider.objects.filter(slug__iexact=name).first()
+        )
+    return memo[key]
+
+
+def _resolve_wb_accounts(spec, results, context):
+    """Resolve the raw provider name, and record the account for later tabs."""
+    from core.models import ProviderAccount
+
+    memo = {}
+    for result in results:
+        provider_raw = str(result.values.pop("_Provider", "") or "").strip()
+        email = str(result.values.get("account_email", "") or "").strip()
+        if result.errors:
+            continue
+
+        provider = _find_provider_cached(provider_raw, memo)
+        if not provider and provider_raw.lower() not in _seen(context, "providers"):
+            _seen(context, "providers").add(provider_raw.lower())
+            result.plan_new.append(f"Provider \u201c{provider_raw}\u201d")
+        elif provider:
+            _seen(context, "providers").add(provider_raw.lower())
+
+        key = (provider_raw.lower(), email.lower())
+        _seen(context, "accounts").add(key)
+        # Kept as text: the provider may not exist yet, so there is nothing to
+        # point a foreign key at until commit.
+        result.values["_provider_name"] = provider_raw
+        result.values["_account_key"] = f"{key[0]}|{key[1]}"
+
+        existing = (
+            ProviderAccount.objects.filter(
+                provider=provider, account_email__iexact=email
+            ).first()
+            if provider
+            else None
+        )
+        result.action = "update" if existing else "create"
+
+
+def _resolve_wb_services(spec, results, context):
+    """Point each service at its account — existing, or pending on the Accounts tab."""
+    from core.models import Property, ProviderAccount, Service
+
+    memo = {}
+    for result in results:
+        provider_raw = str(result.values.pop("_Provider", "") or "").strip()
+        email = str(result.values.pop("_Account email", "") or "").strip()
+        property_raw = str(result.values.pop("_Property", "") or "").strip()
+        if result.errors:
+            continue
+
+        key = (provider_raw.lower(), email.lower())
+        provider = _find_provider_cached(provider_raw, memo)
+        account = (
+            ProviderAccount.objects.filter(
+                provider=provider, account_email__iexact=email
+            ).first()
+            if provider
+            else None
+        )
+        if account is None and key not in _seen(context, "accounts"):
+            # Deliberately an error rather than a silent create. This tab has
+            # no owner or MFA columns, so inventing the account here would
+            # quietly produce a login nobody is recorded as holding — and the
+            # far likelier cause is a misspelling of a row on the Accounts tab.
+            result.errors.append(
+                f"Account email: no account {email!r} at {provider_raw!r}. "
+                "Add it on the Accounts tab, or fix the spelling."
+            )
+            continue
+
+        if property_raw:
+            prop = Property.objects.filter(name__iexact=property_raw).first()
+            if not prop and property_raw.lower() not in _seen(context, "properties"):
+                _seen(context, "properties").add(property_raw.lower())
+                result.plan_new.append(f"Property \u201c{property_raw}\u201d")
+
+        result.values["_new"] = {
+            "provider": provider_raw, "email": email, "property": property_raw,
+        }
+        result.values["_account_key"] = f"{key[0]}|{key[1]}"
+
+        if account is not None:
+            result.action = (
+                "update"
+                if Service.objects.filter(
+                    provider_account=account, identifier=result.values.get("identifier")
+                ).exists()
+                else "create"
+            )
+
+
+def _get_or_create_provider(name):
+    """One provider per name, case-insensitively. Shared by both writers."""
+    from django.utils.text import slugify
+
+    from core.models import Provider
+
+    provider = (
+        Provider.objects.filter(name__iexact=name).first()
+        or Provider.objects.filter(slug__iexact=name).first()
+    )
+    if provider:
+        return provider
+    base = slugify(name)[:60] or "provider"
+    slug, suffix = base, 2
+    while Provider.objects.filter(slug=slug).exists():
+        slug = f"{base[:56]}-{suffix}"
+        suffix += 1
+    return Provider.objects.create(name=name, slug=slug)
+
+
+def _commit_wb_accounts(results):
+    from core.models import ProviderAccount
+
+    created = updated = 0
+    for result in results:
+        values = dict(result.values)
+        provider_name = values.pop("_provider_name", "")
+        values.pop("_account_key", None)
+        provider = _get_or_create_provider(provider_name)
+        email = values.pop("account_email", "")
+
+        account = ProviderAccount.objects.filter(
+            provider=provider, account_email__iexact=email
+        ).first()
+        if account:
+            for k, v in values.items():
+                setattr(account, k, v)
+            account.full_clean()
+            account.save()
+            updated += 1
+        else:
+            account = ProviderAccount(provider=provider, account_email=email, **values)
+            account.full_clean()
+            account.save()
+            created += 1
+    return created, updated
+
+
+def _commit_wb_services(results):
+    from core.models import Property, ProviderAccount, Service
+
+    created = updated = 0
+    for result in results:
+        values = dict(result.values)
+        plan = values.pop("_new", {})
+        values.pop("_account_key", None)
+
+        provider = _get_or_create_provider(plan.get("provider", ""))
+        email = plan.get("email", "")
+        account = ProviderAccount.objects.filter(
+            provider=provider, account_email__iexact=email
+        ).first()
+        if account is None:
+            # Only reachable if the Accounts tab row that promised this account
+            # was not committed. Refuse rather than invent a login.
+            raise ValueError(
+                f"Account {email!r} at {provider.name} was not created; "
+                "nothing was imported."
+            )
+
+        property_name = plan.get("property", "")
+        prop = None
+        if property_name:
+            prop = Property.objects.filter(name__iexact=property_name).first()
+            if not prop:
+                prop = Property.objects.create(name=property_name, kind="OTHER")
+
+        payload = {**values, "provider": provider, "provider_account": account}
+        if prop is not None:
+            payload["property"] = prop
+
+        service = Service.objects.filter(
+            provider_account=account, identifier=values.get("identifier")
+        ).first()
+        if service:
+            for k, v in payload.items():
+                setattr(service, k, v)
+            service.full_clean()
+            service.save()
+            updated += 1
+        else:
+            service = Service(**payload)
+            service.full_clean()
+            service.save()
+            created += 1
+    return created, updated
+
+
+def build_workbook_specs():
+    """The tabs of the workbook, keyed by spec key."""
+    kinds = tuple(estate.property_kind_choices())
+    types = tuple(estate.service_type_choices())
+
+    properties = ImportSpec(
+        key="wb_properties",
+        label="Properties",
+        model_path="core.Property",
+        match_on=("name",),
+        notes="Optional. A service can name a property that is not listed here — "
+              "it is created as 'Other'. Fill this tab in to set the kind and owner.",
+        columns=[
+            Column("Name", "Unique. Existing names are updated, not duplicated.",
+                   required=True, example="terafort.com"),
+            Column("Kind", "What sort of property this is.", required=True,
+                   choices=kinds, example=kinds[0][0] if kinds else "",
+                   resolve=lambda raw, col: as_choice(raw, col, kinds)),
+            Column("Owner email", "Must match an existing user.",
+                   example="sam@example.com", resolve=find_user),
+            Column("Department", "Must match an existing department name.",
+                   example="IT", resolve=find_department),
+            Column("Active", "Yes or No. Defaults to Yes.", example="Yes",
+                   resolve=as_bool),
+            Column("Notes", "Free text.", example=""),
+        ],
+        resolve_rows=_resolve_wb_properties,
+    )
+
+    accounts = ImportSpec(
+        key="wb_accounts",
+        label="Accounts",
+        model_path="core.ProviderAccount",
+        match_on=("_account_key",),
+        creates=("Provider",),
+        notes="One row per login. The provider is created if it does not exist. "
+              "Credentials are never imported — attach a vault entry afterwards.",
+        columns=[
+            Column("Provider", "Created if it does not exist yet.",
+                   required=True, example="Cloudflare"),
+            Column("Account email", "The login. Unique per provider.",
+                   required=True, example="ops@example.com"),
+            Column("Auth type", "How you sign in.", choices=estate.AUTH_TYPES,
+                   example="PASSWORD",
+                   resolve=lambda raw, col: as_choice(raw, col, estate.AUTH_TYPES)),
+            Column("MFA type", "Second factor, if any.", choices=estate.MFA_TYPES,
+                   example="APP",
+                   resolve=lambda raw, col: as_choice(raw, col, estate.MFA_TYPES)),
+            Column("Owner email", "Must match an existing user.",
+                   example="sam@example.com", resolve=find_user),
+            Column("Console URL", "Where you log in.",
+                   example="https://dash.cloudflare.com"),
+            Column("Active", "Yes or No. Defaults to Yes.", example="Yes",
+                   resolve=as_bool),
+            Column("Notes", "Free text.", example=""),
+        ],
+        resolve_rows=_resolve_wb_accounts,
+        commit_rows=_commit_wb_accounts,
+    )
+
+    services = ImportSpec(
+        key="wb_services",
+        label="Services",
+        model_path="core.Service",
+        match_on=("_account_key", "identifier"),
+        creates=("Property",),
+        notes="One row per billable thing. Provider and Account email must name "
+              "a row on the Accounts tab, or an account that already exists.",
+        columns=[
+            Column("Provider", "Pick from the Accounts tab.", required=True,
+                   example="Cloudflare"),
+            Column("Account email", "Which login at that provider pays for it.",
+                   required=True, example="ops@example.com"),
+            Column("Service type", "Its role in the stack.", required=True,
+                   choices=types, example="DNS",
+                   resolve=lambda raw, col: as_choice(raw, col, types)),
+            Column("Identifier", "What it is called on the invoice or console.",
+                   required=True, example="terafort.com DNS"),
+            Column("Property", "What it keeps running. Created if new.",
+                   example="terafort.com"),
+            Column("Status", "Current state.", choices=estate.SERVICE_STATUSES,
+                   example="ACTIVE",
+                   resolve=lambda raw, col: as_choice(raw, col, estate.SERVICE_STATUSES)),
+            Column("Renewal date", "YYYY-MM-DD. Blank if it does not renew.",
+                   example="2027-01-31", resolve=as_date),
+            Column("Auto renew", "Yes or No.", example="Yes", resolve=as_bool),
+            Column("Cost", "Per billing cycle. Numbers only.", example="1200",
+                   resolve=as_decimal),
+            Column("Currency", "Three-letter code.", example="PKR"),
+            Column("Billing cycle", "How often it is charged.",
+                   choices=estate.BILLING_CYCLES, example="YEARLY",
+                   resolve=lambda raw, col: as_choice(raw, col, estate.BILLING_CYCLES)),
+            Column("Console URL", "Where it is managed.", example=""),
+            Column("Billing descriptor", "How it appears on the card statement.",
+                   example=""),
+            Column("Notes", "Free text.", example=""),
+        ],
+        resolve_rows=_resolve_wb_services,
+        commit_rows=_commit_wb_services,
+    )
+
+    return {s.key: s for s in (properties, accounts, services)}
 
 
 #: Column name -> model field. Kept apart from the spec so the sheet can be
@@ -378,6 +740,26 @@ FIELD_MAP = {
     "services": {
         "Service type": "service_type", "Identifier": "identifier",
         "Property": "property", "Status": "status", "Renewal date": "renewal_date",
+        "Auto renew": "auto_renew", "Cost": "cost", "Currency": "currency",
+        "Billing cycle": "billing_cycle", "Console URL": "console_url",
+        "Billing descriptor": "billing_descriptor", "Notes": "notes",
+    },
+    # Workbook tabs. Columns naming a record that may not exist yet — Provider,
+    # Account email, Property — are deliberately absent, so they arrive as
+    # `_<column name>` raw text for the resolvers above to deal with rather
+    # than being assigned straight to a foreign key.
+    "wb_properties": {
+        "Name": "name", "Kind": "kind", "Owner email": "owner",
+        "Department": "department", "Active": "is_active", "Notes": "notes",
+    },
+    "wb_accounts": {
+        "Account email": "account_email", "Auth type": "auth_type",
+        "MFA type": "mfa_type", "Owner email": "owner",
+        "Console URL": "console_url", "Active": "is_active", "Notes": "notes",
+    },
+    "wb_services": {
+        "Service type": "service_type", "Identifier": "identifier",
+        "Status": "status", "Renewal date": "renewal_date",
         "Auto renew": "auto_renew", "Cost": "cost", "Currency": "currency",
         "Billing cycle": "billing_cycle", "Console URL": "console_url",
         "Billing descriptor": "billing_descriptor", "Notes": "notes",
@@ -454,6 +836,220 @@ def build_template(spec):
 
 
 # ---------------------------------------------------------------------------
+# Workbook template
+# ---------------------------------------------------------------------------
+
+#: How many rows the dropdowns and date formats reach. Validation is stored as
+#: a range, so this costs nothing in file size; it is a limit on how far down
+#: the conveniences apply, not on how many rows may be imported.
+TEMPLATE_ROWS = 400
+
+#: First row of real data. Row 1 is the header, 2 the guidance, 3 the example.
+FIRST_DATA_ROW = 4
+
+#: Columns whose dropdown reads a sibling tab instead of a fixed list. This is
+#: what makes the workbook feel joined up: type a login on the Accounts tab and
+#: it is in the Services tab's dropdown immediately, with no upload in between.
+LIVE_RANGES = {
+    ("wb_services", "Provider"): "Accounts!$A${first}:$A${last}",
+    ("wb_services", "Account email"): "Accounts!$B${first}:$B${last}",
+    ("wb_services", "Property"): "Properties!$A${first}:$A${last}",
+}
+
+def _workbook_lists(specs):
+    """Every fixed dropdown list in the workbook, keyed by list name."""
+    from core.models import Department, Provider, User
+
+    lists = {}
+    for _, key in WORKBOOK_TABS:
+        for col in specs[key].columns:
+            if col.choices and col.name not in lists:
+                lists[col.name] = tuple(code for code, _ in col.choices)
+            elif col.resolve is as_bool:
+                lists.setdefault("Yes or No", ("Yes", "No"))
+
+    lists["Existing providers"] = tuple(
+        Provider.objects.order_by("name").values_list("name", flat=True)[:400]
+    )
+    lists["User emails"] = tuple(
+        User.objects.filter(is_active=True).order_by("email")
+        .values_list("email", flat=True)[:400]
+    )
+    lists["Departments"] = tuple(
+        Department.objects.order_by("name").values_list("name", flat=True)[:400]
+    )
+    try:
+        from core.lov import get_values
+
+        lists["Currencies"] = tuple(code for code, _ in get_values("currency"))
+    except Exception:
+        lists["Currencies"] = ("USD", "EUR", "GBP", "PKR")
+    return {name: values for name, values in lists.items() if values}
+
+
+#: Free-text columns that still deserve a dropdown of what already exists.
+#: Lenient — a value not in the list is accepted, because these columns are
+#: allowed to name something new. Strict ones would make the template refuse
+#: the first provider anybody ever adds.
+_SUGGESTED = {
+    "Provider": ("Existing providers", False),
+    "Currency": ("Currencies", False),
+    "Owner email": ("User emails", True),
+    "Department": ("Departments", True),
+}
+
+
+def _column_validation(spec, col, lists, letters):
+    """(formula1, strict) for a column's dropdown, or None for free text."""
+    live = LIVE_RANGES.get((spec.key, col.name))
+    if live:
+        return live.format(first=FIRST_DATA_ROW, last=TEMPLATE_ROWS), False
+
+    if col.choices:
+        name, strict = col.name, True
+    elif col.resolve is as_bool:
+        name, strict = "Yes or No", True
+    elif col.name in _SUGGESTED:
+        name, strict = _SUGGESTED[col.name]
+    else:
+        return None
+
+    if name not in letters:
+        # Nothing to offer — no users, no departments, a fresh install. An
+        # empty dropdown blocks the column entirely, which is worse than none.
+        return None
+    column = letters[name]
+    return f"Lists!${column}$2:${column}${len(lists[name]) + 1}", strict
+
+
+def _write_tab(ws, spec, lists, letters):
+    """Headers, guidance, example, dropdowns and date cells for one tab."""
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+    from openpyxl.worksheet.datavalidation import DataValidation
+
+    header_fill = PatternFill("solid", fgColor="1F2937")
+    required_fill = PatternFill("solid", fgColor="7F1D1D")
+
+    for i, col in enumerate(spec.columns, start=1):
+        letter = get_column_letter(i)
+        cell = ws.cell(row=1, column=i, value=col.name)
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = required_fill if col.required else header_fill
+        cell.alignment = Alignment(vertical="center", wrap_text=True)
+
+        ws.cell(row=2, column=i, value=col.help).font = Font(
+            italic=True, size=9, color="6B7280"
+        )
+        ws.cell(row=3, column=i, value=col.example)
+        ws.column_dimensions[letter].width = (
+            max(len(col.name), min(38, len(col.help) // 2), 14) + 2
+        )
+
+        span = f"{letter}{FIRST_DATA_ROW}:{letter}{TEMPLATE_ROWS}"
+
+        validation = _column_validation(spec, col, lists, letters)
+        if validation:
+            formula, strict = validation
+            rule = DataValidation(
+                type="list", formula1=formula, allow_blank=True,
+                showErrorMessage=strict, showInputMessage=True,
+            )
+            rule.promptTitle = col.name[:32]
+            rule.prompt = col.help[:255]
+            if strict:
+                rule.errorTitle = "Not an accepted value"
+                rule.error = f"Pick one of the values offered for {col.name}."[:255]
+            ws.add_data_validation(rule)
+            rule.add(span)
+
+        if col.resolve is as_date:
+            # Formatted rather than validated. A hard date rule rejects the
+            # text "2027-01-31", which `as_date` reads perfectly well, and
+            # different spreadsheet apps disagree about what counts as a date.
+            for row in range(FIRST_DATA_ROW, TEMPLATE_ROWS + 1):
+                ws.cell(row=row, column=i).number_format = "yyyy-mm-dd"
+            rule = DataValidation(
+                type="date", operator="between",
+                formula1="DATE(1990,1,1)", formula2="DATE(2100,12,31)",
+                allow_blank=True, showErrorMessage=False, showInputMessage=True,
+            )
+            rule.promptTitle = "Date"
+            rule.prompt = "Pick a date, or type it as YYYY-MM-DD."
+            ws.add_data_validation(rule)
+            rule.add(span)
+
+    ws.freeze_panes = f"A{FIRST_DATA_ROW}"
+
+
+def build_workbook_template():
+    """The multi-tab workbook: one tab per record type, dropdowns in the cells."""
+    from openpyxl import Workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    specs = build_workbook_specs()
+    lists = _workbook_lists(specs)
+    letters = {
+        name: get_column_letter(i) for i, name in enumerate(lists, start=1)
+    }
+
+    wb = Workbook()
+    readme = wb.active
+    readme.title = "Read me"
+    readme["A1"] = "Digital Estate workbook"
+    readme["A1"].font = Font(bold=True, size=15)
+    for line in [
+        "",
+        "Fill in the tabs left to right. You do not have to fill in all of them.",
+        "",
+        "  Properties   Optional. Only needed to set a property's kind and owner.",
+        "  Accounts     One row per login. The provider is created if it is new.",
+        "  Services     One row per billable thing, pointing at a login above.",
+        "",
+        "Cells with a small arrow have a dropdown. On the Services tab the",
+        "Provider, Account email and Property dropdowns read the tabs to their",
+        "left, so a login you type on the Accounts tab can be picked here",
+        "straight away — there is no need to import in between.",
+        "",
+        "Date cells are formatted as YYYY-MM-DD. Typing that text works too.",
+        "",
+        "Row 1 is the header — do not rename or reorder it.",
+        "Row 2 is guidance and row 3 is an example. Both are ignored on import.",
+        "Columns shaded dark red are required.",
+        "Blank cells keep the record's default rather than clearing it.",
+        "",
+        "Upload checks every tab before writing anything. If one row anywhere",
+        "in the workbook fails, nothing at all is imported — fix it and upload",
+        "again. Credentials are never imported; attach vault entries afterwards.",
+        "",
+        "The Lists tab holds the dropdown values. Leave it in place.",
+    ]:
+        readme.append([line])
+    readme.column_dimensions["A"].width = 96
+
+    for title, key in WORKBOOK_TABS:
+        _write_tab(wb.create_sheet(title), specs[key], lists, letters)
+
+    sheet = wb.create_sheet("Lists")
+    for i, (name, values) in enumerate(lists.items(), start=1):
+        head = sheet.cell(row=1, column=i, value=name)
+        head.font = Font(bold=True, color="FFFFFF")
+        head.fill = PatternFill("solid", fgColor="1F2937")
+        head.alignment = Alignment(wrap_text=True)
+        for row, value in enumerate(values, start=2):
+            sheet.cell(row=row, column=i, value=str(value))
+        sheet.column_dimensions[get_column_letter(i)].width = max(
+            14, min(34, len(name) + 4)
+        )
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.read()
+
+
+# ---------------------------------------------------------------------------
 # Reading and validating
 # ---------------------------------------------------------------------------
 
@@ -490,48 +1086,30 @@ def _first_data_row(ws, spec):
     return 4
 
 
-def read_rows(file_obj, spec, limit=2000):
-    """Parse and validate. Returns (results, sheet_errors). Writes nothing."""
-    from openpyxl import load_workbook
+def validate_records(spec, records, limit=2000, context=None):
+    """Validate rows given as {column name: raw text}. Returns (results, errors).
 
-    try:
-        wb = load_workbook(file_obj, data_only=True, read_only=True)
-    except Exception:
-        return [], ["That file could not be read as an .xlsx workbook."]
+    The one validation path. Each sheet in the workbook turns its rows into
+    these dicts and calls this. A second path would be a second set of rules to
+    keep in step, and the one that skipped a check would be the one that
+    corrupted data.
 
-    ws = wb[wb.sheetnames[0]]
-    headers = [as_text(c.value) for c in next(ws.iter_rows(min_row=1, max_row=1))]
-
-    expected = [c.name for c in spec.columns]
-    missing = [h for h in expected if h not in headers]
-    if missing:
-        return [], [
-            "The header row does not match the template. Missing column(s): "
-            + ", ".join(missing)
-            + ". Download a fresh template rather than editing the headers."
-        ]
-
-    index = {h: i for i, h in enumerate(headers)}
-    start = _first_data_row(ws, spec)
+    Writes nothing.
+    """
     field_map = FIELD_MAP[spec.key]
-
     results = []
     seen_keys = {}
-    for row_idx, raw_row in enumerate(
-        ws.iter_rows(min_row=start, values_only=True), start=start
-    ):
-        cells = [as_text(v) for v in raw_row]
-        if not any(cells):
-            continue  # blank spacer row
-        if len(results) >= limit:
-            return results, [
-                f"That sheet has more than {limit} rows. Split it and import in batches."
-            ]
 
-        result = RowResult(row=row_idx)
+    for offset, record in enumerate(records):
+        if len(results) >= limit:
+            return results, [f"That is more than {limit} rows. Split it into batches."]
+        cells = {key: as_text(value) for key, value in (record or {}).items()}
+        if not any(cells.values()):
+            continue
+
+        result = RowResult(row=int(cells.pop("__row__", 0) or offset + 1))
         for col in spec.columns:
-            pos = index[col.name]
-            raw = cells[pos] if pos < len(cells) else ""
+            raw = cells.get(col.name, "")
 
             if not raw:
                 if col.required:
@@ -558,15 +1136,63 @@ def read_rows(file_obj, spec, limit=2000):
 
         results.append(result)
 
-    _resolve_service_accounts(spec, results)
-    _resolve_master(spec, results)
+    if spec.resolve_rows:
+        spec.resolve_rows(spec, results, context if context is not None else {})
     _mark_duplicates(spec, results, seen_keys)
-    if spec.key != "master":
+    if spec.commit_rows is None:
+        # A sheet with its own writer works out create-vs-update itself; the
+        # generic check would look up raw text against a foreign key column.
         _mark_existing(spec, results)
     return results, []
 
 
-def _resolve_master(spec, results):
+def read_rows(file_obj, spec, limit=2000, context=None):
+    """Parse and validate a single-sheet .xlsx. Returns (results, sheet_errors)."""
+    from openpyxl import load_workbook
+
+    try:
+        wb = load_workbook(file_obj, data_only=True, read_only=True)
+    except Exception:
+        return [], ["That file could not be read as an .xlsx workbook."]
+
+    ws = wb[wb.sheetnames[0]]
+    headers = [as_text(c.value) for c in next(ws.iter_rows(min_row=1, max_row=1))]
+
+    expected = [c.name for c in spec.columns]
+    missing = [h for h in expected if h not in headers]
+    if missing:
+        return [], [
+            "The header row does not match the template. Missing column(s): "
+            + ", ".join(missing)
+            + ". Download a fresh template rather than editing the headers."
+        ]
+
+    return validate_records(
+        spec, _records_from_sheet(ws, spec, headers), limit=limit, context=context
+    )
+
+
+def _records_from_sheet(ws, spec, headers):
+    """Column-keyed dicts from a worksheet. Reading only, no validation."""
+    index = {h: i for i, h in enumerate(headers)}
+    start = _first_data_row(ws, spec)
+
+    records = []
+    for row_idx, raw_row in enumerate(
+        ws.iter_rows(min_row=start, values_only=True), start=start
+    ):
+        cells = [as_text(v) for v in raw_row]
+        if not any(cells):
+            continue  # blank spacer row
+        record = {"__row__": row_idx}
+        for col in spec.columns:
+            pos = index[col.name]
+            record[col.name] = cells[pos] if pos < len(cells) else ""
+        records.append(record)
+    return records
+
+
+def _resolve_master(spec, results, context):
     """Work out, per row, what already exists and what will be created.
 
     Nothing is written here — validation must stay side-effect free. Each row
@@ -576,8 +1202,6 @@ def _resolve_master(spec, results):
     Names seen earlier in the same sheet count as existing, so twenty services
     at one provider plan one provider, not twenty.
     """
-    if spec.key != "master":
-        return
     from core.models import Property, Provider, ProviderAccount
 
     planned_providers = set()
@@ -635,10 +1259,8 @@ def _resolve_master(spec, results):
             result.action = "update" if match else "create"
 
 
-def _resolve_service_accounts(spec, results):
+def _resolve_service_accounts(spec, results, context):
     """Turn the service sheet's Provider + Account email into one account."""
-    if spec.key != "services":
-        return
     from core.models import ProviderAccount
 
     for result in results:
@@ -713,6 +1335,87 @@ def _mark_existing(spec, results):
             result.action = "update"
 
 
+def read_workbook(file_obj, limit=2000):
+    """Read and validate every tab of the workbook. Returns (sheets, errors).
+
+    `sheets` is a list of (spec, results) in dependency order, holding only the
+    tabs that carry data. Tabs left blank are skipped rather than reported as a
+    problem: filling in only the Services tab against accounts that already
+    exist is a perfectly ordinary use of this file.
+
+    The `context` dict is threaded through every tab in order. That is what
+    lets the Services tab accept a login the Accounts tab has not written yet.
+    """
+    from openpyxl import load_workbook
+
+    try:
+        wb = load_workbook(file_obj, data_only=True, read_only=True)
+    except Exception:
+        return [], ["That file could not be read as an .xlsx workbook."]
+
+    specs = build_workbook_specs()
+    present = [t for t, _ in WORKBOOK_TABS if t in wb.sheetnames]
+    if not present:
+        return [], [
+            "No recognised tabs. This workbook needs at least one of: "
+            + ", ".join(t for t, _ in WORKBOOK_TABS)
+            + ". Download the template again."
+        ]
+
+    context = {}
+    sheets = []
+    errors = []
+    for title, key in WORKBOOK_TABS:
+        if title not in wb.sheetnames:
+            continue
+        spec = specs[key]
+        ws = wb[title]
+        headers = [
+            as_text(c.value)
+            for c in next(ws.iter_rows(min_row=HEADER_ROW, max_row=HEADER_ROW))
+        ]
+        missing = [c.name for c in spec.columns if c.name not in headers]
+        if missing:
+            errors.append(
+                f"{title} tab is missing these columns: {', '.join(missing)}. "
+                "Download the template again."
+            )
+            continue
+
+        records = _records_from_sheet(ws, spec, headers)
+        if not records:
+            continue  # tab left blank
+        results, sheet_errors = validate_records(
+            spec, records, limit=limit, context=context
+        )
+        errors.extend(f"{title} tab: {e}" for e in sheet_errors)
+        sheets.append((spec, results))
+
+    if not sheets and not errors:
+        errors.append("Every tab is empty. Fill one in and upload it again.")
+    return sheets, errors
+
+
+@transaction.atomic
+def commit_workbook(sheets):
+    """Import every tab, in dependency order, or none of them.
+
+    One transaction across all three tabs, not one per tab. A workbook whose
+    Services tab fails must not leave its accounts behind — the person would
+    have to work out which half landed before they could safely upload again.
+    """
+    if any(r.errors for _, results in sheets for r in results):
+        raise ValueError("Refusing to import a workbook that has errors.")
+
+    totals = {}
+    for spec, results in sheets:
+        created, updated = commit(spec, results)
+        totals[spec.key] = {
+            "label": spec.label, "created": created, "updated": updated,
+        }
+    return totals
+
+
 # ---------------------------------------------------------------------------
 # Commit
 # ---------------------------------------------------------------------------
@@ -730,8 +1433,8 @@ def commit(spec, results):
     if any(r.errors for r in results):
         raise ValueError("Refusing to import a sheet that has errors.")
 
-    if spec.key == "master":
-        return _commit_master(results)
+    if spec.commit_rows:
+        return spec.commit_rows(results)
 
     model = apps.get_model(spec.model_path)
     created = updated = 0
