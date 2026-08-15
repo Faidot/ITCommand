@@ -490,32 +490,48 @@ def _first_data_row(ws, spec):
     return 4
 
 
-def validate_records(spec, records, limit=2000):
-    """Validate rows given as {column name: raw text}. Returns (results, errors).
+def read_rows(file_obj, spec, limit=2000):
+    """Parse and validate. Returns (results, sheet_errors). Writes nothing."""
+    from openpyxl import load_workbook
 
-    The single validation path. The spreadsheet reader turns a workbook into
-    these dicts and calls this; so does the AI importer with what a model
-    proposed. A second path would be a second set of rules to keep in step,
-    and the one that skipped a check would be the one that corrupted data.
+    try:
+        wb = load_workbook(file_obj, data_only=True, read_only=True)
+    except Exception:
+        return [], ["That file could not be read as an .xlsx workbook."]
 
-    Writes nothing.
-    """
+    ws = wb[wb.sheetnames[0]]
+    headers = [as_text(c.value) for c in next(ws.iter_rows(min_row=1, max_row=1))]
+
+    expected = [c.name for c in spec.columns]
+    missing = [h for h in expected if h not in headers]
+    if missing:
+        return [], [
+            "The header row does not match the template. Missing column(s): "
+            + ", ".join(missing)
+            + ". Download a fresh template rather than editing the headers."
+        ]
+
+    index = {h: i for i, h in enumerate(headers)}
+    start = _first_data_row(ws, spec)
     field_map = FIELD_MAP[spec.key]
+
     results = []
     seen_keys = {}
-
-    for offset, record in enumerate(records):
+    for row_idx, raw_row in enumerate(
+        ws.iter_rows(min_row=start, values_only=True), start=start
+    ):
+        cells = [as_text(v) for v in raw_row]
+        if not any(cells):
+            continue  # blank spacer row
         if len(results) >= limit:
             return results, [
-                f"That is more than {limit} rows. Split it into batches."
+                f"That sheet has more than {limit} rows. Split it and import in batches."
             ]
-        cells = {key: as_text(value) for key, value in (record or {}).items()}
-        if not any(cells.values()):
-            continue
 
-        result = RowResult(row=int(cells.pop("__row__", 0) or offset + 1))
+        result = RowResult(row=row_idx)
         for col in spec.columns:
-            raw = cells.get(col.name, "")
+            pos = index[col.name]
+            raw = cells[pos] if pos < len(cells) else ""
 
             if not raw:
                 if col.required:
@@ -548,48 +564,6 @@ def validate_records(spec, records, limit=2000):
     if spec.key != "master":
         _mark_existing(spec, results)
     return results, []
-
-
-def read_rows(file_obj, spec, limit=2000):
-    """Parse and validate an .xlsx. Returns (results, sheet_errors)."""
-    from openpyxl import load_workbook
-
-    try:
-        wb = load_workbook(file_obj, data_only=True, read_only=True)
-    except Exception:
-        return [], ["That file could not be read as an .xlsx workbook."]
-
-    ws = wb[wb.sheetnames[0]]
-    headers = [as_text(c.value) for c in next(ws.iter_rows(min_row=1, max_row=1))]
-
-    expected = [c.name for c in spec.columns]
-    missing = [h for h in expected if h not in headers]
-    if missing:
-        return [], [
-            "The header row does not match the template. Missing column(s): "
-            + ", ".join(missing)
-            + ". Download a fresh template rather than editing the headers."
-        ]
-
-    index = {h: i for i, h in enumerate(headers)}
-    start = _first_data_row(ws, spec)
-
-    # Turned into column-keyed records, then handed to the same validator the
-    # AI importer uses. The workbook's only job is reading cells.
-    records = []
-    for row_idx, raw_row in enumerate(
-        ws.iter_rows(min_row=start, values_only=True), start=start
-    ):
-        cells = [as_text(v) for v in raw_row]
-        if not any(cells):
-            continue  # blank spacer row
-        record = {"__row__": row_idx}
-        for col in spec.columns:
-            pos = index[col.name]
-            record[col.name] = cells[pos] if pos < len(cells) else ""
-        records.append(record)
-
-    return validate_records(spec, records, limit=limit)
 
 
 def _resolve_master(spec, results):

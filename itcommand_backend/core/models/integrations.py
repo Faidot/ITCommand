@@ -36,7 +36,6 @@ class Integration(models.Model):
     PROVIDER_CHOICES = (
         ("EXCHANGE_RATES", "Currency exchange rates"),
         ("BREX", "Brex corporate cards"),
-        ("GEMINI", "Google Gemini (AI import)"),
         ("SLACK", "Slack notifications"),
         ("TEAMS", "Microsoft Teams notifications"),
         ("DISCORD", "Discord notifications"),
@@ -83,21 +82,6 @@ class Integration(models.Model):
                 "cards and transactions. Paste the token here."
             ),
             "supports_sync": True,
-        },
-        "GEMINI": {
-            "label": "Google Gemini (AI import)",
-            "description": (
-                "Turns pasted notes — an invoice, a renewals email, a page of "
-                "handover notes — into estate rows you review before importing."
-            ),
-            "needs_api_key": True,
-            "credential_label": "Gemini API key",
-            "default_base_url": "https://generativelanguage.googleapis.com",
-            "help": (
-                "Google AI Studio → Get API key. Text you paste into the AI "
-                "importer is sent to Google; nothing else is, and no vault "
-                "credential ever leaves this system."
-            ),
         },
         "SLACK": {
             "label": "Slack notifications",

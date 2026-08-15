@@ -21,7 +21,7 @@ from rest_framework import permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from core import estate_ai, estate_import, gemini
+from core import estate_import
 from core.mixins import AuditLogMixin
 from core.permissions import IsAdminOrSuperadmin
 
@@ -205,112 +205,5 @@ class EstateImportCommitView(AuditLogMixin, APIView):
             "created": created,
             "updated": updated,
             "file": upload.name,
-        })
-        return Response({**report, "created": created, "updated": updated})
-
-
-class EstateAiParseView(AuditLogMixin, APIView):
-    """Read pasted notes into rows, using Gemini. Writes nothing.
-
-    The model only reads. Its rows go through the same
-    `estate_import.validate_records` an uploaded spreadsheet goes through, so
-    an invented provider or billing cycle is rejected by the same rules — and
-    the answer is the identical report shape, which means the review UI and
-    the commit path are shared rather than duplicated.
-
-    Committing is still the normal import: the reviewed rows come back as a
-    file or as records through the existing endpoints. Nothing here writes.
-    """
-
-    permission_classes = [permissions.IsAuthenticated, IsAdminOrSuperadmin]
-
-    def post(self, request):
-        from core.models import Integration
-
-        integration = Integration.objects.filter(provider=gemini.PROVIDER).first()
-        if not integration or not integration.has_api_key:
-            return Response(
-                {"detail": "Add a Gemini API key under Settings → Integrations first."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-        if not integration.is_enabled:
-            return Response(
-                {"detail": "The Gemini integration is switched off."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        raw_text = request.data.get("text") or ""
-        answers = request.data.get("answers") or {}
-        if not isinstance(answers, dict):
-            answers = {}
-
-        try:
-            records, questions, notes = estate_ai.parse(integration, raw_text, answers)
-        except gemini.GeminiError as exc:
-            return Response(
-                {"detail": str(exc), "code": exc.code},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        spec = estate_import.build_specs()[estate_ai.SPEC_KEY]
-        results, sheet_errors = estate_import.validate_records(spec, records)
-
-        # Audited because it sends company text to a third party. The text
-        # itself is not stored — only that it happened, and how much.
-        self.log_action("UPDATE", integration, {
-            "action": "estate_ai_parse",
-            "characters": len(raw_text),
-            "rows_returned": len(records),
-            "questions": len(questions),
-        })
-
-        return Response({
-            **_report(results, sheet_errors),
-            "questions": questions,
-            "assumptions": notes,
-            # Echoed so the review step can submit exactly what was validated
-            # rather than re-asking the model and getting something else.
-            "records": records,
-        })
-
-
-class EstateAiCommitView(AuditLogMixin, APIView):
-    """Import rows the AI produced, after a person has reviewed them.
-
-    Takes the records back rather than re-prompting: the reader approved what
-    they saw, and a second call to the model could return something different.
-    Re-validated here regardless, so an edited payload cannot skip the rules.
-    """
-
-    permission_classes = [permissions.IsAuthenticated, IsAdminOrSuperadmin]
-
-    def post(self, request):
-        records = request.data.get("records")
-        if not isinstance(records, list) or not records:
-            return Response(
-                {"detail": "Nothing to import."}, status=status.HTTP_400_BAD_REQUEST
-            )
-
-        spec = estate_import.build_specs()[estate_ai.SPEC_KEY]
-        results, sheet_errors = estate_import.validate_records(spec, records)
-        report = _report(results, sheet_errors)
-        if not report["can_commit"]:
-            return Response(
-                {**report, "detail": "Nothing was imported. Fix the rows and try again."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        try:
-            created, updated = estate_import.commit(spec, results)
-        except Exception as exc:
-            return Response(
-                {**report, "detail": f"Nothing was imported — {exc}"},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        self.log_action("CREATE", request.user, {
-            "action": "estate_ai_import",
-            "created": created,
-            "updated": updated,
         })
         return Response({**report, "created": created, "updated": updated})

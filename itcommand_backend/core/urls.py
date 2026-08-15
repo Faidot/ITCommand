@@ -32,7 +32,6 @@ from .views import (
     ProviderViewSet, ProviderAccountViewSet, PropertyViewSet, ServiceViewSet,
     PaymentCardViewSet, ServicePaymentViewSet, CardAccountViewSet,
     EstateImportOptionsView, EstateImportTemplateView, EstateImportValidateView, EstateImportCommitView,
-    EstateAiParseView, EstateAiCommitView,
     EstateDashboardView, EstateOverviewView, EstateGapsView, EstateSettingsView, ExchangeRateViewSet,
 )
 from .reports import (
@@ -180,9 +179,6 @@ urlpatterns = [
     path('estate/import/template/', EstateImportTemplateView.as_view(), name='estate_import_template'),
     path('estate/import/validate/', EstateImportValidateView.as_view(), name='estate_import_validate'),
     path('estate/import/commit/', EstateImportCommitView.as_view(), name='estate_import_commit'),
-    # AI import: the model reads, the same validator decides.
-    path('estate/import/ai/parse/', EstateAiParseView.as_view(), name='estate_ai_parse'),
-    path('estate/import/ai/commit/', EstateAiCommitView.as_view(), name='estate_ai_commit'),
     # KB
     path('kb/dashboard/', KBDashboardView.as_view(), name='kb_dashboard'),
     path('kb/suggest/', KBSuggestView.as_view(), name='kb_suggest'),
