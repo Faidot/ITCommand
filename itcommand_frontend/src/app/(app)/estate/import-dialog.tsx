@@ -12,7 +12,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  AlertTriangle, CheckCircle2, Download, FileSpreadsheet, Loader2, Upload, X,
+  AlertTriangle, CheckCircle2, Download, FileSpreadsheet, Loader2, Sparkles, Upload, X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -26,6 +26,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+
+import { AiImportPanel } from "./ai-import-panel";
 
 interface ColumnInfo {
   name: string;
@@ -170,7 +173,26 @@ export function EstateImportDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4 overflow-y-auto pr-1">
+        <Tabs defaultValue="sheet" className="overflow-hidden">
+          <TabsList className="mb-3">
+            <TabsTrigger value="sheet">
+              <FileSpreadsheet className="mr-2 h-4 w-4" /> Spreadsheet
+            </TabsTrigger>
+            <TabsTrigger value="ai">
+              <Sparkles className="mr-2 h-4 w-4" /> Paste notes (AI)
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="ai" className="max-h-[70vh] overflow-y-auto pr-1">
+            <AiImportPanel
+              onImported={() => {
+                onImported?.();
+                onOpenChange(false);
+              }}
+            />
+          </TabsContent>
+
+          <TabsContent value="sheet" className="space-y-4 max-h-[70vh] overflow-y-auto pr-1">
           {/* 1 — what */}
           <div className="space-y-2">
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -341,7 +363,8 @@ export function EstateImportDialog({
               )}
             </div>
           )}
-        </div>
+          </TabsContent>
+        </Tabs>
       </DialogContent>
     </Dialog>
   );
