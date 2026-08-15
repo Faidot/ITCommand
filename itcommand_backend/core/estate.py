@@ -74,13 +74,18 @@ SERVICE_TYPE_ORDER = {code: index for index, (code, _) in enumerate(SERVICE_TYPE
 #:
 #: Django asks a field for its `choices` once per serialized row, so reading
 #: the List of Values table on every call turned a 10-query list endpoint into
-#: 1380. The values change when somebody edits Settings — rarely — so they are
-#: cached and invalidated on write.
+#: 1380 queries. This collapses that to one per request.
 #:
-#: The TTL is the safety net rather than the mechanism: invalidation only
-#: reaches the worker that handled the edit, and with three Gunicorn workers
-#: the other two would otherwise serve the old list until the next deploy.
+#: Scoped to the request rather than the process, cleared on `request_started`
+#: (see core.signals). That choice does the work of three separate fixes:
+#: an edit is visible on the very next request instead of waiting for a TTL;
+#: every Gunicorn worker sees it, not just the one that handled the write; and
+#: tests cannot leak a cached type past the rollback that removed it, which is
+#: exactly what a process-lifetime cache did — one test adding a type made an
+#: unrelated later test see twelve layers where the code defines eleven.
 _LOV_CACHE: dict = {}
+#: Backstop for callers outside the request cycle — management commands, the
+#: automation loop — where `request_started` never fires.
 _LOV_CACHE_TTL_SECONDS = 30
 
 
@@ -89,14 +94,26 @@ def clear_type_cache():
     _LOV_CACHE.clear()
 
 
+_RESOLVING: set = set()
+
+
 def _lov_extras(group, builtin_codes):
     """Codes an admin added to `group`, minus anything already built in."""
     import time
+
+    # Re-entry means something this function calls has looped back into it —
+    # a List of Values seed reading the model field whose choices come from
+    # this group, say. Returning the built-ins breaks the cycle at its first
+    # turn instead of recursing until Python gives up, which previously
+    # surfaced as a mysterious query-per-row rather than as an error.
+    if group in _RESOLVING:
+        return ()
 
     cached = _LOV_CACHE.get(group)
     if cached and (time.monotonic() - cached[0]) < _LOV_CACHE_TTL_SECONDS:
         return cached[1]
 
+    _RESOLVING.add(group)
     try:
         from core.lov import get_values
 
@@ -106,6 +123,8 @@ def _lov_extras(group, builtin_codes):
         # us. Built-ins alone are always a usable answer, and this must never
         # be the reason a page fails to render.
         return ()
+    finally:
+        _RESOLVING.discard(group)
 
     extras = tuple(
         (code, label) for code, label in rows if code and code not in builtin_codes

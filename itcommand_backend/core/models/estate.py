@@ -640,9 +640,15 @@ class EstateSettings(models.Model):
         clears every layer sees everything rather than nothing — an empty estate
         page is a worse answer than a noisy one.
         """
+        # The *extended* code set, not the frozen tuple: a type added under
+        # Settings could previously be ticked here and was silently dropped on
+        # save, which looked exactly like the setting not working.
+        from core.estate import service_type_codes
+
+        known = service_type_codes()
         seen, ordered = set(), []
         for code in self.enabled_layers or []:
-            if code in SERVICE_TYPE_CODES and code not in seen:
+            if code in known and code not in seen:
                 seen.add(code)
                 ordered.append(code)
         return ordered or list(SERVICE_TYPE_CODES)

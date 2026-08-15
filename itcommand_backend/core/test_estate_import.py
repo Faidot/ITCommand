@@ -515,3 +515,76 @@ class ExtensibleTypeTests(TestCase):
         with self.assertNumQueries(0):
             for _ in range(50):
                 estate.service_type_codes()
+
+
+    def test_a_custom_type_can_be_tracked_as_a_layer(self):
+        """It was accepted in the UI and dropped on save — a silent no-op."""
+        from core import estate_reports
+
+        self.add_type("PODCAST", "Podcast hosting")
+        settings = estate_reports.estate_settings()
+        settings.enabled_layers = ["DNS", "PODCAST"]
+        settings.save()
+
+        self.assertIn("PODCAST", estate_reports.tracked_layers(settings))
+
+    def test_tracking_a_custom_type_makes_it_count_as_a_gap(self):
+        """Ticking it means "every property should have one" — honour that."""
+        from core import estate_reports
+
+        self.add_type("PODCAST", "Podcast hosting")
+        settings = estate_reports.estate_settings()
+        settings.enabled_layers = ["DNS", "PODCAST"]
+        settings.save()
+
+        self.assertIn("PODCAST", estate_reports.tracked_stack_types(settings))
+
+    def test_the_four_builtin_categories_still_never_count_as_gaps(self):
+        """The original bug: a stale setting gave every property three amber gaps."""
+        from core import estate_reports
+
+        settings = estate_reports.estate_settings()
+        settings.enabled_layers = ["DNS", "SAAS", "STORAGE", "MONITORING", "OTHER"]
+        settings.save()
+
+        stack = estate_reports.tracked_stack_types(settings)
+        self.assertEqual(stack, ["DNS"])
+
+    def test_a_custom_type_appears_in_the_layer_catalog(self):
+        """So it is offered under "Not tracked" in Settings."""
+        from core import estate_reports
+
+        self.add_type("PODCAST", "Podcast hosting")
+        codes = [row["layer"] for row in estate_reports.layer_catalog()]
+        self.assertIn("PODCAST", codes)
+
+
+    def test_reading_types_costs_one_query_per_request_not_one_per_row(self):
+        """The regression that hid here twice, pinned at the source.
+
+        First as a missing cache, then as a circular seed: the List of Values
+        group seeded itself from `Service.service_type`, whose choices read
+        that group. The recursion ended in a RecursionError swallowed by a
+        broad except, so it degraded into a query per row rather than failing.
+        """
+        from django.db import connection
+        from django.test.utils import CaptureQueriesContext
+
+        from core import estate
+
+        estate.clear_type_cache()
+        with CaptureQueriesContext(connection) as ctx:
+            for _ in range(30):
+                estate.service_type_choices()
+        self.assertLessEqual(
+            len(ctx.captured_queries), 1,
+            "reading types must not query per call",
+        )
+
+    def test_the_builtin_seed_does_not_depend_on_the_model_field(self):
+        """Seeding from the field would recreate the circular lookup."""
+        from core import estate
+        from core.lov import seed_values
+
+        codes = [code for code, _ in seed_values("subscription_category")]
+        self.assertEqual(codes, list(estate.SERVICE_TYPE_CODES))

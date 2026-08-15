@@ -81,7 +81,18 @@ def tracked_stack_types(settings=None):
     learn to ignore the colour that is supposed to mean "fix this".
     """
     tracked = tracked_layers(settings)
-    return [code for code in tracked if code in estate.STACK_TYPE_CODES]
+    # Exclude the four built-in categories, not "everything that is not one of
+    # the seven". The original intersection existed because an EstateSettings
+    # row saved before the Phase 1 rework held all ten pre-rework codes, giving
+    # every property three permanent amber gaps for Storage, Monitoring and
+    # Other — which is how people learn to ignore the colour that means "fix
+    # this". Those four are still excluded.
+    #
+    # A type an admin added and then deliberately ticked here is a different
+    # thing: it is somebody saying "every property should have one of these",
+    # and honouring that is the whole point of the setting.
+    non_stack = {code for code, _ in estate.NON_STACK_TYPES}
+    return [code for code in tracked if code not in non_stack]
 
 
 def urgency_for(days_until, settings=None):
