@@ -98,18 +98,65 @@ function errorMessage(reason: unknown, fallback: string): string {
 
 // ─────────────────────────────── layers ───────────────────────────────
 
+/** service_type is a 16-character column, so the derived code has to fit it. */
+function toLayerCode(label: string) {
+  return label
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 16);
+}
+
 function LayerEditor({
   settings,
   onSave,
   saving,
+  onCatalogChanged,
 }: {
   settings: EstateSettingsPayload;
   onSave: (enabled: string[]) => void;
   saving: boolean;
+  onCatalogChanged: () => Promise<void>;
 }) {
   const [enabled, setEnabled] = useState<string[]>(settings.enabled_layers);
+  const [newLabel, setNewLabel] = useState("");
+  const [creating, setCreating] = useState(false);
+  /** Codes created here but not yet saved to `enabled_layers` on the server. */
+  const [pending, setPending] = useState<string[]>([]);
 
-  useEffect(() => setEnabled(settings.enabled_layers), [settings.enabled_layers]);
+  // Merged rather than replaced: refetching the catalog after creating a layer
+  // would otherwise reset the list and drop the one just added.
+  useEffect(() => {
+    setEnabled([
+      ...settings.enabled_layers,
+      ...pending.filter((code) => !settings.enabled_layers.includes(code)),
+    ]);
+  }, [settings.enabled_layers, pending]);
+
+  const createLayer = async () => {
+    const label = newLabel.trim();
+    const code = toLayerCode(label);
+    if (!label || !code) return;
+    if (settings.all_layers.some((row) => row.layer === code)) {
+      toast.error(`${code} already exists — add it from "Not tracked" below.`);
+      return;
+    }
+    setCreating(true);
+    try {
+      // Creates the service type, then tracks it in one step. Doing this in
+      // two panels meant adding a type, scrolling back, and finding it in a
+      // list of eleven — for what reads as a single decision.
+      await api.post("/lov/", { group: "subscription_category", code, label });
+      setPending((current) => [...current, code]);
+      await onCatalogChanged();
+      setNewLabel("");
+      toast.success(`${label} added. Save below to start tracking it.`);
+    } catch (reason) {
+      toast.error(errorMessage(reason, "Could not add that layer."));
+    } finally {
+      setCreating(false);
+    }
+  };
 
   const labelFor = (code: string) =>
     settings.all_layers.find((row) => row.layer === code)?.layer_label ?? code;
@@ -186,6 +233,36 @@ function LayerEditor({
                 </Button>
               </div>
             ))
+          )}
+        </div>
+
+        <div className="space-y-1.5 rounded-lg border border-dashed p-3">
+          <Label className="text-xs text-muted-foreground">Add a new layer</Label>
+          <div className="flex flex-wrap items-center gap-2">
+            <Input
+              value={newLabel}
+              onChange={(event) => setNewLabel(event.target.value)}
+              onKeyDown={(event) => event.key === "Enter" && void createLayer()}
+              placeholder="Podcast hosting"
+              className="h-8 min-w-[180px] flex-1 text-sm"
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-8"
+              disabled={creating || !newLabel.trim()}
+              onClick={() => void createLayer()}
+            >
+              <Plus className="mr-1 h-3.5 w-3.5" /> Add layer
+            </Button>
+          </div>
+          {newLabel.trim() && (
+            <p className="text-[11px] text-muted-foreground">
+              Stored as{" "}
+              <span className="font-mono">{toLayerCode(newLabel) || "—"}</span>. This
+              becomes a service type as well, so it can be chosen when adding a
+              service — and once tracked, a property without one counts as a gap.
+            </p>
           )}
         </div>
 
@@ -728,6 +805,7 @@ export function DigitalEstateTab({ role }: { role?: string }) {
       <LayerEditor
         settings={settings}
         saving={saving}
+        onCatalogChanged={load}
         onSave={(enabled) => void save({ enabled_layers: enabled })}
       />
       <ThresholdEditor
