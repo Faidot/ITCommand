@@ -14,5 +14,6 @@ from .kb import *
 from .estate import *
 from .payments import *
 from .estate_import import *
+from .reset import *
 from .calendar import *
 from .discovery import *
