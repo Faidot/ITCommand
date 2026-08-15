@@ -57,9 +57,114 @@ STACK_TYPE_CODES = tuple(code for code, _ in STACK_TYPES)
 SERVICE_TYPE_ORDER = {code: index for index, (code, _) in enumerate(SERVICE_TYPES)}
 
 
+# ───────────────────────── admin-added types ─────────────────────────────
+#
+# The seven stack roles and the built-in extras above are fixed: gap analysis,
+# the stack diagram and the dashboard all branch on those codes. Anything an
+# organisation adds beyond them is a *category* — billed and reported, never
+# counted as a gap — and lives in the List of Values so it can be added without
+# a deploy.
+#
+# These functions are the single place that merges the two. Read through them
+# rather than the tuples above and a custom type works everywhere: model
+# validation, the API, the add-service form and the bulk importer.
+
+
+#: Cached admin additions, keyed by LOV group.
+#:
+#: Django asks a field for its `choices` once per serialized row, so reading
+#: the List of Values table on every call turned a 10-query list endpoint into
+#: 1380 queries. This collapses that to one per request.
+#:
+#: Scoped to the request rather than the process, cleared on `request_started`
+#: (see core.signals). That choice does the work of three separate fixes:
+#: an edit is visible on the very next request instead of waiting for a TTL;
+#: every Gunicorn worker sees it, not just the one that handled the write; and
+#: tests cannot leak a cached type past the rollback that removed it, which is
+#: exactly what a process-lifetime cache did — one test adding a type made an
+#: unrelated later test see twelve layers where the code defines eleven.
+_LOV_CACHE: dict = {}
+#: Backstop for callers outside the request cycle — management commands, the
+#: automation loop — where `request_started` never fires.
+_LOV_CACHE_TTL_SECONDS = 30
+
+
+def clear_type_cache():
+    """Drop the cached additions. Called when a List of Values row changes."""
+    _LOV_CACHE.clear()
+
+
+_RESOLVING: set = set()
+
+
+def _lov_extras(group, builtin_codes):
+    """Codes an admin added to `group`, minus anything already built in."""
+    import time
+
+    # Re-entry means something this function calls has looped back into it —
+    # a List of Values seed reading the model field whose choices come from
+    # this group, say. Returning the built-ins breaks the cycle at its first
+    # turn instead of recursing until Python gives up, which previously
+    # surfaced as a mysterious query-per-row rather than as an error.
+    if group in _RESOLVING:
+        return ()
+
+    cached = _LOV_CACHE.get(group)
+    if cached and (time.monotonic() - cached[0]) < _LOV_CACHE_TTL_SECONDS:
+        return cached[1]
+
+    _RESOLVING.add(group)
+    try:
+        from core.lov import get_values
+
+        rows = get_values(group)
+    except Exception:
+        # A missing table during migrate, or a group renamed out from under
+        # us. Built-ins alone are always a usable answer, and this must never
+        # be the reason a page fails to render.
+        return ()
+    finally:
+        _RESOLVING.discard(group)
+
+    extras = tuple(
+        (code, label) for code, label in rows if code and code not in builtin_codes
+    )
+    _LOV_CACHE[group] = (time.monotonic(), extras)
+    return extras
+
+
+def service_type_choices():
+    """Every selectable service type: built-ins first, then admin additions.
+
+    Passed to the model field as a callable, so Django re-evaluates it rather
+    than freezing the list at import. A type added in Settings is immediately
+    valid on save without a migration or a restart.
+    """
+    return list(SERVICE_TYPES) + list(_lov_extras("subscription_category", SERVICE_TYPE_CODES))
+
+
+def service_type_codes():
+    return tuple(code for code, _ in service_type_choices())
+
+
+def property_kind_choices():
+    return list(PROPERTY_KINDS) + list(
+        _lov_extras("estate_property_kind", tuple(c for c, _ in PROPERTY_KINDS))
+    )
+
+
+def property_kind_codes():
+    return tuple(code for code, _ in property_kind_choices())
+
+
 def service_type_label(code):
     """Human label for a service type, falling back to the code itself."""
-    return SERVICE_TYPE_LABELS.get(code, code or "")
+    if code in SERVICE_TYPE_LABELS:
+        return SERVICE_TYPE_LABELS[code]
+    for candidate, label in _lov_extras("subscription_category", SERVICE_TYPE_CODES):
+        if candidate == code:
+            return label
+    return code or ""
 
 
 def is_stack_type(code):

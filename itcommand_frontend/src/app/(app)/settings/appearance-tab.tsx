@@ -250,7 +250,7 @@ export function AppearanceTab() {
           ].map((s) => (
             <div
               key={s.label}
-              className="cursor-pointer rounded-xl border bg-card p-4 transition-all hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg hover:shadow-primary/5"
+              className="cursor-pointer rounded-xl border bg-card p-4 transition-[box-shadow,border-color] hover:border-primary/40 hover:shadow-lg hover:shadow-primary/5"
             >
               <p className="text-xs uppercase tracking-wide text-muted-foreground">{s.label}</p>
               <p className={`mt-1 text-2xl font-semibold tabular-nums ${s.tone}`}>{s.value}</p>

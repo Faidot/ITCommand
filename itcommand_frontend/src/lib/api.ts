@@ -92,6 +92,16 @@ function syncVaultExpiry() {
 // Request interceptor to attach JWT access token (and vault unlock token if present)
 api.interceptors.request.use(
   (config) => {
+    // FormData has to set its own Content-Type, because only the browser knows
+    // the multipart boundary it generated. The instance-wide
+    // "application/json" default overrides that, so the boundary is lost and
+    // the server receives a body it cannot parse — every upload arrives with
+    // no file attached. Clearing it here fixes uploads everywhere rather than
+    // one caller at a time.
+    if (typeof FormData !== "undefined" && config.data instanceof FormData) {
+      delete config.headers["Content-Type"];
+    }
+
     if (typeof window !== "undefined") {
       const token = localStorage.getItem("access_token");
       if (token) {

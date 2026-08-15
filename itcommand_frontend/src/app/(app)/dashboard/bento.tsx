@@ -53,7 +53,7 @@ export function Bento({
   const card = (
     <div
       className={`flex h-full min-h-0 min-w-0 flex-col overflow-hidden rounded-2xl border border-border/60 bg-card p-[clamp(0.85rem,0.9vw,1.5rem)] transition-all ${
-        href ? "hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-lg hover:shadow-primary/5" : ""
+        href ? "hover:border-primary/40 hover:shadow-lg hover:shadow-primary/5" : ""
       } ${className}`}
     >
       {children}

@@ -22,9 +22,11 @@ from core.estate import (
     BILLING_CYCLES,
     MFA_TYPES,
     PROPERTY_KINDS,
+    property_kind_choices,
     SERVICE_STATUSES,
     SERVICE_TYPE_CODES,
     SERVICE_TYPES,
+    service_type_choices,
     STACK_TYPE_CODES,
     TIMELINE_WINDOW_DAYS,
     URGENT_WINDOW_DAYS,
@@ -221,7 +223,7 @@ class Property(models.Model):
         help_text="The domain or app identifier, e.g. example.com.",
     )
     kind = models.CharField(
-        max_length=24, choices=PROPERTY_KINDS, default="OTHER", db_index=True
+        max_length=24, choices=property_kind_choices, default="OTHER", db_index=True
     )
     owner = models.ForeignKey(
         User,
@@ -306,7 +308,7 @@ class Service(models.Model):
 
     service_type = models.CharField(
         max_length=16,
-        choices=SERVICE_TYPES,
+        choices=service_type_choices,
         db_index=True,
         help_text="Both the category and, for the seven stack roles, the stack position.",
     )
@@ -638,9 +640,15 @@ class EstateSettings(models.Model):
         clears every layer sees everything rather than nothing — an empty estate
         page is a worse answer than a noisy one.
         """
+        # The *extended* code set, not the frozen tuple: a type added under
+        # Settings could previously be ticked here and was silently dropped on
+        # save, which looked exactly like the setting not working.
+        from core.estate import service_type_codes
+
+        known = service_type_codes()
         seen, ordered = set(), []
         for code in self.enabled_layers or []:
-            if code in SERVICE_TYPE_CODES and code not in seen:
+            if code in known and code not in seen:
                 seen.add(code)
                 ordered.append(code)
         return ordered or list(SERVICE_TYPE_CODES)
