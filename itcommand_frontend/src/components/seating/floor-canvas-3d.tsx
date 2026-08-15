@@ -3,14 +3,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Canvas, useThree } from "@react-three/fiber";
 import { Grid, Html } from "@react-three/drei";
-import { Footprints, Move3d } from "lucide-react";
+import { Box, Footprints, Move3d, Square } from "lucide-react";
 
-import { ELEMENTS, FloorObject, effectiveColor } from "@/lib/seating-types";
+import { ELEMENTS, FloorObject, effectiveColor, wallHeightOf } from "@/lib/seating-types";
 import { Furniture } from "@/components/seating/furniture-3d";
 import { SeatTooltip } from "@/components/seating/seat-tooltip";
 import {
   DoorLeaf, EYE_HEIGHT, NO_ROOM_OPENINGS, Opening, PerimeterWalls, RoomOpenings,
-  RoomShell, SCALE, WallRun, isWallVertical, openingsForRoom, openingsForWall,
+  RoomShell, SCALE, WallFinish, WallRun, isWallVertical, openingsForRoom,
+  openingsForWall,
 } from "@/components/seating/architecture-3d";
 import { NavMode, PlanControls, WalkControls } from "@/components/seating/nav-3d";
 
@@ -53,6 +54,7 @@ export function FloorCanvas3D({
   const wallH = Math.max(0, wallHeightUnits || 0);
 
   const [mode, setMode] = useState<NavMode>("plan");
+  const [finish, setFinish] = useState<WallFinish>("solid");
   //: Doors are opened by clicking them. Kept here rather than on the record —
   //: which door is standing open is how you are looking at the floor right
   //: now, not a fact about the building worth saving for everyone.
@@ -82,7 +84,12 @@ export function FloorCanvas3D({
 
   return (
     <div className="relative flex-1 bg-gradient-to-b from-sky-100 to-slate-300 dark:from-slate-800 dark:to-slate-950">
-      <NavToolbar mode={mode} onChange={setMode} />
+      <NavToolbar
+        mode={mode}
+        onChange={setMode}
+        finish={finish}
+        onFinishChange={setFinish}
+      />
 
       <Canvas
         shadows
@@ -110,7 +117,7 @@ export function FloorCanvas3D({
         </mesh>
 
         {/* Solid, and cut away from whichever side you are looking from. */}
-        <PerimeterWalls fw={fw} fh={fh} h={wallH} cutaway={!walking} />
+        <PerimeterWalls fw={fw} fh={fh} h={wallH} cutaway={!walking} finish={finish} />
 
         {/* A construction grid is a plan-view aid; standing in the room it is
             just a pattern painted on the carpet. */}
@@ -137,6 +144,7 @@ export function FloorCanvas3D({
             floorH={fh}
             wallH={wallH}
             walking={walking}
+            finish={finish}
             doorOpen={openDoors.has(o.cid)}
             onToggleDoor={() => toggleDoor(o.cid)}
             wallOpenings={wallOpenings.get(o.cid)}
@@ -243,12 +251,17 @@ function DoorReach({
 function NavToolbar({
   mode,
   onChange,
+  finish,
+  onFinishChange,
 }: {
   mode: NavMode;
   onChange: (mode: NavMode) => void;
+  finish: WallFinish;
+  onFinishChange: (finish: WallFinish) => void;
 }) {
   return (
-    <div className="absolute left-3 top-3 z-10 flex overflow-hidden rounded-lg border bg-background/95 shadow-sm backdrop-blur">
+    <div className="absolute left-3 top-3 z-10 flex flex-wrap gap-2">
+    <div className="flex overflow-hidden rounded-lg border bg-background/95 shadow-sm backdrop-blur">
       {([
         { key: "plan" as const, icon: Move3d, label: "Plan" },
         { key: "walk" as const, icon: Footprints, label: "Walk" },
@@ -272,6 +285,32 @@ function NavToolbar({
         </button>
       ))}
     </div>
+
+    <div className="flex overflow-hidden rounded-lg border bg-background/95 shadow-sm backdrop-blur">
+      {([
+        { key: "solid" as const, icon: Box, label: "Solid" },
+        { key: "glass" as const, icon: Square, label: "See-through" },
+      ]).map(({ key, icon: Icon, label }) => (
+        <button
+          key={key}
+          type="button"
+          onClick={() => onFinishChange(key)}
+          className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors ${
+            finish === key
+              ? "bg-primary text-primary-foreground"
+              : "text-muted-foreground hover:bg-muted"
+          }`}
+          title={
+            key === "solid"
+              ? "Solid walls, with the near side cut away so you can see in"
+              : "Every wall translucent, so the whole floor stays visible at once"
+          }
+        >
+          <Icon className="h-3.5 w-3.5" /> {label}
+        </button>
+      ))}
+    </div>
+    </div>
   );
 }
 
@@ -294,6 +333,7 @@ function Object3D({
   floorH,
   wallH,
   walking,
+  finish,
   doorOpen,
   onToggleDoor,
   wallOpenings,
@@ -310,6 +350,7 @@ function Object3D({
   floorH: number;
   wallH: number;
   walking: boolean;
+  finish: WallFinish;
   doorOpen: boolean;
   onToggleDoor: () => void;
   wallOpenings?: Opening[];
@@ -344,9 +385,10 @@ function Object3D({
   const isText = obj.object_type === "TEXT";
   const isDoor = obj.object_type === "DOOR";
 
-  // Interior walls take the floor's wall height rather than a hardcoded one,
-  // so a wall drawn on the plan reaches the ceiling like the perimeter does.
-  const structureH = Math.max(wallH || 0, 2.4);
+  // Per object, falling back to the floor's own height — so a wall drawn on
+  // the plan reaches the ceiling like the perimeter does unless it has been
+  // given a height of its own.
+  const structureH = wallHeightOf(obj, wallH);
 
   const body = ARCHITECTURE.has(obj.object_type) ? (
     obj.object_type === "WALL" ? (
@@ -360,6 +402,7 @@ function Object3D({
           h={structureH}
           color={color}
           openings={wallOpenings ?? NO_OPENINGS}
+          finish={finish}
         />
       </group>
     ) : obj.object_type === "ROOM" ? (
@@ -367,6 +410,7 @@ function Object3D({
         w={w} d={d} h={structureH} color={color}
         openings={roomOpenings ?? NO_ROOM_OPENINGS}
         cutaway={!walking}
+        finish={finish}
       />
     ) : (
       <DoorLeaf w={w} d={d} h={structureH} color={color} open={doorOpen} />

@@ -35,6 +35,34 @@ export const SCALE = 40;
 export const EYE_HEIGHT = 1.7;
 const DOOR_HEIGHT = 2.1;
 
+/**
+ * How solid the walls are.
+ *
+ * `solid` cuts away whichever walls stand between you and the room. `glass`
+ * keeps every wall on screen and makes them translucent instead, which is what
+ * you want when the shape of the whole floor matters more than seeing into any
+ * one part of it.
+ */
+export type WallFinish = "solid" | "glass";
+
+export const GLASS_OPACITY = 0.26;
+
+/** The one place that decides what a wall surface looks like. */
+export function wallMaterialProps(finish: WallFinish, color: string) {
+  return finish === "glass"
+    ? {
+        color,
+        roughness: 0.15,
+        metalness: 0.02,
+        transparent: true,
+        opacity: GLASS_OPACITY,
+        // Without this, a translucent wall in front writes depth and erases
+        // the desks behind it — the exact bug the old 35% walls had.
+        depthWrite: false,
+      }
+    : { color, roughness: 0.92, metalness: 0.02, transparent: false, opacity: 1 };
+}
+
 function shade(hex: string, amt: number): string {
   let h = (hex || "#888888").replace("#", "");
   if (h.length === 3) h = h.split("").map((c) => c + c).join("");
@@ -89,19 +117,23 @@ function CutawayWall({
   normal,
   color,
   cutaway,
+  finish,
 }: {
   position: [number, number, number];
   size: [number, number, number];
   normal: [number, number, number];
   color: string;
   cutaway: boolean;
+  finish: WallFinish;
 }) {
   const ref = useRef<THREE.Mesh>(null);
-  useCutaway(ref, normal, position, cutaway);
+  // Glass walls are see-through already, so cutting them away as well would
+  // just make the near side of the building vanish for no reason.
+  useCutaway(ref, normal, position, cutaway && finish === "solid");
   return (
-    <mesh ref={ref} position={position} castShadow receiveShadow>
+    <mesh ref={ref} position={position} castShadow={finish === "solid"} receiveShadow>
       <boxGeometry args={size} />
-      <meshStandardMaterial color={color} roughness={0.92} metalness={0.02} />
+      <meshStandardMaterial {...wallMaterialProps(finish, color)} />
     </mesh>
   );
 }
@@ -115,11 +147,13 @@ export function PerimeterWalls({
   fh,
   h,
   cutaway,
+  finish,
 }: {
   fw: number;
   fh: number;
   h: number;
   cutaway: boolean;
+  finish: WallFinish;
 }) {
   if (h <= 0) return null;
   const t = 0.14;
@@ -142,7 +176,7 @@ export function PerimeterWalls({
     <group>
       {walls.map((wall, i) => (
         <group key={i}>
-          <CutawayWall {...wall} color={colour} cutaway={cutaway} />
+          <CutawayWall {...wall} color={colour} cutaway={cutaway} finish={finish} />
           {/* A skirting board reads as "this is a room" far faster than a
               flat slab does, and it stays put when the wall above is cut. */}
           <mesh
@@ -232,12 +266,14 @@ export function WallRun({
   h,
   color,
   openings,
+  finish = "solid",
 }: {
   w: number;
   d: number;
   h: number;
   color: string;
   openings: Opening[];
+  finish?: WallFinish;
 }) {
   const thickness = Math.max(d, 0.12);
   const doorH = Math.min(DOOR_HEIGHT, h * 0.86);
@@ -261,11 +297,11 @@ export function WallRun({
         <mesh
           key={`s${i}`}
           position={[(run.from + run.to) / 2, h / 2, 0]}
-          castShadow
+          castShadow={finish === "solid"}
           receiveShadow
         >
           <boxGeometry args={[run.to - run.from, h, thickness]} />
-          <meshStandardMaterial color={color} roughness={0.92} />
+          <meshStandardMaterial {...wallMaterialProps(finish, color)} />
         </mesh>
       ))}
       {/* Lintel: the wall above each opening still has to be there. */}
@@ -274,11 +310,11 @@ export function WallRun({
           <mesh
             key={`l${i}`}
             position={[opening.at, doorH + (h - doorH) / 2, 0]}
-            castShadow
+            castShadow={finish === "solid"}
             receiveShadow
           >
             <boxGeometry args={[opening.width, h - doorH, thickness]} />
-            <meshStandardMaterial color={color} roughness={0.92} />
+            <meshStandardMaterial {...wallMaterialProps(finish, color)} />
           </mesh>
         ) : null,
       )}
@@ -363,6 +399,7 @@ export function RoomShell({
   color,
   openings,
   cutaway,
+  finish,
 }: {
   w: number;
   d: number;
@@ -370,6 +407,7 @@ export function RoomShell({
   color: string;
   openings: RoomOpenings;
   cutaway: boolean;
+  finish: WallFinish;
 }) {
   const t = 0.12;
   const wallColour = shade(color, -18);
@@ -383,22 +421,22 @@ export function RoomShell({
 
       <RoomWall length={w} t={t} h={h} colour={wallColour}
         position={[0, 0, -d / 2 + t / 2]} rotation={0}
-        normal={[0, 0, -1]} cutaway={cutaway} openings={openings.north} />
+        normal={[0, 0, -1]} cutaway={cutaway} finish={finish} openings={openings.north} />
       <RoomWall length={w} t={t} h={h} colour={wallColour}
         position={[0, 0, d / 2 - t / 2]} rotation={0}
-        normal={[0, 0, 1]} cutaway={cutaway} openings={openings.south} />
+        normal={[0, 0, 1]} cutaway={cutaway} finish={finish} openings={openings.south} />
       <RoomWall length={d} t={t} h={h} colour={wallColour}
         position={[-w / 2 + t / 2, 0, 0]} rotation={Math.PI / 2}
-        normal={[-1, 0, 0]} cutaway={cutaway} openings={openings.west} />
+        normal={[-1, 0, 0]} cutaway={cutaway} finish={finish} openings={openings.west} />
       <RoomWall length={d} t={t} h={h} colour={wallColour}
         position={[w / 2 - t / 2, 0, 0]} rotation={Math.PI / 2}
-        normal={[1, 0, 0]} cutaway={cutaway} openings={openings.east} />
+        normal={[1, 0, 0]} cutaway={cutaway} finish={finish} openings={openings.east} />
     </group>
   );
 }
 
 function RoomWall({
-  length, t, h, colour, position, rotation, normal, cutaway, openings,
+  length, t, h, colour, position, rotation, normal, cutaway, finish, openings,
 }: {
   length: number;
   t: number;
@@ -408,13 +446,14 @@ function RoomWall({
   rotation: number;
   normal: [number, number, number];
   cutaway: boolean;
+  finish: WallFinish;
   openings: Opening[];
 }) {
   const ref = useRef<THREE.Group>(null);
-  useCutaway(ref, normal, [position[0], h / 2, position[2]], cutaway);
+  useCutaway(ref, normal, [position[0], h / 2, position[2]], cutaway && finish === "solid");
   return (
     <group ref={ref} position={position} rotation-y={rotation}>
-      <WallRun w={length} d={t} h={h} color={colour} openings={openings} />
+      <WallRun w={length} d={t} h={h} color={colour} openings={openings} finish={finish} />
     </group>
   );
 }
