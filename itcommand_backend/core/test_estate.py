@@ -195,14 +195,37 @@ class SeedEstateCommandTests(TestCase):
         return out.getvalue()
 
     def test_seeds_the_catalog(self):
+        # Against the catalog rather than a number: it is meant to grow, and a
+        # magic count turns every addition into a test edit.
+        from core.management.commands.seed_providers import PROVIDERS
+
         self._run()
-        self.assertEqual(Provider.objects.count(), 10)
+        self.assertEqual(Provider.objects.count(), len(PROVIDERS))
         self.assertTrue(Provider.objects.filter(slug="cloudflare").exists())
 
+    def test_the_catalog_has_no_duplicate_slugs_or_names(self):
+        """Both are unique columns, so a duplicate is an IntegrityError on a
+        production server rather than a bad row."""
+        from core.management.commands.seed_providers import PROVIDERS
+
+        slugs = [row[0] for row in PROVIDERS]
+        names = [row[1] for row in PROVIDERS]
+        self.assertEqual(len(set(slugs)), len(slugs))
+        self.assertEqual(len(set(names)), len(names))
+
+    def test_every_catalog_row_passes_model_validation(self):
+        """The hex colour and URL validators only run on full_clean, which
+        get_or_create does not call — so nothing else would catch a typo."""
+        self._run()
+        for provider in Provider.objects.all():
+            provider.full_clean()
+
     def test_is_idempotent(self):
+        from core.management.commands.seed_providers import PROVIDERS
+
         self._run()
         self._run()
-        self.assertEqual(Provider.objects.count(), 10)
+        self.assertEqual(Provider.objects.count(), len(PROVIDERS))
 
     def test_creates_no_accounts_properties_or_services(self):
         self._run()
