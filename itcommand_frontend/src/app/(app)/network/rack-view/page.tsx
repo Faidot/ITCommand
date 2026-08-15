@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Server } from "lucide-react";
 import api from "@/lib/api";
+import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -30,7 +31,7 @@ export default function RackViewPage() {
       setLocations(d);
       const racks = d.filter((l: any) => ['SERVER_ROOM', 'RACK', 'CABINET'].includes(l.location_type));
       if (racks.length > 0) setSelectedLoc(String(racks[0].id));
-    }).catch(() => {});
+    }).catch(() => toast.error("Could not load rack locations."));
   }, []);
 
   useEffect(() => {

@@ -5,7 +5,8 @@ import {
   SlidersHorizontal, Boxes,
 } from "lucide-react";
 import {
-  ASSIGNABLE_TYPES, ELEMENTS, FloorObject, effectiveColor,
+  ASSIGNABLE_TYPES, ELEMENTS, FloorObject, MAX_WALL_HEIGHT, MIN_WALL_HEIGHT,
+  WALL_HEIGHT_TYPES, effectiveColor, wallHeightOf,
 } from "@/lib/seating-types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -25,8 +26,11 @@ export function PropertiesPanel({
   onSendToBack,
   onAssign,
   onVacate,
+  floorWallHeight = 3,
 }: {
   objs: FloorObject[];
+  /** Fallback height for rooms and walls that have not overridden it. */
+  floorWallHeight?: number;
   onChange: (patch: Partial<FloorObject>) => void;
   onDelete: () => void;
   onDuplicate: () => void;
@@ -174,6 +178,47 @@ export function PropertiesPanel({
           <Field label="Rotation°"><Input type="number" value={Math.round(obj.rotation)} onChange={(e) => onChange({ rotation: num(e.target.value) % 360 })} className="h-8 text-sm" /></Field>
           <Field label="Elevation (3D)"><Input type="number" value={Math.round(obj.elevation)} onChange={(e) => onChange({ elevation: Math.max(0, num(e.target.value)) })} className="h-8 text-sm" /></Field>
         </div>
+
+        {WALL_HEIGHT_TYPES.has(obj.object_type) && (
+          <Field label="Wall height (3D, grid units)">
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                step="0.1"
+                min={MIN_WALL_HEIGHT}
+                max={MAX_WALL_HEIGHT}
+                value={wallHeightOf(obj, floorWallHeight)}
+                onChange={(e) =>
+                  onChange({
+                    style: {
+                      ...obj.style,
+                      wallHeight: Math.min(
+                        MAX_WALL_HEIGHT,
+                        Math.max(MIN_WALL_HEIGHT, num(e.target.value) || floorWallHeight),
+                      ),
+                    },
+                  })
+                }
+                className="h-8 text-sm"
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 px-2 text-[11px]"
+                title="Match the floor's wall height"
+                onClick={() => {
+                  // Delete rather than write the floor's number in: the room
+                  // should keep following the floor if the floor changes.
+                  const next = { ...obj.style };
+                  delete next.wallHeight;
+                  onChange({ style: next });
+                }}
+              >
+                Auto
+              </Button>
+            </div>
+          </Field>
+        )}
 
         <Field label="Color">
           <div className="flex flex-wrap gap-1.5">

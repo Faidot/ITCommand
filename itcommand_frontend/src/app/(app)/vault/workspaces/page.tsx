@@ -12,6 +12,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
+import { downloadBlob } from "@/lib/download";
+import { copyText } from "@/lib/clipboard";
 import { useAuthStore } from "@/store/authStore";
 
 import { Button } from "@/components/ui/button";
@@ -116,6 +118,22 @@ const PLATFORM_OPTIONS = [
 ];
 
 // ───────────── Page ─────────────
+
+/**
+ * Open a workspace's account URL in a new tab.
+ *
+ * `noopener` is not optional here: without it the site we open gets a handle
+ * on this tab through `window.opener` and can navigate it somewhere else —
+ * a sign-in page that looks like ours, for instance. The URL is whatever
+ * somebody typed into the workspace record, so it is not ours to trust.
+ *
+ * A blocked popup returns null, which would otherwise be a click that does
+ * nothing and says nothing.
+ */
+function openAccountUrl(url: string) {
+  const opened = window.open(url, "_blank", "noopener,noreferrer");
+  if (!opened) toast.error("Your browser blocked that tab. Allow pop-ups for this site.");
+}
 
 export default function WorkspacesPage() {
   const money = useMoney();
@@ -259,9 +277,9 @@ export default function WorkspacesPage() {
     }
   };
 
-  const copy = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success(`${label} copied.`);
+  const copy = async (text: string, label: string) => {
+    if (await copyText(text)) toast.success(`${label} copied.`);
+    else toast.error(`Could not copy the ${label.toLowerCase()}. Select it and copy by hand.`);
   };
 
   const exportCsv = () => {
@@ -276,12 +294,7 @@ export default function WorkspacesPage() {
       ]),
     ];
     const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = `vault-workspaces-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(csv, `vault-workspaces-${new Date().toISOString().slice(0, 10)}.csv`, "text/csv");
     toast.success("Exported workspaces.");
   };
 
@@ -462,7 +475,7 @@ export default function WorkspacesPage() {
               onEdit={() => openEditDialog(ws)}
               onDelete={() => deleteWs(ws.id)}
               onMarkRenewed={() => markRenewed(ws.id)}
-              onCopyEmail={() => copy(ws.login_email, "Email")}
+              onCopyEmail={() => void copy(ws.login_email, "Email")}
             />
           ))}
         </div>
@@ -503,7 +516,7 @@ export default function WorkspacesPage() {
                   <TableCell className="font-mono text-sm">
                     <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
                       <span className="truncate max-w-[12rem]">{ws.login_email}</span>
-                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => copy(ws.login_email, "Email")}>
+                      <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => void copy(ws.login_email, "Email")}>
                         <Copy className="h-3 w-3" />
                       </Button>
                     </div>
@@ -532,11 +545,11 @@ export default function WorkspacesPage() {
                           <ChevronRight className="w-4 h-4 mr-2" /> Open details
                         </DropdownMenuItem>
                         {ws.account_url && (
-                          <DropdownMenuItem onSelect={() => window.open(ws.account_url!, "_blank")}>
+                          <DropdownMenuItem onSelect={() => openAccountUrl(ws.account_url!)}>
                             <ExternalLink className="w-4 h-4 mr-2" /> Open account
                           </DropdownMenuItem>
                         )}
-                        <DropdownMenuItem onSelect={() => copy(ws.login_email, "Email")}>
+                        <DropdownMenuItem onSelect={() => void copy(ws.login_email, "Email")}>
                           <Copy className="w-4 h-4 mr-2" /> Copy email
                         </DropdownMenuItem>
                         <DropdownMenuItem onSelect={() => setTimeout(() => markRenewed(ws.id), 50)}>
@@ -838,7 +851,7 @@ function WorkspaceCard({
                 <ChevronRight className="w-3.5 h-3.5 mr-2" /> Open details
               </DropdownMenuItem>
               {ws.account_url && (
-                <DropdownMenuItem onSelect={() => window.open(ws.account_url!, "_blank")}>
+                <DropdownMenuItem onSelect={() => openAccountUrl(ws.account_url!)}>
                   <ExternalLink className="w-3.5 h-3.5 mr-2" /> Open account
                 </DropdownMenuItem>
               )}

@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowUpCircle, Plus, Trash2, Paperclip, FileText, Search, Download, Printer, AlertTriangle, Check, X } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
+import { downloadBlob } from "@/lib/download";
 import { useAuthStore } from "@/store/authStore";
 
 import { Button } from "@/components/ui/button";
@@ -25,13 +26,6 @@ type Entry = { title: string; amount: string; category: string };
 const emptyShared = { paid_to: "", expense_date: "", financial_year: "", payment_method: "BANK_TRANSFER", source: "" };
 const emptyBill = { bill_number: "", bill_date: "" };
 const METHODS = ["PETTY_CASH", "BANK_TRANSFER", "CARD", "CASH", "CHEQUE", "ONLINE", "OTHER"];
-
-function downloadBlob(data: BlobPart, filename: string) {
-  const url = URL.createObjectURL(new Blob([data]));
-  const a = document.createElement("a");
-  a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
-}
 
 const statusBadge = (s: string) => {
   if (s === "APPROVED") return <Badge className="bg-emerald-600 hover:bg-emerald-700 border-0">Approved</Badge>;

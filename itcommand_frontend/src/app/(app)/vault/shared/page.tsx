@@ -6,6 +6,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
 import { useAuthStore } from "@/store/authStore";
 
 import { Button } from "@/components/ui/button";
@@ -116,9 +117,9 @@ function SharedList() {
     }
   };
 
-  const copy = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success(`${label} copied.`);
+  const copy = async (text: string, label: string) => {
+    if (await copyText(text)) toast.success(`${label} copied.`);
+    else toast.error(`Could not copy the ${label.toLowerCase()}. Select it and copy by hand.`);
   };
 
   if (loading) {
@@ -156,7 +157,7 @@ function SharedList() {
                 <p className="text-xs text-neutral-500 font-medium">Username</p>
                 <div className="flex items-center justify-between bg-neutral-50 dark:bg-neutral-900 px-3 py-2 rounded border">
                   <span className="text-sm font-mono truncate">{item.username}</span>
-                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => copy(item.username, "Username")}>
+                  <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => void copy(item.username, "Username")}>
                     <Copy className="h-3 w-3" />
                   </Button>
                 </div>
@@ -170,7 +171,7 @@ function SharedList() {
                   </span>
                   <div className="flex gap-1">
                     {secret && (
-                      <Button variant="ghost" size="icon" className="h-6 w-6 text-emerald-600" onClick={() => copy(secret.password, "Password")}>
+                      <Button variant="ghost" size="icon" className="h-6 w-6 text-emerald-600" onClick={() => void copy(secret.password, "Password")}>
                         <Copy className="h-3 w-3" />
                       </Button>
                     )}
@@ -193,7 +194,7 @@ function SharedList() {
                   <p className="text-xs text-neutral-500 font-medium flex items-center gap-1"><ShieldCheck className="w-3 h-3" /> TOTP secret</p>
                   <div className="flex items-center justify-between bg-neutral-50 dark:bg-neutral-900 px-3 py-2 rounded border">
                     <span className="text-sm font-mono truncate">{secret.totp_secret}</span>
-                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => copy(secret.totp_secret!, "TOTP secret")}>
+                    <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => void copy(secret.totp_secret!, "TOTP secret")}>
                       <Copy className="h-3 w-3" />
                     </Button>
                   </div>
