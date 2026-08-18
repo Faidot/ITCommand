@@ -12,6 +12,7 @@ import { AlertTriangle, ExternalLink, KeyRound, Lock, ShieldAlert } from "lucide
 import { toast } from "sonner";
 
 import api from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
 import { formatMoney } from "@/lib/currency";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -257,10 +258,16 @@ export function CredentialCopyButton({
       );
       const password = response.data?.password;
       if (!password) throw new Error("empty");
-      await navigator.clipboard.writeText(password);
       // The value is never rendered, logged, or put in a URL — only handed to
       // the clipboard.
-      toast.success("Password copied. This reveal was logged.");
+      if (await copyText(password)) {
+        toast.success("Password copied. This reveal was logged.");
+      } else {
+        // The reveal happened and is already audited, so reporting this as a
+        // failed reveal would be wrong twice: it understates what was
+        // disclosed, and it sends the person to retry something that worked.
+        toast.error("Revealed and logged, but the clipboard refused it. Try again.");
+      }
     } catch (reason) {
       const status = (reason as { response?: { status?: number } })?.response?.status;
       if (status === 403) {

@@ -19,11 +19,15 @@ interface AddServiceContextValue {
   open: (seed?: ServiceSeed) => void;
   /** Bump to make screens refetch after a service is created or edited. */
   version: number;
+  /** Ask every screen to refetch — used by anything that writes outside the
+   *  wizard, such as a bulk import. */
+  bump: () => void;
 }
 
 const AddServiceContext = createContext<AddServiceContextValue>({
   open: () => {},
   version: 0,
+  bump: () => {},
 });
 
 export function useAddServiceDialog() {
@@ -40,7 +44,9 @@ export function AddServiceProvider({ children }: { children: React.ReactNode }) 
     setIsOpen(true);
   }, []);
 
-  const value = useMemo(() => ({ open, version }), [open, version]);
+  const bump = useCallback(() => setVersion((current) => current + 1), []);
+
+  const value = useMemo(() => ({ open, version, bump }), [open, version, bump]);
 
   return (
     <AddServiceContext.Provider value={value}>

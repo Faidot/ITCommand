@@ -1,3 +1,5 @@
+import { useCallback } from 'react';
+
 import { DEFAULT_CURRENCY, activeCurrency, useSettingsStore } from '@/store/settingsStore';
 
 /**
@@ -34,12 +36,24 @@ export function formatMoney(
 }
 
 /** Money formatter bound to the current settings; re-renders when they change. */
+/**
+ * Formatter bound to the company currency.
+ *
+ * Memoised on the currency rather than rebuilt each render. The identity of
+ * this function ends up in dependency arrays all over the app, and returning
+ * a fresh closure every time makes any `useMemo`/`useEffect` that depends on
+ * it re-run constantly — which is an infinite loop as soon as one of them
+ * sets state.
+ */
 export function useMoney() {
   const currency = useSettingsStore((state) => state.default_currency);
-  return (
-    amount: number | string | null | undefined,
-    options?: { compact?: boolean; decimals?: number },
-  ) => formatMoney(amount, currency, options);
+  return useCallback(
+    (
+      amount: number | string | null | undefined,
+      options?: { compact?: boolean; decimals?: number },
+    ) => formatMoney(amount, currency, options),
+    [currency],
+  );
 }
 
 /** The active currency code, for labels like "Amount (USD)". */

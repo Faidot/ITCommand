@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { ArrowDownCircle, Plus, Trash2, Paperclip, FileText, Search, Download, Printer, CalendarClock, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
+import { downloadBlob } from "@/lib/download";
 import { useAuthStore } from "@/store/authStore";
 
 import { Button } from "@/components/ui/button";
@@ -24,13 +25,6 @@ type Entry = { title: string; amount: string; category: string };
 const emptyShared = { source: "", income_date: "", financial_year: "", payment_method: "BANK_TRANSFER" };
 const emptyBill = { bill_number: "", bill_date: "" };
 const METHODS = ["BANK_TRANSFER", "CASH", "CARD", "CHEQUE", "ONLINE", "OTHER"];
-
-function downloadBlob(data: BlobPart, filename: string) {
-  const url = URL.createObjectURL(new Blob([data]));
-  const a = document.createElement("a");
-  a.href = url; a.download = filename; a.click();
-  URL.revokeObjectURL(url);
-}
 
 export default function IncomePage() {
   const money = useMoney();

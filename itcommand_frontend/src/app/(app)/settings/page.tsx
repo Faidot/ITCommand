@@ -18,6 +18,7 @@ import {
   Network,
   Pencil,
   Plus,
+  Palette,
   Puzzle,
   RefreshCw,
   Save,
@@ -32,6 +33,9 @@ import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
 import api from "@/lib/api";
+import { copyText } from "@/lib/clipboard";
+import { AppearanceTab } from "./appearance-tab";
+import { ResetTab } from "./reset-tab";
 import { useAuthStore } from "@/store/authStore";
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -212,6 +216,17 @@ export default function SettingsPage() {
           <TabsTrigger value="extension">
             <Puzzle className="h-4 w-4 mr-2" /> Browser Extension
           </TabsTrigger>
+          <TabsTrigger value="appearance">
+            <Palette className="h-4 w-4 mr-2" /> Appearance
+          </TabsTrigger>
+          {user?.role === "SUPERADMIN" && (
+            <TabsTrigger
+              value="reset"
+              className="text-red-700 data-[state=active]:text-red-700 dark:text-red-400"
+            >
+              <ShieldAlert className="h-4 w-4 mr-2" /> Reset
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="company"><CompanyTab role={user?.role} /></TabsContent>
@@ -230,6 +245,8 @@ export default function SettingsPage() {
         <TabsContent value="vault"><VaultSecurityTab role={user?.role} /></TabsContent>
         <TabsContent value="lov"><ListOfValuesTab role={user?.role} /></TabsContent>
         <TabsContent value="extension"><BrowserExtensionTab /></TabsContent>
+        <TabsContent value="appearance"><AppearanceTab /></TabsContent>
+        <TabsContent value="reset"><ResetTab role={user?.role} /></TabsContent>
       </Tabs>
     </div>
   );
@@ -2380,9 +2397,9 @@ function CalendarTab() {
             <Input readOnly value={feed.url} className="flex-1 min-w-[16rem] font-mono text-xs" />
             <Button
               variant="outline"
-              onClick={() => {
-                void navigator.clipboard.writeText(feed.url);
-                toast.success("Link copied");
+              onClick={async () => {
+                if (await copyText(feed.url)) toast.success("Link copied");
+                else toast.error("Could not copy. Select the link and copy it by hand.");
               }}
             >
               <Copy className="mr-2 h-4 w-4" /> Copy

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { HardDrive, Search, Plus, Download, X } from "lucide-react";
 import api from "@/lib/api";
+import { downloadBlob } from "@/lib/download";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -78,10 +79,7 @@ export default function NetworkDevicesPage() {
   const handleExport = async () => {
     try {
       const r = await api.get("/network/export/", { responseType: "blob" });
-      const url = window.URL.createObjectURL(new Blob([r.data]));
-      const link = document.createElement("a");
-      link.href = url; link.setAttribute("download", "network_inventory.xlsx");
-      document.body.appendChild(link); link.click(); link.remove();
+      downloadBlob(r.data as BlobPart, "network_inventory.xlsx");
     } catch { toast.error("Export failed"); }
   };
 

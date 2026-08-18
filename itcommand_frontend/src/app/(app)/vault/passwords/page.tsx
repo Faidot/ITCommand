@@ -14,6 +14,8 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
+import { downloadBlob } from "@/lib/download";
+import { canVerifyClipboard, clearClipboardIfUnchanged, copyText } from "@/lib/clipboard";
 import { useAuthStore } from "@/store/authStore";
 import { ShareCredentialDialog } from "@/components/vault/share-credential-dialog";
 
@@ -369,14 +371,21 @@ export default function PasswordsPage() {
     }
   };
 
-  const copyToClipboard = (text: string, type: string) => {
-    navigator.clipboard.writeText(text);
-    toast.success(`${type} copied — clipboard auto-clears in ${Math.round(COPY_CLEAR_MS / 1000)}s.`);
-    setTimeout(() => {
-      navigator.clipboard.readText().then((current) => {
-        if (current === text) navigator.clipboard.writeText("");
-      }).catch(() => { /* clipboard read may be blocked */ });
-    }, COPY_CLEAR_MS);
+  const copyToClipboard = async (text: string, type: string) => {
+    if (!(await copyText(text))) {
+      toast.error(`Could not copy the ${type.toLowerCase()}. Select it and copy by hand.`);
+      return;
+    }
+    // Only promise the auto-clear where we can actually keep it. Reading the
+    // clipboard back needs a permission that writing does not, and telling
+    // someone their password will disappear in 30 seconds when it will not is
+    // the kind of false reassurance this screen exists to avoid.
+    if (canVerifyClipboard()) {
+      toast.success(`${type} copied — clipboard auto-clears in ${Math.round(COPY_CLEAR_MS / 1000)}s.`);
+      setTimeout(() => { void clearClipboardIfUnchanged(text); }, COPY_CLEAR_MS);
+    } else {
+      toast.success(`${type} copied. Clear your clipboard when you are done.`);
+    }
   };
 
   const revealPassword = async (id: number) => {
@@ -421,8 +430,11 @@ export default function PasswordsPage() {
       if (target === "form") {
         form.setValue("password", pwd, { shouldValidate: true, shouldDirty: true });
       }
-      navigator.clipboard.writeText(pwd);
-      toast.success("Strong password generated and copied to clipboard.");
+      if (await copyText(pwd)) {
+        toast.success("Strong password generated and copied to clipboard.");
+      } else {
+        toast.success("Strong password generated. Copy it from the field.");
+      }
     } catch {
       toast.error("Failed to generate password.");
     }
@@ -473,12 +485,7 @@ export default function PasswordsPage() {
       ]),
     ];
     const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(",")).join("\n");
-    const blob = new Blob([csv], { type: "text/csv" });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url; a.download = `vault-credentials-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    downloadBlob(csv, `vault-credentials-${new Date().toISOString().slice(0, 10)}.csv`, "text/csv");
     toast.success("Metadata exported (passwords are never included).");
   };
 

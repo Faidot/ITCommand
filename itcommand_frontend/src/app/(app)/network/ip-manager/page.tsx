@@ -23,7 +23,7 @@ export default function IPManagerPage() {
       const d = r.data.results || r.data;
       setPools(d);
       if (!selectedPool && d.length > 0) setSelectedPool(String(d[0].id));
-    }).catch(() => {});
+    }).catch(() => toast.error("Could not load IP pools."));
   }, []);
 
   useEffect(() => { if (selectedPool) fetchUsage(); }, [selectedPool]);

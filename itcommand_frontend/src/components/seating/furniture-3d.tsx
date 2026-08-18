@@ -340,49 +340,6 @@ function Plant({ w, d, color }: FurnitureProps) {
   );
 }
 
-function Wall({ w, d, color }: FurnitureProps) {
-  return <Box p={[0, 1.35, 0]} s={[w, 2.7, Math.max(d, 0.12)]} color={color} rough={0.9} />;
-}
-
-function Door({ w, d, color }: FurnitureProps) {
-  const thick = Math.max(d, 0.12);
-  const frame = shade(color, -10);
-  return (
-    <group>
-      {/* frame */}
-      <Box p={[-w / 2 + 0.05, 1.05, 0]} s={[0.1, 2.1, thick]} color={frame} />
-      <Box p={[w / 2 - 0.05, 1.05, 0]} s={[0.1, 2.1, thick]} color={frame} />
-      <Box p={[0, 2.05, 0]} s={[w, 0.1, thick]} color={frame} />
-      {/* door panel, hinged open ~40° */}
-      <group position={[-w / 2 + 0.1, 0, 0]} rotation-y={-0.7}>
-        <Box p={[(w - 0.2) / 2, 1.0, 0]} s={[w - 0.2, 1.95, thick * 0.6]} color={shade(color, 25)} />
-        {/* handle */}
-        <mesh position={[w - 0.35, 1.0, thick * 0.4]} castShadow>
-          <sphereGeometry args={[0.05, 10, 10]} />
-          <meshStandardMaterial color="#fbbf24" metalness={0.6} roughness={0.3} />
-        </mesh>
-      </group>
-    </group>
-  );
-}
-
-function Room({ w, d, color, occupied }: FurnitureProps) {
-  const wallH = 0.5;
-  const wc = shade(color, -60);
-  return (
-    <group>
-      {/* floor pad */}
-      <Box p={[0, 0.03, 0]} s={[w, 0.06, d]} color={shade(color, 30)} rough={0.95} />
-      {/* low border walls */}
-      <Box p={[0, wallH / 2, -d / 2 + 0.05]} s={[w, wallH, 0.1]} color={wc} />
-      <Box p={[0, wallH / 2, d / 2 - 0.05]} s={[w, wallH, 0.1]} color={wc} />
-      <Box p={[-w / 2 + 0.05, wallH / 2, 0]} s={[0.1, wallH, d]} color={wc} />
-      <Box p={[w / 2 - 0.05, wallH / 2, 0]} s={[0.1, wallH, d]} color={wc} />
-      {occupied && <Person z={0} />}
-    </group>
-  );
-}
-
 function Cafe({ w, d, color, occupied }: FurnitureProps) {
   // counter along the back edge + a coffee machine, plus 2 bistro tables
   const tableR = Math.min(w, d) * 0.13;
@@ -494,9 +451,9 @@ export function Furniture({
         : <Table {...props} />;
     case "CHAIR": return <ChairElement {...props} />;
     case "PLANT": return <Plant {...props} />;
-    case "WALL": return <Wall {...props} />;
-    case "DOOR": return <Door {...props} />;
-    case "ROOM": return <Room {...props} />;
+    // WALL, DOOR and ROOM are drawn by architecture-3d.tsx instead: a wall
+    // has to know which doors are set into it, and a single-object renderer
+    // cannot see its neighbours.
     case "CAFE": return <Cafe {...props} />;
     case "RECEPTION": return <Reception {...props} />;
     case "PRINTER": return <Printer {...props} />;

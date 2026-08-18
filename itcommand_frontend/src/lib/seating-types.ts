@@ -208,3 +208,31 @@ export function makeCluster(id: string, x: number, y: number, startZ: number): F
   }
   return objs;
 }
+
+/* ───────────────────── structure heights ───────────────────── */
+
+/** Types whose wall height can be set per object, in floor grid units. */
+export const WALL_HEIGHT_TYPES = new Set<ElementType>(["WALL", "ROOM"]);
+
+/** Shortest and tallest a wall may be set to, in grid units. */
+export const MIN_WALL_HEIGHT = 0.4;
+export const MAX_WALL_HEIGHT = 12;
+
+/**
+ * How tall this object's walls should stand, in grid units.
+ *
+ * Stored on `style` rather than as its own column: it is one number on two of
+ * seventeen element types, and `style` is already the persisted home for
+ * per-type settings like a table's bench layout.
+ *
+ * Falls back to the floor's own wall height, so a room added to a 4-unit floor
+ * matches it without anybody setting anything.
+ */
+export function wallHeightOf(obj: FloorObject, floorWallHeight: number): number {
+  const raw = obj.style?.wallHeight;
+  const value = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(value) || value <= 0) {
+    return Math.max(MIN_WALL_HEIGHT, floorWallHeight || 2.7);
+  }
+  return Math.min(MAX_WALL_HEIGHT, Math.max(MIN_WALL_HEIGHT, value));
+}

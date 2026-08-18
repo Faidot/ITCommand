@@ -663,6 +663,7 @@ export default function SeatingPlanPage() {
         {editable && (
           <PropertiesPanel
             objs={selectedObjects}
+            floorWallHeight={selectedFloor?.wall_height_units ?? 3}
             onChange={(patch) => applyToSelection(patch)}
             onDelete={deleteSelection}
             onDuplicate={duplicateSelection}

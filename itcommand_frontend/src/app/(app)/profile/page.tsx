@@ -78,7 +78,13 @@ export default function ProfilePage() {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       setAvatarFile(file);
-      setAvatarPreview(URL.createObjectURL(file));
+      setAvatarPreview((previous) => {
+        // Each pick allocates a new object URL. Without releasing the last
+        // one, picking through a folder of photos holds every image in memory
+        // until the tab is closed.
+        if (previous) URL.revokeObjectURL(previous);
+        return URL.createObjectURL(file);
+      });
     }
   };
 

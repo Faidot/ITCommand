@@ -4,6 +4,7 @@ import "./globals.css";
 import { cn } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
+import { UiPrefsProvider, UiPrefsScript } from "@/components/ui-prefs-provider";
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",
@@ -28,6 +29,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        {/* Before hydration, so the app never paints at full motion and
+            default text size and then jumps once the store loads. */}
+        <UiPrefsScript />
+      </head>
       <body
         className={cn(
           geistSans.variable,
@@ -40,6 +46,7 @@ export default function RootLayout({
           defaultTheme="system"
           enableSystem
         >
+          <UiPrefsProvider />
           {children}
           <Toaster />
         </ThemeProvider>

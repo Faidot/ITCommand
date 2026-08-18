@@ -46,6 +46,13 @@ COMMON_CURRENCIES = (
 
 #: Seed for the digital-property kinds group. Imported from the estate taxonomy
 #: rather than restated, so the model choices and the dropdown cannot diverge.
+def _estate_service_types():
+    """Built-in service types, imported rather than restated."""
+    from core.estate import SERVICE_TYPES
+
+    return SERVICE_TYPES
+
+
 def _estate_property_kinds():
     from core.estate import PROPERTY_KINDS
 
@@ -98,7 +105,13 @@ def _field_choices(dotted_path: str, field_name: str):
 SYSTEM_SEEDS = {
     # Keys kept as `subscription_*` so an admin's relabelled or hidden rows
     # survive Phase 5; the choices behind them now come from `Service`.
-    "subscription_category": _field_choices("core.Service", "service_type"),
+    # The frozen built-ins, deliberately not the model field. `Service.
+    # service_type` now takes its choices *from this group*, so seeding from
+    # the field would be circular: get_values falls back to the seed, the seed
+    # reads the field, the field reads get_values. That recursion terminated
+    # in a RecursionError swallowed by a broad except, which turned a
+    # ten-query endpoint into one query per row.
+    "subscription_category": lambda: tuple(_estate_service_types()),
     "subscription_status": _field_choices("core.Service", "status"),
     "subscription_billing_cycle": _field_choices("core.Service", "billing_cycle"),
     "expense_status": _model_choices("core.Expense", "STATUS_CHOICES"),
