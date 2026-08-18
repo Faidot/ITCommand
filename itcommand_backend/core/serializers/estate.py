@@ -19,11 +19,13 @@ from rest_framework import serializers
 
 from core import estate
 from core.models import (
+    AccountUser,
     Property,
     EstateSettings,
     ExchangeRate,
     Provider,
     ProviderAccount,
+    Server,
     Service,
     VaultCredential,
 )
@@ -105,6 +107,14 @@ class ProviderAccountSerializer(serializers.ModelSerializer):
     # the API in the same commit would break the live Accounts tab for the
     # phases in between, for no gain — both sides move together in Phase 3.
     login_email = serializers.CharField(source="account_email", max_length=255)
+    login_kind_label = serializers.CharField(source="get_login_kind_display", read_only=True)
+    #: Counts rather than the people themselves. An account list is read far
+    #: more often than any one account is opened, and nesting twenty logins per
+    #: row would multiply the payload for something the table cannot show.
+    #: `/estate/account-users/?account=<id>` returns the list itself.
+    people_count = serializers.SerializerMethodField()
+    people_without_mfa = serializers.IntegerField(read_only=True)
+    privileged_count = serializers.SerializerMethodField()
     auth_method = serializers.ChoiceField(
         source="auth_type", choices=estate.AUTH_TYPES, required=False
     )
@@ -136,12 +146,17 @@ class ProviderAccountSerializer(serializers.ModelSerializer):
             "provider_slug",
             "brand_color",
             "login_email",
+            "login_kind",
+            "login_kind_label",
             "auth_method",
             "auth_method_label",
             "mfa_method",
             "mfa_method_label",
             "mfa_severity",
             "has_mfa",
+            "people_count",
+            "people_without_mfa",
+            "privileged_count",
             "owner",
             "owner_name",
             "owner_email",
@@ -158,6 +173,17 @@ class ProviderAccountSerializer(serializers.ModelSerializer):
             "updated_at",
         ]
         read_only_fields = ["created_at", "updated_at"]
+
+    def get_people_count(self, obj):
+        # `len` on the prefetched list, not `.count()`, which would fire a
+        # query per row and undo the prefetch the viewset sets up.
+        return sum(1 for person in obj.people.all() if person.is_active)
+
+    def get_privileged_count(self, obj):
+        return sum(
+            1 for person in obj.people.all()
+            if person.is_active and person.is_privileged
+        )
 
     def get_vault_credential_title(self, obj):
         if not obj.vault_credential_id:
@@ -349,6 +375,17 @@ class ServiceSerializer(serializers.ModelSerializer):
         ]
         read_only_fields = ["created_at", "updated_at"]
 
+    def get_people_count(self, obj):
+        # `len` on the prefetched list, not `.count()`, which would fire a
+        # query per row and undo the prefetch the viewset sets up.
+        return sum(1 for person in obj.people.all() if person.is_active)
+
+    def get_privileged_count(self, obj):
+        return sum(
+            1 for person in obj.people.all()
+            if person.is_active and person.is_privileged
+        )
+
     def get_vault_credential_title(self, obj):
         if not obj.vault_credential_id:
             return None
@@ -508,4 +545,160 @@ class ExchangeRateSerializer(serializers.ModelSerializer):
             from django.utils import timezone
 
             attrs["as_of"] = timezone.localdate()
+        return attrs
+
+
+class AccountUserSerializer(serializers.ModelSerializer):
+    """One person's login inside a provider account.
+
+    Carries the account and provider names so the "what does this person have?"
+    view can render a row without a second request per login.
+    """
+
+    name = serializers.CharField(read_only=True)
+    user_name = serializers.CharField(source="user.full_name", read_only=True, default=None)
+    user_email = serializers.EmailField(source="user.email", read_only=True, default=None)
+    account_login = serializers.CharField(
+        source="provider_account.account_email", read_only=True
+    )
+    provider = serializers.IntegerField(
+        source="provider_account.provider_id", read_only=True
+    )
+    provider_name = serializers.CharField(
+        source="provider_account.provider.name", read_only=True
+    )
+    brand_color = serializers.CharField(
+        source="provider_account.provider.brand_color", read_only=True
+    )
+    role_label = serializers.CharField(source="get_role_display", read_only=True)
+    login_kind_label = serializers.CharField(source="get_login_kind_display", read_only=True)
+    mfa_label = serializers.CharField(source="get_mfa_type_display", read_only=True)
+    mfa_severity = serializers.CharField(read_only=True)
+    is_privileged = serializers.BooleanField(read_only=True)
+
+    class Meta:
+        model = AccountUser
+        fields = [
+            "id",
+            "provider_account",
+            "account_login",
+            "provider",
+            "provider_name",
+            "brand_color",
+            "login",
+            "login_kind",
+            "login_kind_label",
+            "user",
+            "user_name",
+            "user_email",
+            "display_name",
+            "name",
+            "role",
+            "role_label",
+            "mfa_type",
+            "mfa_label",
+            "mfa_severity",
+            "is_privileged",
+            "last_reviewed",
+            "notes",
+            "is_active",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at"]
+
+    def validate(self, attrs):
+        # A row that names nobody is a row nobody can act on. One of the three
+        # has to say who this is, and `login` alone is enough for a service
+        # account — this only rejects the genuinely empty case.
+        instance = self.instance
+        login = attrs.get("login", getattr(instance, "login", "")) or ""
+        if not login.strip():
+            raise serializers.ValidationError(
+                {"login": "Enter the username or email this person signs in with."}
+            )
+        return attrs
+
+
+class ServerSerializer(serializers.ModelSerializer):
+    provider_account_login = serializers.CharField(
+        source="provider_account.account_email", read_only=True
+    )
+    provider = serializers.IntegerField(
+        source="provider_account.provider_id", read_only=True
+    )
+    provider_name = serializers.CharField(
+        source="provider_account.provider.name", read_only=True
+    )
+    brand_color = serializers.CharField(
+        source="provider_account.provider.brand_color", read_only=True
+    )
+    property_name = serializers.CharField(source="property.name", read_only=True, default=None)
+    service_identifier = serializers.CharField(
+        source="service.identifier", read_only=True, default=None
+    )
+    owner_name = serializers.CharField(source="owner.full_name", read_only=True, default=None)
+    role_label = serializers.CharField(source="get_server_role_display", read_only=True)
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+    environment_label = serializers.CharField(
+        source="get_environment_display", read_only=True
+    )
+    is_live = serializers.BooleanField(read_only=True)
+    effective_console_url = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = Server
+        fields = [
+            "id",
+            "provider_account",
+            "provider_account_login",
+            "provider",
+            "provider_name",
+            "brand_color",
+            "service",
+            "service_identifier",
+            "property",
+            "property_name",
+            "name",
+            "server_role",
+            "role_label",
+            "environment",
+            "environment_label",
+            "status",
+            "status_label",
+            "is_live",
+            "public_ip",
+            "private_ip",
+            "hostname",
+            "region",
+            "size",
+            "operating_system",
+            "provisioned_on",
+            "expires_on",
+            "owner",
+            "owner_name",
+            "console_url",
+            "effective_console_url",
+            "notes",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at"]
+
+    def validate(self, attrs):
+        # The service has to be billed through the same account, or the server
+        # ends up attributed to one provider and paid for by another — which
+        # makes both the cost report and the "what does this account hold"
+        # answer wrong, silently.
+        account = attrs.get(
+            "provider_account", getattr(self.instance, "provider_account", None)
+        )
+        service = attrs.get("service", getattr(self.instance, "service", None))
+        if service and account and service.provider_account_id != account.id:
+            raise serializers.ValidationError({
+                "service": (
+                    f"'{service.identifier}' is billed through a different account. "
+                    "Pick a service on this account, or leave it blank."
+                )
+            })
         return attrs

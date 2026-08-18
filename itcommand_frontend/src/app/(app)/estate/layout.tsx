@@ -17,7 +17,7 @@
 import { useState } from "react";
 import { usePathname } from "next/navigation";
 import Link from "next/link";
-import { CreditCard, Globe, KeyRound, LayoutDashboard, Plus, Server, Upload } from "lucide-react";
+import { CreditCard, Globe, HardDrive, KeyRound, LayoutDashboard, Plus, Server, Upload } from "lucide-react";
 
 import { can } from "@/lib/permissions";
 import { useAuthStore } from "@/store/authStore";
@@ -31,6 +31,7 @@ const TABS = [
   { href: "/estate/properties", label: "Properties", icon: Globe },
   { href: "/estate/accounts", label: "Accounts", icon: KeyRound },
   { href: "/estate/services", label: "Services", icon: Server },
+  { href: "/estate/servers", label: "Servers", icon: HardDrive },
   { href: "/estate/payments", label: "Cards & charges", icon: CreditCard },
 ];
 

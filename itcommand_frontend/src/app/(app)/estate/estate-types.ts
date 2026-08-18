@@ -252,6 +252,13 @@ export interface ProviderAccount {
   notes: string;
   is_active: boolean;
   service_count: number;
+  /** What the login string actually is — plenty of providers issue usernames. */
+  login_kind: string;
+  login_kind_label: string;
+  /** Active logins on this account. `AccountLogin` below is the list itself. */
+  people_count: number;
+  people_without_mfa: number;
+  privileged_count: number;
 }
 
 export function normalizeAccount(value: Record<string, unknown>): ProviderAccount {
@@ -277,6 +284,11 @@ export function normalizeAccount(value: Record<string, unknown>): ProviderAccoun
     notes: str(value.notes),
     is_active: bool(value.is_active, true),
     service_count: num(value.service_count),
+    login_kind: str(value.login_kind, "EMAIL"),
+    login_kind_label: str(value.login_kind_label, "Email address"),
+    people_count: num(value.people_count),
+    people_without_mfa: num(value.people_without_mfa),
+    privileged_count: num(value.privileged_count),
   };
 }
 
@@ -724,3 +736,190 @@ export function errorMessage(reason: unknown, fallback: string): string {
   }
   return fallback;
 }
+
+// ───────────────────────── logins on an account ─────────────────────────
+//
+// One provider account is one bill and one console; the people who can sign
+// in to it are these. Kept separate because they do not share a second
+// factor — an account could otherwise read "has MFA" while somebody on it
+// has none, which is exactly the case worth surfacing.
+
+export interface AccountLogin {
+  id: number;
+  provider_account: number;
+  account_login: string;
+  provider: number | null;
+  provider_name: string;
+  brand_color: string;
+  login: string;
+  login_kind: string;
+  login_kind_label: string;
+  user: number | null;
+  user_name: string | null;
+  user_email: string | null;
+  display_name: string;
+  /** Who this is: the linked person, else the typed name, else the login. */
+  name: string;
+  role: string;
+  role_label: string;
+  mfa_type: string;
+  mfa_label: string;
+  mfa_severity: Severity;
+  is_privileged: boolean;
+  last_reviewed: string | null;
+  notes: string;
+  is_active: boolean;
+}
+
+export function normalizeAccountLogin(value: Record<string, unknown>): AccountLogin {
+  return {
+    id: num(value.id),
+    provider_account: num(value.provider_account),
+    account_login: str(value.account_login),
+    provider: nullableNum(value.provider),
+    provider_name: str(value.provider_name),
+    brand_color: str(value.brand_color),
+    login: str(value.login),
+    login_kind: str(value.login_kind, "EMAIL"),
+    login_kind_label: str(value.login_kind_label),
+    user: nullableNum(value.user),
+    user_name: nullableStr(value.user_name),
+    user_email: nullableStr(value.user_email),
+    display_name: str(value.display_name),
+    name: str(value.name, str(value.login)),
+    role: str(value.role, "MEMBER"),
+    role_label: str(value.role_label, "Member"),
+    mfa_type: str(value.mfa_type, "UNKNOWN"),
+    mfa_label: str(value.mfa_label, "Not recorded"),
+    mfa_severity: severityValue(value.mfa_severity),
+    is_privileged: bool(value.is_privileged),
+    last_reviewed: nullableStr(value.last_reviewed),
+    notes: str(value.notes),
+    is_active: bool(value.is_active, true),
+  };
+}
+
+// ──────────────────────────────── servers ────────────────────────────────
+
+export interface EstateServer {
+  id: number;
+  provider_account: number;
+  provider_account_login: string;
+  provider: number | null;
+  provider_name: string;
+  brand_color: string;
+  service: number | null;
+  service_identifier: string | null;
+  property: number | null;
+  property_name: string | null;
+  name: string;
+  server_role: string;
+  role_label: string;
+  environment: string;
+  environment_label: string;
+  status: string;
+  status_label: string;
+  is_live: boolean;
+  public_ip: string | null;
+  private_ip: string | null;
+  hostname: string;
+  region: string;
+  size: string;
+  operating_system: string;
+  provisioned_on: string | null;
+  expires_on: string | null;
+  owner: number | null;
+  owner_name: string | null;
+  console_url: string;
+  effective_console_url: string;
+  notes: string;
+}
+
+export function normalizeServer(value: Record<string, unknown>): EstateServer {
+  return {
+    id: num(value.id),
+    provider_account: num(value.provider_account),
+    provider_account_login: str(value.provider_account_login),
+    provider: nullableNum(value.provider),
+    provider_name: str(value.provider_name),
+    brand_color: str(value.brand_color),
+    service: nullableNum(value.service),
+    service_identifier: nullableStr(value.service_identifier),
+    property: nullableNum(value.property),
+    property_name: nullableStr(value.property_name),
+    name: str(value.name),
+    server_role: str(value.server_role, "OTHER"),
+    role_label: str(value.role_label, "Other"),
+    environment: str(value.environment, "PRODUCTION"),
+    environment_label: str(value.environment_label, "Production"),
+    status: str(value.status, "RUNNING"),
+    status_label: str(value.status_label, "Running"),
+    is_live: bool(value.is_live),
+    public_ip: nullableStr(value.public_ip),
+    private_ip: nullableStr(value.private_ip),
+    hostname: str(value.hostname),
+    region: str(value.region),
+    size: str(value.size),
+    operating_system: str(value.operating_system),
+    provisioned_on: nullableStr(value.provisioned_on),
+    expires_on: nullableStr(value.expires_on),
+    owner: nullableNum(value.owner),
+    owner_name: nullableStr(value.owner_name),
+    console_url: str(value.console_url),
+    effective_console_url: str(value.effective_console_url),
+    notes: str(value.notes),
+  };
+}
+
+/** Choice lists mirroring core/estate.py. Row labels still come from the API. */
+export const ACCOUNT_ROLE_CHOICES = [
+  { value: "OWNER", label: "Owner / root" },
+  { value: "ADMIN", label: "Administrator" },
+  { value: "BILLING", label: "Billing only" },
+  { value: "MEMBER", label: "Member" },
+  { value: "READONLY", label: "Read only" },
+];
+
+export const LOGIN_KIND_CHOICES = [
+  { value: "EMAIL", label: "Email address" },
+  { value: "USERNAME", label: "Username" },
+  { value: "ACCOUNT_ID", label: "Account ID / number" },
+  { value: "PHONE", label: "Phone number" },
+];
+
+export const MFA_TYPE_CHOICES = [
+  { value: "SECURITY_KEY", label: "Security key" },
+  { value: "APP", label: "Authenticator app" },
+  { value: "SMS", label: "SMS" },
+  { value: "NONE", label: "None" },
+  { value: "UNKNOWN", label: "Not recorded" },
+];
+
+export const SERVER_ROLE_CHOICES = [
+  { value: "WEB", label: "Web server" },
+  { value: "APP", label: "Application server" },
+  { value: "DATABASE", label: "Database" },
+  { value: "CACHE", label: "Cache" },
+  { value: "WORKER", label: "Worker / queue" },
+  { value: "BUILD", label: "Build / CI" },
+  { value: "STORAGE", label: "Storage" },
+  { value: "VPN", label: "VPN / gateway" },
+  { value: "GAME", label: "Game server" },
+  { value: "OTHER", label: "Other" },
+];
+
+export const SERVER_ENVIRONMENT_CHOICES = [
+  { value: "PRODUCTION", label: "Production" },
+  { value: "STAGING", label: "Staging" },
+  { value: "DEVELOPMENT", label: "Development" },
+  { value: "TEST", label: "Test" },
+  { value: "DR", label: "Disaster recovery" },
+];
+
+export const SERVER_STATUS_CHOICES = [
+  { value: "RUNNING", label: "Running" },
+  { value: "STOPPED", label: "Stopped" },
+  { value: "SUSPENDED", label: "Suspended" },
+  { value: "MAINTENANCE", label: "Maintenance" },
+  { value: "DECOMMISSIONED", label: "Decommissioned" },
+];

@@ -22,20 +22,24 @@ from rest_framework.views import APIView
 from core import estate, estate_reports, fx
 from core.mixins import AuditLogMixin
 from core.models import (
+    AccountUser,
     Property,
     EstateSettings,
     ExchangeRate,
     Provider,
     ProviderAccount,
+    Server,
     Service,
 )
 from core.permissions import HasModulePermission, IsSuperadmin
 from core.serializers import (
+    AccountUserSerializer,
     PropertySerializer,
     EstateSettingsSerializer,
     ExchangeRateSerializer,
     ProviderAccountSerializer,
     ProviderSerializer,
+    ServerSerializer,
     ServiceSerializer,
 )
 
@@ -128,6 +132,10 @@ class ProviderAccountViewSet(AuditLogMixin, viewsets.ModelViewSet):
             ProviderAccount.objects.select_related(
                 "provider", "owner", "vault_credential", "account_workspace"
             )
+            # `mfa_severity` and `has_mfa` now read the account's people, so
+            # without this every row on the list costs its own query — the
+            # exact N+1 the query-count tests exist to catch.
+            .prefetch_related("people__user")
             .annotate(service_count=Count("services", distinct=True))
             .order_by("provider__name", "account_email")
         )
@@ -620,3 +628,159 @@ class ExchangeRateViewSet(AuditLogMixin, viewsets.ModelViewSet):
                 "is_complete": not missing,
             }
         )
+
+
+class AccountUserViewSet(AuditLogMixin, viewsets.ModelViewSet):
+    """The people who can sign in to a provider account.
+
+    Two questions this exists to answer, and both are one request:
+
+    * ``?account=<id>`` — who can get into this AWS account, and which of them
+      has no second factor;
+    * ``?user=<id>`` — everything one person can sign in to, across every
+      provider. That is the offboarding list, and before this model there was
+      no way to produce it at all.
+    """
+
+    serializer_class = AccountUserSerializer
+    permission_classes = [HasModulePermission]
+    rbac_module = "estate"
+    pagination_class = EstatePagination
+
+    def get_queryset(self):
+        queryset = AccountUser.objects.select_related(
+            "user", "provider_account", "provider_account__provider"
+        ).order_by("provider_account__provider__name", "login")
+
+        params = self.request.query_params
+        account = params.get("account")
+        if account:
+            queryset = queryset.filter(provider_account_id=account)
+        user = params.get("user")
+        if user:
+            queryset = queryset.filter(user_id=user)
+        provider = params.get("provider")
+        if provider:
+            queryset = queryset.filter(provider_account__provider_id=provider)
+        role = (params.get("role") or "").strip().upper()
+        if role:
+            queryset = queryset.filter(role=role)
+        mfa = (params.get("mfa") or "").strip().upper()
+        if mfa:
+            queryset = queryset.filter(mfa_type=mfa)
+        if (params.get("no_mfa") or "").lower() in ("1", "true", "yes"):
+            queryset = queryset.filter(mfa_type="NONE")
+        if (params.get("privileged") or "").lower() in ("1", "true", "yes"):
+            queryset = queryset.filter(role__in=estate.PRIVILEGED_ROLES)
+        active = params.get("is_active")
+        if active is not None and active != "":
+            queryset = queryset.filter(is_active=active.lower() in ("1", "true", "yes"))
+        search = (params.get("search") or "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(login__icontains=search)
+                | Q(display_name__icontains=search)
+                | Q(user__full_name__icontains=search)
+                | Q(user__email__icontains=search)
+                | Q(provider_account__provider__name__icontains=search)
+            )
+        return queryset
+
+    @action(detail=False, methods=["get"], url_path="for-user/(?P<user_id>[^/.]+)")
+    def for_user(self, request, user_id=None):
+        """Everything one person can sign in to. The offboarding answer.
+
+        Returns servers they own alongside their logins, because "what does
+        this person hold" is one question and answering half of it is how a
+        machine gets left running under a leaver's name.
+        """
+        logins = self.get_queryset().filter(user_id=user_id, is_active=True)
+        servers = (
+            Server.objects.filter(owner_id=user_id)
+            .select_related("provider_account__provider", "property")
+            .order_by("name")
+        )
+        return Response({
+            "logins": AccountUserSerializer(logins, many=True, context={"request": request}).data,
+            "servers": ServerSerializer(servers, many=True, context={"request": request}).data,
+            "login_count": logins.count(),
+            "privileged_count": logins.filter(role__in=estate.PRIVILEGED_ROLES).count(),
+            "without_mfa": logins.filter(mfa_type="NONE").count(),
+            "server_count": servers.count(),
+        })
+
+
+class ServerViewSet(AuditLogMixin, viewsets.ModelViewSet):
+    """Machines bought through a provider account."""
+
+    serializer_class = ServerSerializer
+    permission_classes = [HasModulePermission]
+    rbac_module = "estate"
+    pagination_class = EstatePagination
+
+    def get_queryset(self):
+        queryset = Server.objects.select_related(
+            "provider_account", "provider_account__provider", "property", "service", "owner"
+        ).order_by("name")
+
+        params = self.request.query_params
+        for param, field in (
+            ("account", "provider_account_id"),
+            ("property", "property_id"),
+            ("service", "service_id"),
+            ("owner", "owner_id"),
+            ("provider", "provider_account__provider_id"),
+        ):
+            value = params.get(param)
+            if value:
+                queryset = queryset.filter(**{field: value})
+        for param, field in (
+            ("status", "status"),
+            ("environment", "environment"),
+            ("role", "server_role"),
+        ):
+            value = (params.get(param) or "").strip().upper()
+            if value:
+                queryset = queryset.filter(**{field: value})
+        if (params.get("live") or "").lower() in ("1", "true", "yes"):
+            queryset = queryset.filter(status__in=estate.LIVE_SERVER_STATUSES)
+        if (params.get("orphan") or "").lower() in ("1", "true", "yes"):
+            queryset = queryset.filter(property__isnull=True)
+        search = (params.get("search") or "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(name__icontains=search)
+                | Q(hostname__icontains=search)
+                | Q(public_ip__icontains=search)
+                | Q(private_ip__icontains=search)
+                | Q(region__icontains=search)
+                | Q(notes__icontains=search)
+            )
+        return queryset
+
+    def destroy(self, request, *args, **kwargs):
+        try:
+            return super().destroy(request, *args, **kwargs)
+        except ProtectedError:
+            return Response(
+                {"detail": "Something still refers to this server."},
+                status=status.HTTP_409_CONFLICT,
+            )
+
+    @action(detail=False, methods=["get"])
+    def summary(self, request):
+        """Counts for the Servers page header, in one request."""
+        queryset = self.get_queryset()
+        by_environment = list(
+            queryset.values("environment").annotate(count=Count("id")).order_by("-count")
+        )
+        by_role = list(
+            queryset.values("server_role").annotate(count=Count("id")).order_by("-count")
+        )
+        return Response({
+            "total": queryset.count(),
+            "live": queryset.filter(status__in=estate.LIVE_SERVER_STATUSES).count(),
+            "orphans": queryset.filter(property__isnull=True).count(),
+            "by_environment": by_environment,
+            "by_role": by_role,
+        })
