@@ -240,6 +240,7 @@ export default function ServerDetailPage() {
             <CardTitle className="text-base">What it is</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2 text-sm">
+            <Field label="Hosting">{server.hosting_label}</Field>
             <Field label="Role">{server.role_label}</Field>
             <Field label="Size">{server.size || "—"}</Field>
             <Field label="Operating system">{server.operating_system || "—"}</Field>

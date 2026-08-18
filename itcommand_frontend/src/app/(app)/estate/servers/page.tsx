@@ -39,6 +39,7 @@ import { ServerDialog } from "./server-dialog";
 import {
   EstateServer,
   SERVER_ENVIRONMENT_CHOICES,
+  SERVER_HOSTING_CHOICES,
   SERVER_STATUS_CHOICES,
   errorMessage,
   normalizeServer,
@@ -65,6 +66,7 @@ export default function ServersPage() {
   const [search, setSearch] = useState("");
   const [environment, setEnvironment] = useState("all");
   const [status, setStatus] = useState("all");
+  const [hosting, setHosting] = useState("all");
   const [orphansOnly, setOrphansOnly] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<EstateServer | null>(null);
@@ -90,6 +92,7 @@ export default function ServersPage() {
     return servers.filter((server) => {
       if (environment !== "all" && server.environment !== environment) return false;
       if (status !== "all" && server.status !== status) return false;
+      if (hosting !== "all" && server.hosting !== hosting) return false;
       if (orphansOnly && server.property !== null) return false;
       if (!needle) return true;
       return [
@@ -97,7 +100,7 @@ export default function ServersPage() {
         server.region, server.provider_name, server.property_name ?? "",
       ].some((field) => field.toLowerCase().includes(needle));
     });
-  }, [servers, search, environment, status, orphansOnly]);
+  }, [servers, search, environment, status, hosting, orphansOnly]);
 
   //: Counted from every server, not the filtered view — a banner that changed
   //: with the search box would be describing the search, not the estate.
@@ -184,6 +187,16 @@ export default function ServersPage() {
             </SelectContent>
           </Select>
 
+          <Select value={hosting} onValueChange={setHosting}>
+            <SelectTrigger className="w-[150px]"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Anywhere</SelectItem>
+              {SERVER_HOSTING_CHOICES.map((c) => (
+                <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
           <Select value={status} onValueChange={setStatus}>
             <SelectTrigger className="w-[150px]"><SelectValue /></SelectTrigger>
             <SelectContent>
@@ -223,7 +236,7 @@ export default function ServersPage() {
                 <TableRow>
                   <TableHead className="pl-4">Server</TableHead>
                   <TableHead>Environment</TableHead>
-                  <TableHead>Role</TableHead>
+                  <TableHead>Hosting &amp; role</TableHead>
                   <TableHead>Addresses</TableHead>
                   <TableHead>Account</TableHead>
                   <TableHead>Property</TableHead>
@@ -268,7 +281,7 @@ export default function ServersPage() {
                         </Badge>
                       </TableCell>
                       <TableCell className="text-sm text-muted-foreground">
-                        {server.role_label}
+                        {server.hosting_label} · {server.role_label}
                         {server.size && <span className="ml-1 text-xs">· {server.size}</span>}
                       </TableCell>
                       <TableCell className="text-sm">

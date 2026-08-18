@@ -29,6 +29,21 @@ from core.models import (
 User = get_user_model()
 
 
+def column_letter_for(worksheet, header):
+    """The column a header sits in.
+
+    By name, never by a hardcoded letter: inserting one column shifts every
+    letter after it, and a test pinned to "D" then silently checks the wrong
+    column instead of failing.
+    """
+    from openpyxl.utils import get_column_letter
+
+    for index, cell in enumerate(worksheet[1], start=1):
+        if cell.value == header:
+            return get_column_letter(index)
+    raise AssertionError(f"{worksheet.title} has no {header!r} column")
+
+
 def _sheet(rows_by_tab):
     """A workbook holding only headers and the given rows, per tab.
 
@@ -123,11 +138,12 @@ class EstateWorkbookTemplateTests(APITestCase):
         wb = load_workbook(BytesIO(estate_import.build_workbook_template()))
         lists = wb["Lists"]
 
-        def values_behind(tab, column_letter):
+        def values_behind(tab, header):
+            letter = column_letter_for(wb[tab], header)
             rule = {
                 str(dv.sqref): dv
                 for dv in wb[tab].data_validations.dataValidation
-            }[f"{column_letter}4:{column_letter}400"]
+            }[f"{letter}4:{letter}400"]
             letter = rule.formula1.split("$")[1]
             index = ord(letter) - ord("A") + 1
             return [
@@ -136,24 +152,26 @@ class EstateWorkbookTemplateTests(APITestCase):
                 if lists.cell(row=row, column=index).value
             ]
 
-        self.assertIn("OWNER", values_behind("People", "G"))
-        self.assertIn("WEB", values_behind("Servers", "D"))
-        self.assertIn("RUNNING", values_behind("Servers", "F"))
-        self.assertIn("ACTIVE", values_behind("Services", "F"))
+        self.assertIn("OWNER", values_behind("People", "Role"))
+        self.assertIn("WEB", values_behind("Servers", "Role"))
+        self.assertIn("RUNNING", values_behind("Servers", "Status"))
+        self.assertIn("ACTIVE", values_behind("Services", "Status"))
+        self.assertIn("ON_PREMISE", values_behind("Servers", "Hosting"))
 
     def test_identical_lists_are_still_stored_once(self):
         """Accounts' "MFA type" and People's "Second factor" hold the same
         codes and have no business being two columns."""
         wb = load_workbook(BytesIO(estate_import.build_workbook_template()))
 
-        def source(tab, column_letter):
+        def source(tab, header):
+            letter = column_letter_for(wb[tab], header)
             rule = {
                 str(dv.sqref): dv
                 for dv in wb[tab].data_validations.dataValidation
-            }[f"{column_letter}4:{column_letter}400"]
+            }[f"{letter}4:{letter}400"]
             return rule.formula1.split("$")[1]
 
-        self.assertEqual(source("Accounts", "D"), source("People", "H"))
+        self.assertEqual(source("Accounts", "MFA type"), source("People", "Second factor"))
 
     def test_an_empty_list_produces_no_dropdown_at_all(self):
         """An empty dropdown would block the column it was meant to help with."""
@@ -420,7 +438,7 @@ class EstateWorkbookImportTests(APITestCase):
             ],
             "Servers": [{
                 "Provider": "AWS", "Account email": "1234-5678",
-                "Server name": "web-01", "Role": "WEB",
+                "Server name": "web-01", "Hosting": "ON_PREMISE", "Role": "WEB",
                 "Environment": "PRODUCTION", "Status": "RUNNING",
                 "Public IP": "203.0.113.9", "Region": "eu-west-1",
                 "Property": "terafort.com",
@@ -439,6 +457,7 @@ class EstateWorkbookImportTests(APITestCase):
         self.assertEqual(account.effective_mfa_type, "NONE")
 
         server = Server.objects.get(name="web-01")
+        self.assertEqual(server.hosting, "ON_PREMISE")
         self.assertEqual(server.provider_account, account)
         self.assertEqual(server.public_ip, "203.0.113.9")
         self.assertEqual(server.property.name, "terafort.com")

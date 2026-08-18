@@ -378,6 +378,43 @@ class ServerApiTests(APITestCase):
             server.effective_console_url, "https://console.aws.amazon.com"
         )
 
+    def test_hosting_separates_a_box_in_the_office_from_one_in_a_region(self):
+        response = self.client.post(self.url, {
+            "provider_account": self.account.id, "name": "nas-01",
+            "hosting": "ON_PREMISE",
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+        self.assertEqual(response.data["hosting_label"], "On-site")
+
+    def test_a_hosting_type_added_in_settings_is_valid_on_save(self):
+        """Callable choices, so an admin's addition needs no migration and no
+        restart — the same contract Service.service_type has."""
+        from core.models import ListOfValues
+
+        ListOfValues.objects.create(
+            group="estate_server_hosting", code="EDGE", label="Edge site",
+        )
+        estate.clear_type_cache()
+        self.addCleanup(estate.clear_type_cache)
+
+        self.assertIn("EDGE", estate.server_hosting_codes())
+        response = self.client.post(self.url, {
+            "provider_account": self.account.id, "name": "edge-01",
+            "hosting": "EDGE",
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED, response.data)
+
+        server = Server.objects.get(name="edge-01")
+        server.full_clean()   # the model must accept it too, not just DRF
+
+    def test_the_summary_breaks_down_by_hosting(self):
+        Server.objects.create(provider_account=self.account, name="a", hosting="CLOUD")
+        Server.objects.create(provider_account=self.account, name="b", hosting="ON_PREMISE")
+        Server.objects.create(provider_account=self.account, name="c", hosting="ON_PREMISE")
+        response = self.client.get(reverse("estate-server-summary"))
+        counts = {row["hosting"]: row["count"] for row in response.data["by_hosting"]}
+        self.assertEqual(counts, {"ON_PREMISE": 2, "CLOUD": 1})
+
     def test_expiry_is_stored_when_given(self):
         server = Server.objects.create(
             provider_account=self.account, name="prepaid",

@@ -738,6 +738,7 @@ class ServerViewSet(AuditLogMixin, viewsets.ModelViewSet):
             ("status", "status"),
             ("environment", "environment"),
             ("role", "server_role"),
+            ("hosting", "hosting"),
         ):
             value = (params.get(param) or "").strip().upper()
             if value:
@@ -777,10 +778,14 @@ class ServerViewSet(AuditLogMixin, viewsets.ModelViewSet):
         by_role = list(
             queryset.values("server_role").annotate(count=Count("id")).order_by("-count")
         )
+        by_hosting = list(
+            queryset.values("hosting").annotate(count=Count("id")).order_by("-count")
+        )
         return Response({
             "total": queryset.count(),
             "live": queryset.filter(status__in=estate.LIVE_SERVER_STATUSES).count(),
             "orphans": queryset.filter(property__isnull=True).count(),
             "by_environment": by_environment,
             "by_role": by_role,
+            "by_hosting": by_hosting,
         })
