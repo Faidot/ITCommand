@@ -429,6 +429,22 @@ SERVER_STATUSES = (
 #: Statuses that still cost money and still need patching.
 LIVE_SERVER_STATUSES = ("RUNNING", "MAINTENANCE")
 
+#: Where the machine physically is. The distinction people actually want when
+#: they look at a server list: a box in the office and a box in a region are
+#: different things to patch, to insure, and to lose.
+SERVER_HOSTINGS = (
+    ("CLOUD", "Cloud"),
+    ("ON_PREMISE", "On-site"),
+    ("COLOCATION", "Colocation"),
+    ("DEDICATED", "Dedicated / bare metal"),
+    ("VPS", "VPS"),
+    ("HYBRID", "Hybrid"),
+    ("OTHER", "Other"),
+)
+
+SERVER_HOSTING_CODES = tuple(code for code, _ in SERVER_HOSTINGS)
+
+
 #: What the box is for. Reported and grouped, never branched on, so this is
 #: safe to extend from Settings the way service types are.
 SERVER_ROLES = (
@@ -451,3 +467,30 @@ SERVER_ENVIRONMENTS = (
     ("TEST", "Test"),
     ("DR", "Disaster recovery"),
 )
+
+
+def server_hosting_choices():
+    """Where a server lives: built-ins first, then anything added in Settings.
+
+    A callable so Django re-evaluates it rather than freezing the list at
+    import, exactly as `service_type_choices` does — a hosting type added in
+    Settings is immediately valid on save, with no migration and no restart.
+    """
+    return list(SERVER_HOSTINGS) + list(
+        _lov_extras("estate_server_hosting", SERVER_HOSTING_CODES)
+    )
+
+
+def server_hosting_codes():
+    return tuple(code for code, _ in server_hosting_choices())
+
+
+def server_role_choices():
+    """Server roles, extendable from Settings. Nothing branches on these."""
+    return list(SERVER_ROLES) + list(
+        _lov_extras("estate_server_role", tuple(c for c, _ in SERVER_ROLES))
+    )
+
+
+def server_role_codes():
+    return tuple(code for code, _ in server_role_choices())

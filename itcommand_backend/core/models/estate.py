@@ -28,6 +28,8 @@ from core.estate import (
     SERVER_ENVIRONMENTS,
     SERVER_ROLES,
     SERVER_STATUSES,
+    server_hosting_choices,
+    server_role_choices,
     PROPERTY_KINDS,
     property_kind_choices,
     SERVICE_STATUSES,
@@ -376,7 +378,18 @@ class Server(models.Model):
         help_text="What it keeps running. Blank means nothing claims it.",
     )
     name = models.CharField(max_length=160, help_text="Hostname or console name, e.g. web-01.")
-    server_role = models.CharField(max_length=16, choices=SERVER_ROLES, default="OTHER")
+    #: Where the box actually is. Callable choices, so a hosting type added in
+    #: Settings is valid on save without a migration — same contract as
+    #: `Service.service_type`.
+    hosting = models.CharField(
+        max_length=16,
+        choices=server_hosting_choices,
+        default="CLOUD",
+        help_text="Cloud, on-site, colocation. Extendable from Settings.",
+    )
+    server_role = models.CharField(
+        max_length=16, choices=server_role_choices, default="OTHER"
+    )
     environment = models.CharField(
         max_length=12, choices=SERVER_ENVIRONMENTS, default="PRODUCTION"
     )
@@ -422,6 +435,7 @@ class Server(models.Model):
         indexes = [
             models.Index(fields=["status"], name="estate_server_status_idx"),
             models.Index(fields=["environment"], name="estate_server_env_idx"),
+            models.Index(fields=["hosting"], name="estate_server_hosting_idx"),
         ]
 
     def __str__(self):

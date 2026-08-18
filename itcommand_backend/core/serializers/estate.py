@@ -638,6 +638,7 @@ class ServerSerializer(serializers.ModelSerializer):
         source="service.identifier", read_only=True, default=None
     )
     owner_name = serializers.CharField(source="owner.full_name", read_only=True, default=None)
+    hosting_label = serializers.CharField(source="get_hosting_display", read_only=True)
     role_label = serializers.CharField(source="get_server_role_display", read_only=True)
     status_label = serializers.CharField(source="get_status_display", read_only=True)
     environment_label = serializers.CharField(
@@ -660,6 +661,8 @@ class ServerSerializer(serializers.ModelSerializer):
             "property",
             "property_name",
             "name",
+            "hosting",
+            "hosting_label",
             "server_role",
             "role_label",
             "environment",

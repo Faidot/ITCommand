@@ -132,6 +132,21 @@ def as_decimal(raw, column):
         raise ValueError(f"{column}: {raw!r} is not a number.")
 
 
+def as_ip(raw, column):
+    """Validate an address here rather than letting the model reject it later.
+
+    A bad IP is worth stopping at the row it came from: the alternative is a
+    model-level failure at commit time that names no row, and an address
+    somebody will eventually try to connect to.
+    """
+    import ipaddress
+
+    try:
+        return str(ipaddress.ip_address(raw.strip()))
+    except ValueError:
+        raise ValueError(f"{column}: {raw!r} is not an IP address.")
+
+
 def as_choice(raw, column, choices):
     upper = raw.strip().upper().replace(" ", "_")
     valid = {c[0] for c in choices}
@@ -394,7 +409,9 @@ def build_specs():
 WORKBOOK_TABS = (
     ("Properties", "wb_properties"),
     ("Accounts", "wb_accounts"),
+    ("People", "wb_people"),
     ("Services", "wb_services"),
+    ("Servers", "wb_servers"),
 )
 
 
@@ -461,6 +478,95 @@ def _resolve_wb_accounts(spec, results, context):
             else None
         )
         result.action = "update" if existing else "create"
+
+
+def _resolve_account_ref(result, context, memo, *, what):
+    """Resolve a row's Provider + Account email to an account.
+
+    Returns (provider_raw, email, account) with `account` None when the
+    Accounts tab is going to create it. Adds an error and returns None when
+    the row names an account that exists nowhere — deliberately an error
+    rather than a silent create, because these tabs carry no MFA or owner
+    column and inventing a login here would record a way in that nobody chose.
+    """
+    from core.models import ProviderAccount
+
+    provider_raw = str(result.values.pop("_Provider", "") or "").strip()
+    email = str(result.values.pop("_Account email", "") or "").strip()
+    if result.errors:
+        return None
+
+    provider = _find_provider_cached(provider_raw, memo)
+    account = (
+        ProviderAccount.objects.filter(
+            provider=provider, account_email__iexact=email
+        ).first()
+        if provider
+        else None
+    )
+    key = (provider_raw.lower(), email.lower())
+    if account is None and key not in _seen(context, "accounts"):
+        result.errors.append(
+            f"Account email: no account {email!r} at {provider_raw!r}. "
+            f"Add it on the Accounts tab, or fix the spelling ({what})."
+        )
+        return None
+
+    result.values["_account_key"] = f"{key[0]}|{key[1]}"
+    return provider_raw, email, account
+
+
+def _resolve_wb_people(spec, results, context):
+    """Point each login at the account it gets into."""
+    from core.models import AccountUser
+
+    memo = {}
+    for result in results:
+        ref = _resolve_account_ref(result, context, memo, what="this login")
+        if ref is None:
+            continue
+        provider_raw, email, account = ref
+        result.values["_new"] = {"provider": provider_raw, "email": email}
+
+        if account is not None:
+            result.action = (
+                "update"
+                if AccountUser.objects.filter(
+                    provider_account=account, login=result.values.get("login")
+                ).exists()
+                else "create"
+            )
+
+
+def _resolve_wb_servers(spec, results, context):
+    """Point each server at its account, and plan any property it names."""
+    from core.models import Property, Server
+
+    memo = {}
+    for result in results:
+        property_raw = str(result.values.pop("_Property", "") or "").strip()
+        ref = _resolve_account_ref(result, context, memo, what="this server")
+        if ref is None:
+            continue
+        provider_raw, email, account = ref
+
+        if property_raw:
+            prop = Property.objects.filter(name__iexact=property_raw).first()
+            if not prop and property_raw.lower() not in _seen(context, "properties"):
+                _seen(context, "properties").add(property_raw.lower())
+                result.plan_new.append(f"Property \u201c{property_raw}\u201d")
+
+        result.values["_new"] = {
+            "provider": provider_raw, "email": email, "property": property_raw,
+        }
+        if account is not None:
+            result.action = (
+                "update"
+                if Server.objects.filter(
+                    provider_account=account, name=result.values.get("name")
+                ).exists()
+                else "create"
+            )
 
 
 def _resolve_wb_services(spec, results, context):
@@ -560,6 +666,85 @@ def _commit_wb_accounts(results):
             account = ProviderAccount(provider=provider, account_email=email, **values)
             account.full_clean()
             account.save()
+            created += 1
+    return created, updated
+
+
+def _account_for(plan):
+    """The account a People or Servers row named, now that it exists."""
+    from core.models import ProviderAccount
+
+    provider = _get_or_create_provider(plan.get("provider", ""))
+    email = plan.get("email", "")
+    account = ProviderAccount.objects.filter(
+        provider=provider, account_email__iexact=email
+    ).first()
+    if account is None:
+        # Only reachable if the Accounts tab row that promised this account was
+        # not committed. Refuse rather than invent a way in.
+        raise ValueError(
+            f"Account {email!r} at {provider.name} was not created; "
+            "nothing was imported."
+        )
+    return account
+
+
+def _commit_wb_people(results):
+    from core.models import AccountUser
+
+    created = updated = 0
+    for result in results:
+        values = dict(result.values)
+        account = _account_for(values.pop("_new", {}))
+        values.pop("_account_key", None)
+        login = values.pop("login", "")
+
+        person = AccountUser.objects.filter(
+            provider_account=account, login=login
+        ).first()
+        if person:
+            for key, value in values.items():
+                setattr(person, key, value)
+            person.full_clean()
+            person.save()
+            updated += 1
+        else:
+            person = AccountUser(provider_account=account, login=login, **values)
+            person.full_clean()
+            person.save()
+            created += 1
+    return created, updated
+
+
+def _commit_wb_servers(results):
+    from core.models import Property, Server
+
+    created = updated = 0
+    for result in results:
+        values = dict(result.values)
+        plan = values.pop("_new", {})
+        account = _account_for(plan)
+        values.pop("_account_key", None)
+        name = values.pop("name", "")
+
+        property_name = plan.get("property", "")
+        if property_name:
+            prop = Property.objects.filter(name__iexact=property_name).first()
+            if not prop:
+                prop = Property.objects.create(name=property_name, kind="OTHER")
+            values["property"] = prop
+
+        server = Server.objects.filter(provider_account=account, name=name).first()
+        if server:
+            for key, value in values.items():
+                setattr(server, key, value)
+            server.full_clean()
+            server.save()
+            updated += 1
+        else:
+            server = Server(provider_account=account, name=name, **values)
+            server.full_clean()
+            server.save()
             created += 1
     return created, updated
 
@@ -715,7 +900,87 @@ def build_workbook_specs():
         commit_rows=_commit_wb_services,
     )
 
-    return {s.key: s for s in (properties, accounts, services)}
+    people = ImportSpec(
+        key="wb_people",
+        label="People",
+        model_path="core.AccountUser",
+        match_on=("_account_key", "login"),
+        notes="One row per person who can sign in. The account is one bill; "
+              "these are the ways into it, and they do not share a second factor.",
+        columns=[
+            Column("Provider", "Which account they get into.", required=True,
+                   example="AWS"),
+            Column("Account email", "The account's own login, from the Accounts tab.",
+                   required=True, example="ops@example.com"),
+            Column("Login", "What this person types. A username is fine.",
+                   required=True, example="iam:alice"),
+            Column("Login is a", "What that string is.", choices=estate.LOGIN_KINDS,
+                   example="USERNAME",
+                   resolve=lambda raw, col: as_choice(raw, col, estate.LOGIN_KINDS)),
+            Column("Person email", "Links this login to someone in IT Command. "
+                   "Leave blank for a service account.",
+                   example="alice@example.com", resolve=find_user),
+            Column("Name", "Only used when Person email is blank.",
+                   example="Deploy robot"),
+            Column("Role", "What they can do.", choices=estate.ACCOUNT_ROLES,
+                   example="ADMIN",
+                   resolve=lambda raw, col: as_choice(raw, col, estate.ACCOUNT_ROLES)),
+            Column("Second factor", "Theirs, not the account's.",
+                   choices=estate.MFA_TYPES, example="APP",
+                   resolve=lambda raw, col: as_choice(raw, col, estate.MFA_TYPES)),
+            Column("Notes", "Free text.", example=""),
+        ],
+        resolve_rows=_resolve_wb_people,
+        commit_rows=_commit_wb_people,
+    )
+
+    servers = ImportSpec(
+        key="wb_servers",
+        label="Servers",
+        model_path="core.Server",
+        match_on=("_account_key", "name"),
+        creates=("Property",),
+        notes="One row per machine. It belongs to the account that pays for it, "
+              "and to the property it keeps running.",
+        columns=[
+            Column("Provider", "Which account pays for it.", required=True,
+                   example="AWS"),
+            Column("Account email", "The account's own login, from the Accounts tab.",
+                   required=True, example="ops@example.com"),
+            Column("Server name", "Hostname or console name.", required=True,
+                   example="web-01"),
+            Column("Hosting", "Where it lives.",
+                   choices=tuple(estate.server_hosting_choices()), example="CLOUD",
+                   resolve=lambda raw, col: as_choice(raw, col, estate.server_hosting_choices())),
+            Column("Role", "What the box is for.",
+                   choices=tuple(estate.server_role_choices()), example="WEB",
+                   resolve=lambda raw, col: as_choice(raw, col, estate.server_role_choices())),
+            Column("Environment", "Production, staging and so on.",
+                   choices=estate.SERVER_ENVIRONMENTS, example="PRODUCTION",
+                   resolve=lambda raw, col: as_choice(raw, col, estate.SERVER_ENVIRONMENTS)),
+            Column("Status", "Current state.", choices=estate.SERVER_STATUSES,
+                   example="RUNNING",
+                   resolve=lambda raw, col: as_choice(raw, col, estate.SERVER_STATUSES)),
+            Column("Public IP", "Blank if it has none.", example="203.0.113.9",
+                   resolve=as_ip),
+            Column("Private IP", "Blank if it has none.", example="10.0.0.4",
+                   resolve=as_ip),
+            Column("Hostname", "Full DNS name, if it has one.",
+                   example="web-01.terafort.com"),
+            Column("Region", "Where it runs.", example="eu-west-1"),
+            Column("Size", "Instance type or plan.", example="t3.medium"),
+            Column("Operating system", "", example="Ubuntu 24.04"),
+            Column("Property", "What it keeps running. Created if new.",
+                   example="terafort.com"),
+            Column("Owner email", "Must match an existing user.",
+                   example="sam@example.com", resolve=find_user),
+            Column("Notes", "Free text.", example=""),
+        ],
+        resolve_rows=_resolve_wb_servers,
+        commit_rows=_commit_wb_servers,
+    )
+
+    return {s.key: s for s in (properties, accounts, people, services, servers)}
 
 
 #: Column name -> model field. Kept apart from the spec so the sheet can be
@@ -756,6 +1021,19 @@ FIELD_MAP = {
         "Account email": "account_email", "Auth type": "auth_type",
         "MFA type": "mfa_type", "Owner email": "owner",
         "Console URL": "console_url", "Active": "is_active", "Notes": "notes",
+    },
+    "wb_people": {
+        "Login": "login", "Login is a": "login_kind", "Person email": "user",
+        "Name": "display_name", "Role": "role", "Second factor": "mfa_type",
+        "Notes": "notes",
+    },
+    "wb_servers": {
+        "Server name": "name", "Hosting": "hosting", "Role": "server_role",
+        "Environment": "environment",
+        "Status": "status", "Public IP": "public_ip", "Private IP": "private_ip",
+        "Hostname": "hostname", "Region": "region", "Size": "size",
+        "Operating system": "operating_system", "Owner email": "owner",
+        "Notes": "notes",
     },
     "wb_services": {
         "Service type": "service_type", "Identifier": "identifier",
@@ -854,37 +1132,89 @@ LIVE_RANGES = {
     ("wb_services", "Provider"): "Accounts!$A${first}:$A${last}",
     ("wb_services", "Account email"): "Accounts!$B${first}:$B${last}",
     ("wb_services", "Property"): "Properties!$A${first}:$A${last}",
+    ("wb_people", "Provider"): "Accounts!$A${first}:$A${last}",
+    ("wb_people", "Account email"): "Accounts!$B${first}:$B${last}",
+    ("wb_servers", "Provider"): "Accounts!$A${first}:$A${last}",
+    ("wb_servers", "Account email"): "Accounts!$B${first}:$B${last}",
+    ("wb_servers", "Property"): "Properties!$A${first}:$A${last}",
 }
 
 def _workbook_lists(specs):
-    """Every fixed dropdown list in the workbook, keyed by list name."""
+    """Every fixed dropdown list, and which column uses which.
+
+    Keyed by the *values*, not by the column name. Two tabs can use the same
+    word for different things — "Role" is an account role on People and a
+    server role on Servers, "Status" is a service status on Services and a
+    server status on Servers — and keying by name silently pointed the second
+    one at the first one's list. Strictly, so Excel then refused the very
+    values the sheet was asking for.
+
+    Identical lists still share one column, which is the behaviour worth
+    keeping: Accounts' "MFA type" and People's "Second factor" hold the same
+    codes and have no business being stored twice.
+
+    Returns (lists, assignments): name -> values, and (spec key, column name)
+    -> list name.
+    """
     from core.models import Department, Provider, User
 
     lists = {}
-    for _, key in WORKBOOK_TABS:
-        for col in specs[key].columns:
-            if col.choices and col.name not in lists:
-                lists[col.name] = tuple(code for code, _ in col.choices)
-            elif col.resolve is as_bool:
-                lists.setdefault("Yes or No", ("Yes", "No"))
+    by_values = {}
+    assignments = {}
 
-    lists["Existing providers"] = tuple(
-        Provider.objects.order_by("name").values_list("name", flat=True)[:400]
-    )
-    lists["User emails"] = tuple(
-        User.objects.filter(is_active=True).order_by("email")
-        .values_list("email", flat=True)[:400]
-    )
-    lists["Departments"] = tuple(
-        Department.objects.order_by("name").values_list("name", flat=True)[:400]
-    )
+    def register(preferred, values):
+        """Name this set of values, reusing an identical set if there is one."""
+        values = tuple(values)
+        if not values:
+            return None
+        if values in by_values:
+            return by_values[values]
+        name, suffix = preferred, 2
+        while name in lists:
+            name = f"{preferred} {suffix}"
+            suffix += 1
+        lists[name] = values
+        by_values[values] = name
+        return name
+
+    for _, key in WORKBOOK_TABS:
+        spec = specs[key]
+        for col in spec.columns:
+            if col.choices:
+                name = register(col.name, (code for code, _ in col.choices))
+            elif col.resolve is as_bool:
+                name = register("Yes or No", ("Yes", "No"))
+            else:
+                continue
+            if name:
+                assignments[(spec.key, col.name)] = name
+
+    # Lists drawn from the database rather than from a spec. Registered after
+    # the choice columns so a name collision renames these, not the fixed ones.
+    dynamic = {
+        "Existing providers": tuple(
+            Provider.objects.order_by("name").values_list("name", flat=True)[:400]
+        ),
+        "User emails": tuple(
+            User.objects.filter(is_active=True).order_by("email")
+            .values_list("email", flat=True)[:400]
+        ),
+        "Departments": tuple(
+            Department.objects.order_by("name").values_list("name", flat=True)[:400]
+        ),
+    }
     try:
         from core.lov import get_values
 
-        lists["Currencies"] = tuple(code for code, _ in get_values("currency"))
+        dynamic["Currencies"] = tuple(code for code, _ in get_values("currency"))
     except Exception:
-        lists["Currencies"] = ("USD", "EUR", "GBP", "PKR")
-    return {name: values for name, values in lists.items() if values}
+        dynamic["Currencies"] = ("USD", "EUR", "GBP", "PKR")
+
+    for name, values in dynamic.items():
+        if values and name not in lists:
+            lists[name] = tuple(values)
+
+    return lists, assignments
 
 
 #: Free-text columns that still deserve a dropdown of what already exists.
@@ -895,20 +1225,20 @@ _SUGGESTED = {
     "Provider": ("Existing providers", False),
     "Currency": ("Currencies", False),
     "Owner email": ("User emails", True),
+    "Person email": ("User emails", True),
     "Department": ("Departments", True),
 }
 
 
-def _column_validation(spec, col, lists, letters):
+def _column_validation(spec, col, lists, letters, assignments):
     """(formula1, strict) for a column's dropdown, or None for free text."""
     live = LIVE_RANGES.get((spec.key, col.name))
     if live:
         return live.format(first=FIRST_DATA_ROW, last=TEMPLATE_ROWS), False
 
-    if col.choices:
-        name, strict = col.name, True
-    elif col.resolve is as_bool:
-        name, strict = "Yes or No", True
+    assigned = assignments.get((spec.key, col.name))
+    if assigned:
+        name, strict = assigned, True
     elif col.name in _SUGGESTED:
         name, strict = _SUGGESTED[col.name]
     else:
@@ -922,7 +1252,7 @@ def _column_validation(spec, col, lists, letters):
     return f"Lists!${column}$2:${column}${len(lists[name]) + 1}", strict
 
 
-def _write_tab(ws, spec, lists, letters):
+def _write_tab(ws, spec, lists, letters, assignments):
     """Headers, guidance, example, dropdowns and date cells for one tab."""
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
@@ -948,7 +1278,7 @@ def _write_tab(ws, spec, lists, letters):
 
         span = f"{letter}{FIRST_DATA_ROW}:{letter}{TEMPLATE_ROWS}"
 
-        validation = _column_validation(spec, col, lists, letters)
+        validation = _column_validation(spec, col, lists, letters, assignments)
         if validation:
             formula, strict = validation
             rule = DataValidation(
@@ -989,7 +1319,7 @@ def build_workbook_template():
     from openpyxl.utils import get_column_letter
 
     specs = build_workbook_specs()
-    lists = _workbook_lists(specs)
+    lists, assignments = _workbook_lists(specs)
     letters = {
         name: get_column_letter(i) for i, name in enumerate(lists, start=1)
     }
@@ -1004,8 +1334,10 @@ def build_workbook_template():
         "Fill in the tabs left to right. You do not have to fill in all of them.",
         "",
         "  Properties   Optional. Only needed to set a property's kind and owner.",
-        "  Accounts     One row per login. The provider is created if it is new.",
-        "  Services     One row per billable thing, pointing at a login above.",
+        "  Accounts     One row per account. The provider is created if it is new.",
+        "  People       One row per person who can sign in to an account above.",
+        "  Services     One row per billable thing, pointing at an account above.",
+        "  Servers      One row per machine, pointing at an account above.",
         "",
         "Cells with a small arrow have a dropdown. On the Services tab the",
         "Provider, Account email and Property dropdowns read the tabs to their",
@@ -1029,7 +1361,7 @@ def build_workbook_template():
     readme.column_dimensions["A"].width = 96
 
     for title, key in WORKBOOK_TABS:
-        _write_tab(wb.create_sheet(title), specs[key], lists, letters)
+        _write_tab(wb.create_sheet(title), specs[key], lists, letters, assignments)
 
     sheet = wb.create_sheet("Lists")
     for i, (name, values) in enumerate(lists.items(), start=1):

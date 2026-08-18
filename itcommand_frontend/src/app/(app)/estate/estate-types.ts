@@ -813,6 +813,8 @@ export interface EstateServer {
   property: number | null;
   property_name: string | null;
   name: string;
+  hosting: string;
+  hosting_label: string;
   server_role: string;
   role_label: string;
   environment: string;
@@ -848,6 +850,8 @@ export function normalizeServer(value: Record<string, unknown>): EstateServer {
     property: nullableNum(value.property),
     property_name: nullableStr(value.property_name),
     name: str(value.name),
+    hosting: str(value.hosting, "CLOUD"),
+    hosting_label: str(value.hosting_label, "Cloud"),
     server_role: str(value.server_role, "OTHER"),
     role_label: str(value.role_label, "Other"),
     environment: str(value.environment, "PRODUCTION"),
@@ -893,6 +897,16 @@ export const MFA_TYPE_CHOICES = [
   { value: "SMS", label: "SMS" },
   { value: "NONE", label: "None" },
   { value: "UNKNOWN", label: "Not recorded" },
+];
+
+export const SERVER_HOSTING_CHOICES = [
+  { value: "CLOUD", label: "Cloud" },
+  { value: "ON_PREMISE", label: "On-site" },
+  { value: "COLOCATION", label: "Colocation" },
+  { value: "DEDICATED", label: "Dedicated / bare metal" },
+  { value: "VPS", label: "VPS" },
+  { value: "HYBRID", label: "Hybrid" },
+  { value: "OTHER", label: "Other" },
 ];
 
 export const SERVER_ROLE_CHOICES = [

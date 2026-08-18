@@ -14,7 +14,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import {
-  Loader2, Pencil, Plus, ShieldAlert, ShieldCheck, Trash2, UserCog, X,
+  Loader2, Pencil, Plus, ShieldAlert, ShieldCheck, Trash2, UserCheck, UserCog, X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -76,20 +76,28 @@ function toDraft(person: AccountLogin): Draft {
   };
 }
 
-export function PeopleSheet({
+/**
+ * The people editor itself, without a dialog around it.
+ *
+ * Used inline on the account detail page and inside `PeopleSheet` from the
+ * accounts table. One implementation on purpose: two would drift, and the one
+ * that drifted would be the one somebody was using to decide who still has
+ * access.
+ */
+export function PeopleManager({
   account,
-  open,
-  onOpenChange,
+  active: isOpen,
   onChanged,
   canEdit,
 }: {
   account: ProviderAccount | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  /** Fired after any write, so the accounts table can refresh its MFA rollup. */
+  /** Loads only while this is true, so the dialog does not fetch when shut. */
+  active: boolean;
+  /** Fired after any write, so a caller can refresh its MFA rollup. */
   onChanged?: () => void;
   canEdit: boolean;
 }) {
+  const open = isOpen;
   const [people, setPeople] = useState<AccountLogin[] | null>(null);
   const [users, setUsers] = useState<AppUser[]>([]);
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -122,13 +130,6 @@ export function PeopleSheet({
       // the login itself still saves, so this must not block the panel.
       .catch(() => setUsers([]));
   }, [open, account, load]);
-
-  const close = () => {
-    if (saving) return;
-    setDraft(null);
-    setEditingId(null);
-    onOpenChange(false);
-  };
 
   const save = async () => {
     if (!account || !draft) return;
@@ -163,6 +164,17 @@ export function PeopleSheet({
     }
   };
 
+  const setPerson = async (person: AccountLogin, userId: number | null) => {
+    try {
+      await api.patch(`/estate/account-users/${person.id}/`, { user: userId });
+      toast.success(userId ? "Login assigned." : "Login unlinked from that person.");
+      await load();
+      onChanged?.();
+    } catch (reason) {
+      toast.error(errorMessage(reason, "Could not change who this login belongs to."));
+    }
+  };
+
   const remove = async (person: AccountLogin) => {
     if (!confirm(`Remove ${person.login} from this account?`)) return;
     try {
@@ -180,20 +192,7 @@ export function PeopleSheet({
   const privileged = active.filter((p) => p.is_privileged);
 
   return (
-    <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="max-h-[90vh] max-w-3xl overflow-hidden">
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <UserCog className="h-5 w-5" />
-            People on {account?.account_email}
-          </DialogTitle>
-          <DialogDescription>
-            Everyone with their own login to this {account?.provider_name} account.
-            The account is one bill; these are the ways in.
-          </DialogDescription>
-        </DialogHeader>
-
-        <div className="space-y-4 overflow-y-auto pr-1">
+    <div className="space-y-4">
           <div className="flex flex-wrap gap-2">
             <Badge variant="outline">{active.length} with access</Badge>
             <Badge variant="outline" className="border-amber-300 text-amber-700 dark:text-amber-400">
@@ -252,6 +251,39 @@ export function PeopleSheet({
                     </Badge>
                     {!person.is_active && (
                       <Badge variant="outline" className="text-[10px]">removed</Badge>
+                    )}
+                    {canEdit && (
+                      person.user ? (
+                        <span className="inline-flex items-center gap-1 rounded bg-sky-50 px-1.5 py-0.5 text-[11px] text-sky-800 dark:bg-sky-950 dark:text-sky-300">
+                          <UserCheck className="h-3 w-3" />
+                          {person.user_name || person.user_email}
+                          <button
+                            type="button"
+                            title="Unlink this person"
+                            className="ml-0.5 opacity-60 hover:opacity-100"
+                            onClick={() => void setPerson(person, null)}
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ) : (
+                        <Select
+                          value="none"
+                          onValueChange={(v) => void setPerson(person, Number(v))}
+                        >
+                          <SelectTrigger className="h-6 w-[132px] text-[11px]">
+                            <SelectValue placeholder="Assign to…" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="none" disabled>Assign to…</SelectItem>
+                            {users.map((u) => (
+                              <SelectItem key={u.id} value={String(u.id)}>
+                                {u.full_name || u.email}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )
                     )}
                     {canEdit && (
                       <div className="ml-auto flex gap-1">
@@ -395,6 +427,45 @@ export function PeopleSheet({
               </div>
             </div>
           )}
+    </div>
+  );
+}
+
+
+/** The same editor, in a dialog, for the accounts table. */
+export function PeopleSheet({
+  account,
+  open,
+  onOpenChange,
+  onChanged,
+  canEdit,
+}: {
+  account: ProviderAccount | null;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onChanged?: () => void;
+  canEdit: boolean;
+}) {
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-hidden">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <UserCog className="h-5 w-5" />
+            People on {account?.account_email}
+          </DialogTitle>
+          <DialogDescription>
+            Everyone with their own login to this {account?.provider_name} account.
+            The account is one bill; these are the ways in.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="overflow-y-auto pr-1">
+          <PeopleManager
+            account={account}
+            active={open}
+            onChanged={onChanged}
+            canEdit={canEdit}
+          />
         </div>
       </DialogContent>
     </Dialog>

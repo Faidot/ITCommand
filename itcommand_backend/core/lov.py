@@ -62,6 +62,18 @@ def _estate_property_kinds():
 ESTATE_PROPERTY_KINDS = _estate_property_kinds()
 
 
+def _estate_server_hostings():
+    from core.estate import SERVER_HOSTINGS
+
+    return tuple(SERVER_HOSTINGS)
+
+
+def _estate_server_roles():
+    from core.estate import SERVER_ROLES
+
+    return tuple(SERVER_ROLES)
+
+
 def _validate_currency_code(code: str) -> Optional[str]:
     if not code or len(code) != 3 or not code.isalpha():
         return "A currency code must be three letters (for example, USD)."
@@ -254,6 +266,27 @@ _GROUP_LIST = [
         label="Onboarding assigned roles",
         extendable=True,
         help_text="Roles a checklist task can be assigned to. Safe to extend.",
+    ),
+    GroupSpec(
+        key="estate_server_hosting",
+        label="Server hosting types",
+        extendable=True,
+        seed=_estate_server_hostings(),
+        help_text=(
+            "Where a server lives — cloud, on-site, colocation. Safe to "
+            "extend: nothing in the code branches on these codes, they only "
+            "group and label servers."
+        ),
+    ),
+    GroupSpec(
+        key="estate_server_role",
+        label="Server roles",
+        extendable=True,
+        seed=_estate_server_roles(),
+        help_text=(
+            "What a server is for — web, database, game server. Safe to "
+            "extend; reported and grouped, never branched on."
+        ),
     ),
     GroupSpec(
         key="estate_property_kind",

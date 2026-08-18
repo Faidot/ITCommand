@@ -31,6 +31,7 @@ import {
   EstateServer,
   ProviderAccount,
   SERVER_ENVIRONMENT_CHOICES,
+  SERVER_HOSTING_CHOICES,
   SERVER_ROLE_CHOICES,
   SERVER_STATUS_CHOICES,
   Service,
@@ -44,6 +45,7 @@ import {
 const BLANK = {
   provider_account: "",
   name: "",
+  hosting: "CLOUD",
   server_role: "OTHER",
   environment: "PRODUCTION",
   status: "RUNNING",
@@ -67,6 +69,7 @@ function toDraft(server: EstateServer): Draft {
   return {
     provider_account: String(server.provider_account),
     name: server.name,
+    hosting: server.hosting,
     server_role: server.server_role,
     environment: server.environment,
     status: server.status,
@@ -153,6 +156,7 @@ export function ServerDialog({
     const body = {
       provider_account: Number(draft.provider_account),
       name: draft.name.trim(),
+      hosting: draft.hosting,
       server_role: draft.server_role,
       environment: draft.environment,
       status: draft.status,
@@ -215,6 +219,17 @@ export function ServerDialog({
             />
           </div>
 
+          <div className="space-y-1.5">
+            <Label>Hosting</Label>
+            <Select value={draft.hosting} onValueChange={(v) => setDraft({ ...draft, hosting: v })}>
+              <SelectTrigger><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {SERVER_HOSTING_CHOICES.map((c) => (
+                  <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <div className="space-y-1.5">
             <Label>Role</Label>
             <Select value={draft.server_role} onValueChange={(v) => setDraft({ ...draft, server_role: v })}>
