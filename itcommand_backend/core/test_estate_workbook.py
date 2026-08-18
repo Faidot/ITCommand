@@ -22,7 +22,9 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from core import estate_import
-from core.models import Property, Provider, ProviderAccount, Service
+from core.models import (
+    AccountUser, Property, Provider, ProviderAccount, Server, Service,
+)
 
 User = get_user_model()
 
@@ -68,7 +70,8 @@ class EstateWorkbookTemplateTests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         wb = load_workbook(BytesIO(response.content))
         self.assertEqual(
-            wb.sheetnames, ["Read me", "Properties", "Accounts", "Services", "Lists"]
+            wb.sheetnames,
+            ["Read me", "Properties", "Accounts", "People", "Services", "Servers", "Lists"]
         )
 
     def test_choice_columns_get_a_dropdown_that_refuses_anything_else(self):
@@ -110,6 +113,47 @@ class EstateWorkbookTemplateTests(APITestCase):
         rule = {str(dv.sqref): dv for dv in ws.data_validations.dataValidation}["G4:G400"]
         self.assertEqual(rule.type, "date")
         self.assertFalse(rule.showErrorMessage)
+
+    def test_columns_sharing_a_name_get_their_own_list(self):
+        """"Role" is an account role on People and a server role on Servers;
+        "Status" is a service status on Services and a server status on
+        Servers. Keying the lists by column name pointed the second of each
+        pair at the first one's values — strictly, so Excel then refused the
+        very codes the sheet was asking for."""
+        wb = load_workbook(BytesIO(estate_import.build_workbook_template()))
+        lists = wb["Lists"]
+
+        def values_behind(tab, column_letter):
+            rule = {
+                str(dv.sqref): dv
+                for dv in wb[tab].data_validations.dataValidation
+            }[f"{column_letter}4:{column_letter}400"]
+            letter = rule.formula1.split("$")[1]
+            index = ord(letter) - ord("A") + 1
+            return [
+                lists.cell(row=row, column=index).value
+                for row in range(2, 8)
+                if lists.cell(row=row, column=index).value
+            ]
+
+        self.assertIn("OWNER", values_behind("People", "G"))
+        self.assertIn("WEB", values_behind("Servers", "D"))
+        self.assertIn("RUNNING", values_behind("Servers", "F"))
+        self.assertIn("ACTIVE", values_behind("Services", "F"))
+
+    def test_identical_lists_are_still_stored_once(self):
+        """Accounts' "MFA type" and People's "Second factor" hold the same
+        codes and have no business being two columns."""
+        wb = load_workbook(BytesIO(estate_import.build_workbook_template()))
+
+        def source(tab, column_letter):
+            rule = {
+                str(dv.sqref): dv
+                for dv in wb[tab].data_validations.dataValidation
+            }[f"{column_letter}4:{column_letter}400"]
+            return rule.formula1.split("$")[1]
+
+        self.assertEqual(source("Accounts", "D"), source("People", "H"))
 
     def test_an_empty_list_produces_no_dropdown_at_all(self):
         """An empty dropdown would block the column it was meant to help with."""
@@ -360,6 +404,79 @@ class EstateWorkbookImportTests(APITestCase):
         # The example row shipped in the template must not have been imported.
         self.assertEqual(Service.objects.count(), 1)
         self.assertEqual(ProviderAccount.objects.count(), 1)
+
+    def test_people_and_servers_import_alongside_their_account(self):
+        """One upload: the account, the people in it, and the machines it pays
+        for — with none of them existing beforehand."""
+        rows = {
+            "Accounts": [{"Provider": "AWS", "Account email": "1234-5678"}],
+            "People": [
+                {"Provider": "AWS", "Account email": "1234-5678",
+                 "Login": "root@example.com", "Login is a": "EMAIL",
+                 "Role": "OWNER", "Second factor": "SECURITY_KEY"},
+                {"Provider": "AWS", "Account email": "1234-5678",
+                 "Login": "iam:bob", "Login is a": "USERNAME",
+                 "Role": "MEMBER", "Second factor": "NONE"},
+            ],
+            "Servers": [{
+                "Provider": "AWS", "Account email": "1234-5678",
+                "Server name": "web-01", "Role": "WEB",
+                "Environment": "PRODUCTION", "Status": "RUNNING",
+                "Public IP": "203.0.113.9", "Region": "eu-west-1",
+                "Property": "terafort.com",
+            }],
+        }
+        report = self._post(self.validate, rows).json()
+        self.assertTrue(report["can_commit"], report)
+
+        response = self._post(self.commit, rows)
+        self.assertEqual(response.status_code, status.HTTP_200_OK, response.data)
+
+        account = ProviderAccount.objects.get(account_email="1234-5678")
+        self.assertEqual(account.people.count(), 2)
+        # The rollup the whole model exists for: the account inherits its
+        # weakest login without anybody setting it.
+        self.assertEqual(account.effective_mfa_type, "NONE")
+
+        server = Server.objects.get(name="web-01")
+        self.assertEqual(server.provider_account, account)
+        self.assertEqual(server.public_ip, "203.0.113.9")
+        self.assertEqual(server.property.name, "terafort.com")
+
+    def test_a_person_on_an_account_that_is_on_no_tab_is_an_error(self):
+        report = self._post(self.validate, {
+            "Accounts": [{"Provider": "AWS", "Account email": "1234-5678"}],
+            "People": [{"Provider": "AWS", "Account email": "typo",
+                        "Login": "iam:bob"}],
+        }).json()
+        self.assertFalse(report["can_commit"])
+        errors = report["tabs"][-1]["rows"][0]["errors"]
+        self.assertTrue(any("Add it on the Accounts tab" in e for e in errors), errors)
+
+    def test_a_bad_ip_names_the_row_it_came_from(self):
+        """Caught in validation, not by the model at commit time, so the report
+        can say which row rather than failing the whole upload namelessly."""
+        report = self._post(self.validate, {
+            "Accounts": [{"Provider": "AWS", "Account email": "a@example.com"}],
+            "Servers": [{"Provider": "AWS", "Account email": "a@example.com",
+                         "Server name": "web-01", "Public IP": "203.0.113.999"}],
+        }).json()
+        self.assertFalse(report["can_commit"])
+        errors = report["tabs"][-1]["rows"][0]["errors"]
+        self.assertTrue(any("not an IP address" in e for e in errors), errors)
+
+    def test_re_importing_people_updates_rather_than_duplicating(self):
+        rows = {
+            "Accounts": [{"Provider": "AWS", "Account email": "a@example.com"}],
+            "People": [{"Provider": "AWS", "Account email": "a@example.com",
+                        "Login": "iam:bob", "Second factor": "NONE"}],
+        }
+        self.assertEqual(self._post(self.commit, rows).status_code, 200)
+        rows["People"][0]["Second factor"] = "APP"
+        self.assertEqual(self._post(self.commit, rows).status_code, 200)
+
+        self.assertEqual(AccountUser.objects.count(), 1)
+        self.assertEqual(AccountUser.objects.get().mfa_type, "APP")
 
     def test_a_non_admin_cannot_import(self):
         staff = User.objects.create_user(

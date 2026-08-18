@@ -15,6 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   Globe, HardDrive, Plus, RefreshCw, Search, ServerCog, TriangleAlert,
 } from "lucide-react";
@@ -54,6 +55,7 @@ const ENV_TONE: Record<string, string> = {
 };
 
 export default function ServersPage() {
+  const router = useRouter();
   const user = useAuthStore((state) => state.user);
   const canAdd = can(user, "estate", "add");
 
@@ -240,12 +242,11 @@ export default function ServersPage() {
                   visible.map((server) => (
                     <TableRow
                       key={server.id}
-                      className={canAdd ? "cursor-pointer" : ""}
-                      onClick={() => {
-                        if (!canAdd) return;
-                        setEditing(server);
-                        setDialogOpen(true);
-                      }}
+                      className="cursor-pointer"
+                      // The detail page, not the edit dialog: reading a server
+                      // is the common act and editing it the rare one, and the
+                      // page is where the owner can be reassigned.
+                      onClick={() => router.push(`/estate/servers/${server.id}`)}
                     >
                       <TableCell className="pl-4">
                         <div className="flex items-center gap-2">

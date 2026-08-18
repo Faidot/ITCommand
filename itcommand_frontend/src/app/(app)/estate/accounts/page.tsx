@@ -10,7 +10,7 @@
  */
 
 import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   ChevronDown,
   ChevronRight,
@@ -82,6 +82,7 @@ const MFA_RANK: Record<string, number> = {
 
 export default function EstateAccountsPage() {
   const searchParams = useSearchParams();
+  const router = useRouter();
   const user = useAuthStore((state) => state.user);
   const canAdd = can(user, "estate", "add");
   const canEdit = can(user, "estate", "edit");
@@ -351,7 +352,15 @@ export default function EstateAccountsPage() {
                               <ChevronRight className="h-4 w-4 text-muted-foreground" />
                             )}
                           </TableCell>
-                          <TableCell onClick={() => void toggleRow(account)}>
+                          <TableCell
+                            onClick={(event) => {
+                              // The chevron still expands services in place;
+                              // the name goes to the account's own page.
+                              event.stopPropagation();
+                              router.push(`/estate/accounts/${account.id}`);
+                            }}
+                            className="cursor-pointer hover:underline"
+                          >
                             <span className="flex items-center gap-2">
                               <ProviderChip
                                 name={account.provider_name}
