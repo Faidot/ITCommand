@@ -20,6 +20,7 @@ import {
   Search,
   ShieldAlert,
   ShieldCheck,
+  Users,
   UserX,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -50,6 +51,7 @@ import {
 } from "@/components/ui/table";
 
 import { AccountDialog } from "./account-dialog";
+import { PeopleSheet } from "./people-sheet";
 import { RowActions } from "../row-actions";
 import { useAddServiceDialog } from "../add-service-context";
 import {
@@ -95,6 +97,8 @@ export default function EstateAccountsPage() {
   );
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<ProviderAccount | null>(null);
+  //: Which account's people panel is open. Null closes it.
+  const [peopleFor, setPeopleFor] = useState<ProviderAccount | null>(null);
 
   // Services per account, fetched only when a row is expanded.
   const [expanded, setExpanded] = useState<Set<number>>(new Set());
@@ -171,16 +175,27 @@ export default function EstateAccountsPage() {
   const unverified = accounts.filter((a) => a.mfa_type === "UNKNOWN").length;
 
   const dialog = (
-    <AccountDialog
-      open={dialogOpen}
-      onOpenChange={setDialogOpen}
-      account={editing}
-      onSaved={() => {
-        setDialogOpen(false);
-        setEditing(null);
-        void load(true);
-      }}
-    />
+    <>
+      <AccountDialog
+        open={dialogOpen}
+        onOpenChange={setDialogOpen}
+        account={editing}
+        onSaved={() => {
+          setDialogOpen(false);
+          setEditing(null);
+          void load(true);
+        }}
+      />
+      <PeopleSheet
+        account={peopleFor}
+        open={peopleFor !== null}
+        onOpenChange={(next) => { if (!next) setPeopleFor(null); }}
+        canEdit={canAdd}
+        // The account's MFA badge is rolled up from its people, so a change
+        // here changes the row behind the dialog too.
+        onChanged={() => void load(true)}
+      />
+    </>
   );
 
   if (loading) return <TableSkeleton rows={6} />;
@@ -294,6 +309,7 @@ export default function EstateAccountsPage() {
                   <TableHead>Login</TableHead>
                   <TableHead>Sign-in</TableHead>
                   <TableHead>MFA</TableHead>
+                  <TableHead>People</TableHead>
                   <TableHead>Owner</TableHead>
                   <TableHead className="text-right">Services</TableHead>
                   <TableHead>Vault</TableHead>
@@ -303,7 +319,7 @@ export default function EstateAccountsPage() {
               <TableBody>
                 {visible.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="h-32 text-center">
+                    <TableCell colSpan={10} className="h-32 text-center">
                       <ShieldCheck className="mx-auto mb-2 h-7 w-7 text-muted-foreground/60" />
                       <p className="font-medium">No accounts match</p>
                       <Button
@@ -364,6 +380,27 @@ export default function EstateAccountsPage() {
                               severity={account.mfa_severity}
                             />
                           </TableCell>
+                          <TableCell>
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                // The row's own click expands services; this
+                                // opens a dialog, so it must not do both.
+                                event.stopPropagation();
+                                setPeopleFor(account);
+                              }}
+                              className="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-sm hover:bg-muted"
+                              title="Who can sign in to this account"
+                            >
+                              <Users className="h-3.5 w-3.5 text-muted-foreground" />
+                              <span className="tabular-nums">{account.people_count}</span>
+                              {account.people_without_mfa > 0 && (
+                                <Badge className="border-transparent bg-red-100 px-1.5 text-[10px] text-red-800 dark:bg-red-950 dark:text-red-300">
+                                  {account.people_without_mfa} no MFA
+                                </Badge>
+                              )}
+                            </button>
+                          </TableCell>
                           <TableCell className="text-sm">
                             {account.owner_name || (
                               <span className="flex items-center gap-1 text-muted-foreground">
@@ -402,7 +439,7 @@ export default function EstateAccountsPage() {
 
                         {isOpen && (
                           <TableRow className="bg-muted/40">
-                            <TableCell colSpan={9} className="px-4 py-3">
+                            <TableCell colSpan={10} className="px-4 py-3">
                               {rows === "loading" ? (
                                 <p className="text-sm text-muted-foreground">
                                   Loading services…

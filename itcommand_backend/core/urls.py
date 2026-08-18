@@ -31,6 +31,7 @@ from .views import (
     KBCategoryViewSet, KBTagViewSet, KBArticleViewSet, KBDashboardView, KBSuggestView,
     ProviderViewSet, ProviderAccountViewSet, PropertyViewSet, ServiceViewSet,
     PaymentCardViewSet, ServicePaymentViewSet, CardAccountViewSet,
+    AccountUserViewSet, ServerViewSet,
     EstateImportOptionsView, EstateImportTemplateView, EstateImportValidateView, EstateImportCommitView,
     EstateDashboardView, EstateOverviewView, EstateGapsView, EstateSettingsView, ExchangeRateViewSet,
     AppResetPreviewView, AppResetView,
@@ -103,6 +104,8 @@ router.register(r'kb/tags', KBTagViewSet, basename='kb-tag')
 router.register(r'kb/articles', KBArticleViewSet, basename='kb-article')
 # Digital Estate
 router.register(r'estate/providers', ProviderViewSet, basename='estate-provider')
+router.register(r'estate/account-users', AccountUserViewSet, basename='estate-account-user')
+router.register(r'estate/servers', ServerViewSet, basename='estate-server')
 router.register(r'estate/accounts', ProviderAccountViewSet, basename='estate-account')
 router.register(r'estate/properties', PropertyViewSet, basename='estate-property')
 router.register(r'estate/services', ServiceViewSet, basename='estate-service')

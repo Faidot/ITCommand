@@ -7,6 +7,7 @@ import api from "@/lib/api";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { AccessPanel } from "./access-panel";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { useAuthStore } from "@/store/authStore";
@@ -228,6 +229,8 @@ export default function UserDetailPage() {
               )}
             </CardContent>
           </Card>
+
+          <AccessPanel userId={String(params.id)} />
         </div>
       </div>
     </div>

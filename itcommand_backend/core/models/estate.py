@@ -17,10 +17,17 @@ from django.core.validators import MinValueValidator, RegexValidator
 from django.db import models
 
 from core.estate import (
+    ACCOUNT_ROLES,
     AT_RISK_WINDOW_DAYS,
     AUTH_TYPES,
     BILLING_CYCLES,
+    LIVE_SERVER_STATUSES,
+    LOGIN_KINDS,
     MFA_TYPES,
+    PRIVILEGED_ROLES,
+    SERVER_ENVIRONMENTS,
+    SERVER_ROLES,
+    SERVER_STATUSES,
     PROPERTY_KINDS,
     property_kind_choices,
     SERVICE_STATUSES,
@@ -32,6 +39,7 @@ from core.estate import (
     URGENT_WINDOW_DAYS,
     UNPRICED_CYCLES,
     mfa_severity,
+    worst_mfa,
 )
 
 from .users import Department, User
@@ -121,7 +129,16 @@ class ProviderAccount(models.Model):
         help_text="Deleting a provider that still has accounts is blocked.",
     )
     #: Not an EmailField: some provider logins are usernames or account numbers.
-    account_email = models.CharField(max_length=255)
+    #: Kept under this name because the importer, the workbook, the API and a
+    #: good deal of the frontend key off it; `login_kind` is what says whether
+    #: the string is actually an email, and the UI labels it "Login".
+    account_email = models.CharField(max_length=255, verbose_name="login")
+    login_kind = models.CharField(
+        max_length=12,
+        choices=LOGIN_KINDS,
+        default="EMAIL",
+        help_text="What this login string is. Plenty of providers issue a username rather than an email.",
+    )
     auth_type = models.CharField(max_length=16, choices=AUTH_TYPES, default="PASSWORD")
     mfa_type = models.CharField(
         max_length=16,
@@ -185,13 +202,37 @@ class ProviderAccount(models.Model):
         return self.console_url or self.provider.console_url
 
     @property
+    def effective_mfa_type(self):
+        """The weakest second factor anybody can get in with.
+
+        Once an account lists its people, the account-level `mfa_type` is only
+        the primary login's — and "AWS has MFA" while one member has none is
+        exactly the reassurance that gets somebody breached. So when there are
+        people rows, the softest of *those* is the answer; the stored field is
+        the fallback for accounts nobody has broken out yet.
+        """
+        codes = [
+            person.mfa_type
+            for person in self.people.all()
+            if person.is_active
+        ]
+        return worst_mfa(codes) or self.mfa_type
+
+    @property
     def mfa_severity(self):
         """How alarming this account's second factor is: the API decides, not the UI."""
-        return mfa_severity(self.mfa_type)
+        return mfa_severity(self.effective_mfa_type)
 
     @property
     def has_mfa(self):
-        return self.mfa_type in {"APP", "SECURITY_KEY", "SMS"}
+        return self.effective_mfa_type in {"APP", "SECURITY_KEY", "SMS"}
+
+    @property
+    def people_without_mfa(self):
+        """Active logins on this account with no second factor at all."""
+        return sum(
+            1 for p in self.people.all() if p.is_active and p.mfa_type == "NONE"
+        )
 
     def count_services(self):
         """Services bought through this account, for a single instance.
@@ -205,6 +246,198 @@ class ProviderAccount(models.Model):
         instance.
         """
         return self.services.count()
+
+
+class AccountUser(models.Model):
+    """One person's own login inside a provider account.
+
+    An AWS account, a Google Workspace or a Figma team is one bill and one
+    console — that is `ProviderAccount`. The several people who can each sign
+    in are these, and they are separate rows for two reasons that both bite in
+    practice: they do not share a second factor, and when somebody leaves you
+    need every login they hold across every provider, which is one query here
+    and an unanswerable question without it.
+
+    Deliberately not a link to `Seat` or to the vault. This says "this person
+    can get into this account", nothing about where they sit or what the
+    password is.
+    """
+
+    provider_account = models.ForeignKey(
+        ProviderAccount,
+        on_delete=models.CASCADE,
+        related_name="people",
+        help_text="The account this login gets into. Deleting the account removes its logins.",
+    )
+    #: What they actually type. Free text for the same reason as the account's:
+    #: `iam:alice`, `alice@example.com` and `10442` are all real logins.
+    login = models.CharField(max_length=255)
+    login_kind = models.CharField(max_length=12, choices=LOGIN_KINDS, default="EMAIL")
+    #: The person in this app, when they are one. Left null for a service
+    #: account or a contractor who was never given a user here — those are real
+    #: logins and hiding them would defeat the point of the list.
+    user = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="provider_logins",
+        help_text="Link to the person in IT Command, when this login belongs to one.",
+    )
+    #: Used when `user` is empty, so a shared or external login still has a name.
+    display_name = models.CharField(max_length=160, blank=True, default="")
+    role = models.CharField(max_length=12, choices=ACCOUNT_ROLES, default="MEMBER")
+    mfa_type = models.CharField(
+        max_length=16,
+        choices=MFA_TYPES,
+        default="UNKNOWN",
+        help_text="'Not recorded' is not the same as 'none' — leave it until someone checks.",
+    )
+    #: When somebody last confirmed this login should still exist. Blank means
+    #: never, which is its own finding on an account nobody reviews.
+    last_reviewed = models.DateField(null=True, blank=True)
+    notes = models.TextField(blank=True, default="")
+    is_active = models.BooleanField(
+        default=True,
+        help_text="Clear this when the login is removed at the provider, rather than deleting the row.",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["provider_account__provider__name", "login"]
+        verbose_name = "account login"
+        verbose_name_plural = "account logins"
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider_account", "login"],
+                name="unique_login_per_account",
+            ),
+        ]
+        indexes = [
+            # "What does this person have?" scans user; the security panel
+            # counts logins with no second factor and scans mfa_type.
+            models.Index(fields=["user"], name="estate_acctuser_user_idx"),
+            models.Index(fields=["mfa_type"], name="estate_acctuser_mfa_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.login} on {self.provider_account}"
+
+    @property
+    def name(self):
+        """Who this is, preferring the linked person over the typed name."""
+        if self.user_id and self.user:
+            return self.user.full_name or self.user.email
+        return self.display_name or self.login
+
+    @property
+    def mfa_severity(self):
+        return mfa_severity(self.mfa_type)
+
+    @property
+    def is_privileged(self):
+        return self.role in PRIVILEGED_ROLES
+
+
+class Server(models.Model):
+    """A machine bought through a provider account.
+
+    In the estate rather than in Assets on purpose. Assets is built around a
+    purchase, a warranty and handing a thing to a person; none of that
+    describes a VM created by an API call that may not exist next week. What a
+    server *does* share with the rest of the estate is that somebody pays for
+    it through an account and it usually keeps a property running — which is
+    what makes an orphaned or forgotten one findable.
+    """
+
+    provider_account = models.ForeignKey(
+        ProviderAccount,
+        on_delete=models.PROTECT,
+        related_name="servers",
+        help_text="Which login pays for it. Deleting an account with servers is blocked.",
+    )
+    #: The billable line this box sits under, when one covers it. Optional
+    #: because a server is often part of a plan that covers several.
+    service = models.ForeignKey(
+        "Service",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="servers",
+        help_text="The service this is billed under, if one covers it.",
+    )
+    property = models.ForeignKey(
+        "Property",
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="servers",
+        help_text="What it keeps running. Blank means nothing claims it.",
+    )
+    name = models.CharField(max_length=160, help_text="Hostname or console name, e.g. web-01.")
+    server_role = models.CharField(max_length=16, choices=SERVER_ROLES, default="OTHER")
+    environment = models.CharField(
+        max_length=12, choices=SERVER_ENVIRONMENTS, default="PRODUCTION"
+    )
+    status = models.CharField(max_length=16, choices=SERVER_STATUSES, default="RUNNING")
+    #: GenericIPAddressField rather than CharField: a typo'd address is worse
+    #: than a blank one, because somebody will try to connect to it.
+    public_ip = models.GenericIPAddressField(null=True, blank=True)
+    private_ip = models.GenericIPAddressField(null=True, blank=True)
+    hostname = models.CharField(
+        max_length=253, blank=True, default="", help_text="Full DNS name, if it has one."
+    )
+    region = models.CharField(max_length=60, blank=True, default="", help_text="e.g. eu-west-1.")
+    size = models.CharField(
+        max_length=60, blank=True, default="", help_text="Instance type or plan, e.g. t3.medium."
+    )
+    operating_system = models.CharField(max_length=80, blank=True, default="")
+    #: Two dates worth having and nothing else: everything else about a server
+    #: is either in the provider's console or changes too fast to be true here.
+    provisioned_on = models.DateField(null=True, blank=True)
+    expires_on = models.DateField(
+        null=True, blank=True, help_text="For a fixed-term or prepaid box."
+    )
+    owner = models.ForeignKey(
+        User,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="owned_servers",
+    )
+    console_url = models.URLField(blank=True, default="")
+    notes = models.TextField(blank=True, default="")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["provider_account", "name"],
+                name="unique_server_name_per_account",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["status"], name="estate_server_status_idx"),
+            models.Index(fields=["environment"], name="estate_server_env_idx"),
+        ]
+
+    def __str__(self):
+        return self.name
+
+    # `@builtins.property`, not `@property`, for the rest of this class: the
+    # `property` field above shadows the builtin inside the class body, exactly
+    # as it does on Service.
+    @builtins.property
+    def is_live(self):
+        """Still costing money and still needing patching."""
+        return self.status in LIVE_SERVER_STATUSES
+
+    @builtins.property
+    def effective_console_url(self):
+        return self.console_url or self.provider_account.effective_console_url
 
 
 class Property(models.Model):

@@ -343,3 +343,111 @@ def renewal_urgency(days_until):
     if days_until <= AT_RISK_WINDOW_DAYS:
         return "warning"
     return "muted"
+
+
+# ─────────────────────── logins on an account ───────────────────────
+#
+# A ProviderAccount is one *tenant* — one AWS account, one Google Workspace,
+# one Figma team. It is one bill and one console, and services hang off it.
+#
+# The people who can actually sign in are a separate thing, because there are
+# usually several of them and they do not share a second factor. Folding them
+# into the account was the old model's mistake: it could say "AWS has MFA"
+# while one person on it had none, which is precisely the case worth knowing.
+
+#: What kind of thing the login string is. The column has always been free
+#: text — plenty of providers issue usernames or account numbers rather than
+#: email addresses — but nothing recorded *which*, so the field was labelled
+#: "Account email" and looked broken to anybody typing a username.
+LOGIN_KINDS = (
+    ("EMAIL", "Email address"),
+    ("USERNAME", "Username"),
+    ("ACCOUNT_ID", "Account ID / number"),
+    ("PHONE", "Phone number"),
+)
+
+#: What a person can do on the account. Deliberately coarse: this records
+#: authority, not a provider's own permission model, which no two providers
+#: agree on and which would go stale the moment anybody edited it upstream.
+ACCOUNT_ROLES = (
+    ("OWNER", "Owner / root"),
+    ("ADMIN", "Administrator"),
+    ("BILLING", "Billing only"),
+    ("MEMBER", "Member"),
+    ("READONLY", "Read only"),
+)
+
+#: Roles that can change or destroy things, for the "who has the keys" count.
+PRIVILEGED_ROLES = ("OWNER", "ADMIN")
+
+#: How alarming each second factor is, worst first. `mfa_severity` answers the
+#: same question for one login; this orders them so an account holding several
+#: logins can report the weakest, which is the one that matters.
+#:
+#: UNKNOWN sits between SMS and APP on purpose. Nobody has checked, so it must
+#: not read as safe — but it is not evidence of absence either, and ranking it
+#: below NONE would let an unchecked login outrank a login known to have none.
+MFA_RISK_ORDER = {
+    "NONE": 0,
+    "SMS": 1,
+    "UNKNOWN": 2,
+    "APP": 3,
+    "SECURITY_KEY": 4,
+}
+
+
+def worst_mfa(codes):
+    """The weakest second factor in `codes`, or None when there are none.
+
+    Used to roll several logins up to the account they sit on. An account is
+    only as protected as its softest way in, so this takes the minimum rather
+    than a majority or an average — both of which would let one unprotected
+    login hide behind four protected ones.
+    """
+    ranked = [c for c in codes if c]
+    if not ranked:
+        return None
+    return min(ranked, key=lambda code: MFA_RISK_ORDER.get(code, 2))
+
+
+# ───────────────────────────── servers ─────────────────────────────
+#
+# A server is bought *through* an account and usually keeps a property
+# running, which is why it belongs in the estate rather than in Assets. Assets
+# is built around purchase, warranty and handing a thing to a person; none of
+# those describe a VM that was created by an API call and may not exist
+# tomorrow.
+
+SERVER_STATUSES = (
+    ("RUNNING", "Running"),
+    ("STOPPED", "Stopped"),
+    ("SUSPENDED", "Suspended"),
+    ("MAINTENANCE", "Maintenance"),
+    ("DECOMMISSIONED", "Decommissioned"),
+)
+
+#: Statuses that still cost money and still need patching.
+LIVE_SERVER_STATUSES = ("RUNNING", "MAINTENANCE")
+
+#: What the box is for. Reported and grouped, never branched on, so this is
+#: safe to extend from Settings the way service types are.
+SERVER_ROLES = (
+    ("WEB", "Web server"),
+    ("APP", "Application server"),
+    ("DATABASE", "Database"),
+    ("CACHE", "Cache"),
+    ("WORKER", "Worker / queue"),
+    ("BUILD", "Build / CI"),
+    ("STORAGE", "Storage"),
+    ("VPN", "VPN / gateway"),
+    ("GAME", "Game server"),
+    ("OTHER", "Other"),
+)
+
+SERVER_ENVIRONMENTS = (
+    ("PRODUCTION", "Production"),
+    ("STAGING", "Staging"),
+    ("DEVELOPMENT", "Development"),
+    ("TEST", "Test"),
+    ("DR", "Disaster recovery"),
+)
