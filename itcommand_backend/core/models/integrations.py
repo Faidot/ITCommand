@@ -42,6 +42,7 @@ class Integration(models.Model):
         ("WEBHOOK", "Outgoing webhook"),
         ("AWS_DISCOVERY", "AWS (estate discovery)"),
         ("CLOUDFLARE_DISCOVERY", "Cloudflare (estate discovery)"),
+        ("CPANEL", "cPanel mailboxes"),
     )
 
     #: Credentials stored ahead of a sync that does not exist yet. Nothing in
@@ -150,6 +151,38 @@ class Integration(models.Model):
                 "DNS:Read. Saving a token here does not start a sync."
             ),
             "config_only": True,
+        },
+        "CPANEL": {
+            "label": "cPanel mailboxes",
+            "description": (
+                "Creates and suspends company mailboxes when you create and "
+                "deactivate users. IT Command owns the mailbox lifecycle; the "
+                "mail app only reads mail."
+            ),
+            "needs_api_key": True,
+            "credential_label": "cPanel API token",
+            "default_base_url": "",
+            "help": (
+                "cPanel \u2192 Security \u2192 Manage API Tokens \u2192 Create. Then fill in "
+                "the cPanel username, hostname and the mail domain below. The "
+                "token only needs access to the Email module. Run "
+                "`manage.py cpanel_check` to confirm it works before relying on it."
+            ),
+            #: Extra fields kept in `config`. The token itself is encrypted in
+            #: `encrypted_api_key` like every other provider.
+            "config_fields": [
+                {"key": "host", "label": "cPanel hostname", "required": True,
+                 "placeholder": "cpanel.yourhost.com"},
+                {"key": "cpanel_username", "label": "cPanel username", "required": True},
+                {"key": "domain", "label": "Mail domain", "required": True,
+                 "placeholder": "terafort.com"},
+                {"key": "port", "label": "Port", "required": False, "default": 2083},
+                {"key": "default_quota_mb", "label": "Default mailbox quota (MB)",
+                 "required": False, "default": 5120,
+                 "help": "cPanel reads 0 as unlimited, so 0 is refused here."},
+                {"key": "verify_cert", "label": "Verify TLS certificate",
+                 "required": False, "default": True},
+            ],
         },
     }
 

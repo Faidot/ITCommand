@@ -14,7 +14,7 @@ import secrets
 from core.models import *
 from core.serializers import *
 from core.encryption import decrypt_value
-from core import mail_bridge
+from core import mail_bridge, mailbox_provisioning
 from core.mixins import AuditLogMixin, record_audit
 from core.permissions import IsSuperadmin, IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher, VaultAccessPermission, UserManagementPermission, HasModulePermission
 from rest_framework.pagination import PageNumberPagination
@@ -315,16 +315,86 @@ class UserViewSet(AuditLogMixin, viewsets.ModelViewSet):
         return ''.join(secrets.choice(alphabet) for i in range(12))
 
     def perform_create(self, serializer):
+        """Create the account, and its mailbox when cPanel is configured.
+
+        The two share one password. That is the whole point: the person ends up
+        with a single credential that Dovecot owns, rather than a platform
+        password and a mailbox password to keep in step.
+
+        `create_mailbox` in the request body opts out (default on), for
+        contractors and service accounts that should stay LOCAL.
+        """
         user = serializer.save()
-        temp_password = self.generate_temp_password()
-        user.set_password(temp_password)
-        user.save()
-        self._temp_password = temp_password
+        want_mailbox = self.request.data.get('create_mailbox', True)
+        self._mailbox_result = None
+        self._mailbox_error = None
+
+        if not want_mailbox:
+            # A local account keeps a Django password, as it always has.
+            temp_password = self.generate_temp_password()
+            user.set_password(temp_password)
+            user.save()
+            self._temp_password = temp_password
+            return
+
+        if not mailbox_provisioning.cpanel_is_configured():
+            # No cPanel set up yet. This is not a failure and must not be
+            # reported as one -- it is simply how IT Command behaved before
+            # mailbox provisioning existed.
+            temp_password = self.generate_temp_password()
+            user.set_password(temp_password)
+            user.save()
+            self._temp_password = temp_password
+            return
+
+        password = mailbox_provisioning.generate_password()
+        try:
+            self._mailbox_result = mailbox_provisioning.provision_mailbox(
+                user, password=password)
+        except mailbox_provisioning.ProvisioningError as exc:
+            # The user exists but has no mailbox. Do NOT leave them stranded
+            # with no way in: fall back to a local password and tell the
+            # operator plainly what did not happen.
+            self._mailbox_error = str(exc)
+            temp_password = self.generate_temp_password()
+            user.set_password(temp_password)
+            user.save()
+            self._temp_password = temp_password
+            return
+
+        # provision_mailbox called set_unusable_password(); there is no local
+        # hash for this account and nothing to hand back but the one password.
+        if self._mailbox_result.get('password'):
+            self._temp_password = self._mailbox_result['password']
 
     def create(self, request, *args, **kwargs):
         response = super().create(request, *args, **kwargs)
+        result = getattr(self, '_mailbox_result', None)
+
         if hasattr(self, '_temp_password'):
             response.data['temp_password'] = self._temp_password
+            # Say what this password actually opens, so whoever is reading it
+            # out knows whether it is one credential or two.
+            response.data['password_opens'] = (
+                'IT Command and the mailbox' if result and result.get('created')
+                else 'IT Command only'
+            )
+        if result:
+            response.data['mailbox'] = {
+                'created': result['created'],
+                'linked': result['linked'],
+                'address': response.data.get('email'),
+            }
+            if result['linked']:
+                response.data['mailbox']['note'] = (
+                    'That mailbox already existed in cPanel, so it was linked '
+                    'rather than created. Its existing password is unchanged '
+                    'and we do not know it.'
+                )
+        if getattr(self, '_mailbox_error', None):
+            # 201 with a warning, not a 500: the user was created, and hiding
+            # that behind an error would have someone create them twice.
+            response.data['mailbox_warning'] = self._mailbox_error
         return response
 
     def destroy(self, request, *args, **kwargs):
@@ -349,6 +419,11 @@ class UserViewSet(AuditLogMixin, viewsets.ModelViewSet):
         # Soft delete: keep history, just deactivate.
         instance.is_active = False
         instance.save()
+        # Block mailbox login too, or a deactivated person keeps reading mail.
+        # Suspension keeps every message and reverses in one call; nothing is
+        # destroyed here. Never raises: losing cPanel must not stop you from
+        # removing someone's access.
+        self._mailbox_suspended = mailbox_provisioning.suspend_mailbox_for(instance)
 
     @action(detail=False, methods=['post'], url_path='bulk_delete',
             permission_classes=[IsAdminOrSuperadmin])
