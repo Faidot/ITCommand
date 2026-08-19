@@ -11,7 +11,7 @@ from .views.vault import (
 )
 from .views import (
     ProfileView, ChangePasswordView,
-    LoginView, LogoutView, UserMeView, DepartmentViewSet, UserViewSet, RoleViewSet,
+    LoginView, LogoutView, UserMeView, MailboxMfaView, OpenMailboxView, DepartmentViewSet, UserViewSet, RoleViewSet,
     AssetCategoryViewSet, AssetViewSet, AssetNoteViewSet, VaultCredentialViewSet, AccountWorkspaceViewSet,
     FinancialYearViewSet, BudgetCategoryViewSet, BudgetViewSet, ExpenseViewSet, IncomeViewSet,
     IncomeSourceViewSet, CostOverviewView, RecurringIncomeViewSet,
@@ -118,6 +118,11 @@ router.register(r'exchange-rates', ExchangeRateViewSet, basename='exchange-rate'
 
 urlpatterns = [
     path('auth/login/', LoginView.as_view(), name='auth_login'),
+    # Second step for mailbox-backed accounts. 404s while MAIL_AUTH_ENABLED
+    # is off, so the route is invisible until the feature is switched on.
+    path('auth/mfa/', MailboxMfaView.as_view(), name='auth_mailbox_mfa'),
+    # The Open Mailbox button. Returns a single-use ticket in the body.
+    path('auth/open-mailbox/', OpenMailboxView.as_view(), name='auth_open_mailbox'),
     path('auth/logout/', LogoutView.as_view(), name='auth_logout'),
     path('auth/me/', UserMeView.as_view(), name='auth_me'),
     path('auth/profile/', ProfileView.as_view(), name='auth_profile'),

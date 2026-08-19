@@ -308,3 +308,42 @@ AUTOMATION_EMAIL_REPORT_ENABLED = config(
 FINANCE_REPORT_DAY = min(
     28, max(1, config('FINANCE_REPORT_DAY', default=1, cast=int))
 )
+
+
+# ---------------------------------------------------------------------------
+# Terafort Mail bridge
+#
+# Everything here is inert while MAIL_AUTH_ENABLED is False, which is the
+# default. With the flag off, LoginView takes exactly the path it always has
+# and the two new routes return 404. Rolling back the mailbox-auth feature is
+# setting this one variable to false -- no migration, no data change; existing
+# password hashes are left on the row, dormant, until you sign off on removing
+# them separately.
+# ---------------------------------------------------------------------------
+MAIL_AUTH_ENABLED = config('MAIL_AUTH_ENABLED', default=False, cast=bool)
+
+# Where the mail app lives. The internal URL is reached over the compose
+# network and is never exposed publicly.
+MAIL_APP_INTERNAL_URL = config('MAIL_APP_INTERNAL_URL', default='http://mail-backend:8000')
+MAIL_APP_HANDOFF_URL = config('MAIL_APP_HANDOFF_URL', default='https://mail.itcommand.com/auth/handoff')
+MAIL_APP_TIMEOUT = config('MAIL_APP_TIMEOUT', default=20, cast=int)
+
+# Dovecot. Only used when MAIL_AUTH_ENABLED is on.
+MAIL_IMAP_HOST = config('MAIL_IMAP_HOST', default='')
+MAIL_IMAP_PORT = config('MAIL_IMAP_PORT', default=993, cast=int)
+MAIL_IMAP_VERIFY_CERT = config('MAIL_IMAP_VERIFY_CERT', default=True, cast=bool)
+MAIL_IMAP_TIMEOUT = config('MAIL_IMAP_TIMEOUT', default=15, cast=int)
+
+# Shared with the mail app. All three must match on both sides.
+MAIL_SESSION_SEAL_KEY = config('MAIL_SESSION_SEAL_KEY', default='0' * 32)
+MAIL_HANDOFF_HMAC_KEY = config('MAIL_HANDOFF_HMAC_KEY', default='dev-handoff-key')
+MAIL_INTERNAL_HMAC_KEY = config('MAIL_INTERNAL_HMAC_KEY', default='')
+MAIL_INTERNAL_SERVICE_NAME = config('MAIL_INTERNAL_SERVICE_NAME', default='itcommand')
+
+MAIL_REDIS_URL = config('MAIL_REDIS_URL', default='')
+MAIL_SESSION_ABSOLUTE_SECONDS = config('MAIL_SESSION_ABSOLUTE_SECONDS', default=8 * 3600, cast=int)
+MAIL_HANDOFF_TICKET_SECONDS = config('MAIL_HANDOFF_TICKET_SECONDS', default=30, cast=int)
+
+# httpOnly, host-scoped. The browser never reads this and it never reaches
+# localStorage; it exists only so OpenMailboxView can find the mail session.
+MAIL_SID_COOKIE = config('MAIL_SID_COOKIE', default='itc_mail_sid')

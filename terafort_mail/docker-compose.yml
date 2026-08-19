@@ -1,0 +1,102 @@
+# Terafort Mail — its own stack, its own data.
+#
+# Runs alongside IT Command on the same host but shares nothing except the
+# Redis session store and three secrets. Separate Postgres on purpose:
+# encrypted mail bodies and IT Command's business data in one instance would
+# mean one compromise reaches both.
+#
+#   cp .env.example .env && edit it, then:
+#   docker compose up -d --build
+#
+services:
+  mail-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_SUPERUSER:-postgres}
+      POSTGRES_PASSWORD: ${DB_SUPERUSER_PASSWORD}
+    volumes:
+      - mail_pgdata:/var/lib/postgresql/data
+      # Creates the *unprivileged* application role. This matters: row-level
+      # security is silently bypassed by a superuser, so the app must never
+      # connect as one. See 01-app-role.sql.
+      - ./deploy/postgres/01-app-role.sql:/docker-entrypoint-initdb.d/01-app-role.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_SUPERUSER:-postgres} -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mail-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # No persistence. The only things in here are live sessions holding
+    # credentials; writing them to disk would undo the point of not storing
+    # credentials at rest. A restart signs everyone out, which is correct.
+    command: >
+      redis-server
+      --save ""
+      --appendonly no
+      --maxmemory 256mb
+      --maxmemory-policy noeviction
+      --requirepass ${REDIS_PASSWORD}
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  mail-backend:
+    image: terafort-mail-backend:local
+    build: ./backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DB_HOST: mail-db
+      DB_PORT: "5432"
+    depends_on:
+      mail-db:
+        condition: service_healthy
+      mail-redis:
+        condition: service_healthy
+    volumes:
+      - mail_static:/app/staticfiles
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 8000), 2).close()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  mail-frontend:
+    build:
+      context: ./frontend
+      args:
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-/api}
+    restart: unless-stopped
+    depends_on:
+      mail-backend:
+        condition: service_healthy
+    expose:
+      - "3000"
+
+  mail-nginx:
+    image: nginx:1.27-alpine
+    restart: unless-stopped
+    depends_on:
+      mail-backend:
+        condition: service_healthy
+      mail-frontend:
+        condition: service_started
+    ports:
+      - "${MAIL_HTTP_PORT:-8080}:80"
+    volumes:
+      - ./deploy/nginx/mail.conf:/etc/nginx/conf.d/default.conf:ro
+      - mail_static:/vol/static:ro
+
+volumes:
+  mail_pgdata:
+  mail_static:
