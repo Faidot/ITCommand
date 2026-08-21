@@ -169,6 +169,13 @@ class IntegrationsView(AuditLogMixin, APIView):
             'config_only': spec.get('config_only', False),
             'credential_label': spec.get('credential_label', 'API key'),
             'default_base_url': spec.get('default_base_url', ''),
+            # Providers that need more than a key and a URL declare the extra
+            # fields here; the settings UI renders whatever is listed.
+            'config_fields': spec.get('config_fields', []),
+            # Providers that can prove their credentials in one cheap, read-only
+            # call get a Test connection button instead of a Run now button.
+            'supports_connection_test': spec.get('connection_test', False),
+            'config': (integration.config or {}) if integration else {},
             'is_enabled': bool(integration and integration.is_enabled),
             'base_url': (integration.base_url if integration else '') or spec.get('default_base_url', ''),
             'has_api_key': bool(integration and integration.has_api_key),
@@ -255,6 +262,31 @@ class IntegrationsView(AuditLogMixin, APIView):
                     )
                 integration.key_expires_at = parsed
 
+        if 'config' in request.data:
+            incoming = request.data.get('config') or {}
+            if not isinstance(incoming, dict):
+                return Response(
+                    {'detail': 'config must be an object.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            # Only keys the provider declares are accepted. An open dict here
+            # would let any caller write arbitrary JSON into a row that feeds
+            # a URL builder and an HTTP client.
+            allowed = {f['key'] for f in spec.get('config_fields', [])}
+            unknown = sorted(set(incoming) - allowed)
+            if unknown:
+                return Response(
+                    {'detail': 'Unknown setting(s) for %s: %s.'
+                               % (provider, ', '.join(unknown))},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            merged = dict(integration.config or {})
+            merged.update(incoming)
+            integration.config = merged
+            # Values only; never the keys' contents in an audit row, since a
+            # provider could later declare a secret-ish field here.
+            changes['config'] = sorted(incoming)
+
         if request.data.get('clear_api_key'):
             integration.set_api_key('')
         elif request.data.get('api_key'):
@@ -265,6 +297,22 @@ class IntegrationsView(AuditLogMixin, APIView):
                 {'detail': 'An API key is required before enabling this integration.'},
                 status=status.HTTP_400_BAD_REQUEST,
             )
+
+        if integration.is_enabled:
+            # An enabled integration missing a required field fails at the
+            # first call with something obscure. Refuse here instead, naming
+            # the field.
+            missing = [
+                f.get('label', f['key'])
+                for f in spec.get('config_fields', [])
+                if f.get('required') and not (integration.config or {}).get(f['key'])
+            ]
+            if missing:
+                return Response(
+                    {'detail': 'Fill in %s before enabling this integration.'
+                               % ', '.join(missing)},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         integration.updated_by = request.user
         integration.save()
@@ -381,6 +429,13 @@ class IntegrationTestView(APIView):
             integration.mark_result('OK' if ok else 'ERROR', detail)
             return Response({'ok': ok, 'output': detail})
 
+        # cPanel is tested by a read-only probe: authenticate, list the
+        # mailboxes that already exist, disconnect. It creates nothing, so it
+        # is safe to run as often as you like, and it is one round trip, so it
+        # does not need the automation queue.
+        if provider == 'CPANEL':
+            return self._test_cpanel(request)
+
         command = self.COMMANDS.get(provider)
         if not command:
             return Response(
@@ -434,6 +489,74 @@ class IntegrationTestView(APIView):
             'output': Integration.clean_message(
                 problem or out.getvalue().strip() or 'Completed.'
             ),
+        })
+
+    @staticmethod
+    def _test_cpanel(request):
+        """Read-only probe of the cPanel integration.
+
+        The three failure modes are kept apart because they send an operator to
+        three different places: not configured (fill the form in), unreachable
+        (network or hostname), refused (token or permissions). Collapsing them
+        into "test failed" is how people end up regenerating a token that was
+        fine.
+        """
+        from core import cpanel
+
+        integration = Integration.objects.filter(provider='CPANEL').first()
+
+        try:
+            client = cpanel.CpanelClient.from_integration(require_enabled=False)
+        except cpanel.CpanelNotConfigured as exc:
+            return Response({'ok': False, 'output': str(exc)})
+
+        try:
+            report = client.check()
+        except cpanel.CpanelUnavailable as exc:
+            message = (
+                'Could not reach cPanel at %s. The token has NOT been rejected '
+                '\u2014 this is a connectivity or hostname problem. %s'
+                % (client.host, exc)
+            )
+            if integration:
+                integration.mark_result('ERROR', message)
+            return Response({'ok': False, 'output': Integration.clean_message(message)})
+        except cpanel.CpanelRejected as exc:
+            message = (
+                'cPanel answered and refused us: %s. Check the API token, that '
+                'it belongs to user %r, and that it has access to the Email '
+                'module.' % (exc, client.username)
+            )
+            if integration:
+                integration.mark_result('ERROR', message)
+            return Response({'ok': False, 'output': Integration.clean_message(message)})
+
+        message = (
+            'Connected to %s as %s. Managing %s \u2014 %d mailbox(es) already exist. '
+            'Default quota %d MB.'
+            % (report['host'], report['cpanel_user'], report['domain'],
+               report['mailbox_count'], report['default_quota_mb'])
+        )
+        if integration:
+            integration.mark_result('OK', message)
+
+        return Response({
+            'ok': True,
+            'status': 'OK',
+            'output': Integration.clean_message(message),
+            # Said plainly, because a green tick here is easy to over-read.
+            # Creation uses Email::add_pop, whose parameter names differ
+            # between cPanel releases and which this probe does not exercise.
+            'caveat': (
+                'This proved authentication and Email::list_pops only. Creating '
+                'a mailbox uses different parameters \u2014 create one real user '
+                'and confirm before a bulk rollout.'
+            ),
+            'details': {
+                'domain': report['domain'],
+                'mailbox_count': report['mailbox_count'],
+                'sample': report['sample'],
+            },
         })
 
 

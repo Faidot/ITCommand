@@ -30,6 +30,10 @@ class FakeCpanel:
         self.unsuspended = []
         self.domain = "terafort.com"
         self.quota_mb = 5120
+        # The error paths name the host and user in their messages, so the
+        # fake has to carry them like the real client does.
+        self.host = "cpanel.example.com"
+        self.username = "terafort"
 
     def create_mailbox(self, address, password, quota_mb=None):
         if self.fail_with:
@@ -359,3 +363,201 @@ class UnconfiguredIsSilentTests(TestCase):
                 content_type="application/json")
         self.assertEqual(r.status_code, 201)
         self.assertIn("mailbox_warning", r.data)
+
+
+class IntegrationConfigApiTests(TestCase):
+    """cPanel needs a host, username and domain as well as a token, so the
+    settings API has to accept `config`. It also has to refuse anything the
+    provider did not declare -- this row feeds a URL builder and an HTTP
+    client, so an open dict would be a real hole."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            email="cfgadmin@terafort.com", password="pw12345!",
+            full_name="Cfg Admin", role="SUPERADMIN")
+        token = RefreshToken.for_user(self.admin).access_token
+        self.client.defaults["HTTP_AUTHORIZATION"] = "Bearer %s" % token
+        self.url = "/api/integrations/"
+
+    def _put(self, **body):
+        body.setdefault("provider", "CPANEL")
+        return self.client.put(self.url, body, content_type="application/json")
+
+    def test_config_fields_are_advertised_to_the_ui(self):
+        r = self.client.get(self.url)
+        self.assertEqual(r.status_code, 200)
+        cpanel_row = next(i for i in r.data["integrations"] if i["provider"] == "CPANEL")
+        keys = {f["key"] for f in cpanel_row["config_fields"]}
+        self.assertEqual(
+            keys,
+            {"host", "cpanel_username", "domain", "port", "default_quota_mb", "verify_cert"})
+
+    def test_config_round_trips(self):
+        r = self._put(config={"host": "cpanel.example.com",
+                              "cpanel_username": "terafort",
+                              "domain": "terafort.com"})
+        self.assertEqual(r.status_code, 200)
+        row = Integration.objects.get(provider="CPANEL")
+        self.assertEqual(row.config["host"], "cpanel.example.com")
+        self.assertEqual(row.config["domain"], "terafort.com")
+
+    def test_partial_updates_merge_rather_than_replace(self):
+        self._put(config={"host": "a.example.com", "cpanel_username": "tf"})
+        self._put(config={"domain": "terafort.com"})
+        row = Integration.objects.get(provider="CPANEL")
+        self.assertEqual(row.config["host"], "a.example.com")
+        self.assertEqual(row.config["cpanel_username"], "tf")
+
+    def test_undeclared_keys_are_refused(self):
+        r = self._put(config={"host": "a.example.com", "evil_key": "x"})
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("evil_key", r.data["detail"])
+
+    def test_config_must_be_an_object(self):
+        self.assertEqual(self._put(config="not-a-dict").status_code, 400)
+
+    def test_enabling_without_required_config_is_refused_by_name(self):
+        row = Integration.objects.create(provider="CPANEL")
+        row.set_api_key("tok")
+        row.save()
+        r = self._put(is_enabled=True)
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("cPanel hostname", r.data["detail"])
+
+    def test_enabling_with_everything_present_succeeds(self):
+        r = self._put(api_key="tok",
+                      config={"host": "cpanel.example.com",
+                              "cpanel_username": "terafort",
+                              "domain": "terafort.com"},
+                      is_enabled=True)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(Integration.objects.get(provider="CPANEL").is_enabled)
+
+    def test_the_saved_config_actually_builds_a_working_client(self):
+        """The end of the chain: what the UI saves is what the client uses."""
+        self._put(api_key="tok",
+                  config={"host": "cpanel.example.com",
+                          "cpanel_username": "terafort",
+                          "domain": "terafort.com"},
+                  is_enabled=True)
+        client = cpanel.CpanelClient.from_integration()
+        self.assertEqual(client.domain, "terafort.com")
+        self.assertEqual(client.username, "terafort")
+        self.assertEqual(
+            client._url("Email", "add_pop"),
+            "https://cpanel.example.com:2083/execute/Email/add_pop")
+
+
+class ConnectionTestApiTests(TestCase):
+    """The Test connection button.
+
+    The three failure modes must stay distinct: not configured, unreachable,
+    refused. Collapsing them into "test failed" is how somebody ends up
+    regenerating a token that was fine because the hostname had a typo.
+    """
+
+    URL = "/api/integrations/test/"
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            email="testadmin@terafort.com", password="pw12345!",
+            full_name="Test Admin", role="SUPERADMIN")
+        token = RefreshToken.for_user(self.admin).access_token
+        self.client.defaults["HTTP_AUTHORIZATION"] = "Bearer %s" % token
+
+    def _row(self, enabled=True):
+        row = Integration.objects.create(
+            provider="CPANEL", is_enabled=enabled,
+            config={"host": "cpanel.example.com", "cpanel_username": "terafort",
+                    "domain": "terafort.com"})
+        row.set_api_key("tok")
+        row.save()
+        return row
+
+    def _post(self):
+        return self.client.post(self.URL, {"provider": "CPANEL"},
+                                content_type="application/json")
+
+    def test_not_configured_says_so(self):
+        r = self._post()
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.data["ok"])
+        self.assertIn("not been set up", r.data["output"])
+
+    def test_it_works_before_the_integration_is_enabled(self):
+        """The whole point is to check before switching it on."""
+        self._row(enabled=False)
+        fake = FakeCpanel(existing=["a@terafort.com"])
+        fake.check = lambda: {"host": "cpanel.example.com", "port": 2083,
+                              "cpanel_user": "terafort", "domain": "terafort.com",
+                              "reachable": True, "mailbox_count": 1,
+                              "default_quota_mb": 5120, "sample": ["a@terafort.com"]}
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            r = self._post()
+        self.assertTrue(r.data["ok"])
+
+    def test_success_reports_what_it_found(self):
+        self._row()
+        fake = FakeCpanel()
+        fake.check = lambda: {"host": "cpanel.example.com", "port": 2083,
+                              "cpanel_user": "terafort", "domain": "terafort.com",
+                              "reachable": True, "mailbox_count": 12,
+                              "default_quota_mb": 5120, "sample": []}
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            r = self._post()
+        self.assertTrue(r.data["ok"])
+        self.assertIn("12 mailbox", r.data["output"])
+        self.assertIn("terafort.com", r.data["output"])
+
+    def test_success_carries_the_caveat(self):
+        """A green tick here is easy to over-read: the probe never exercises
+        add_pop, which is the call whose parameters are unverified."""
+        self._row()
+        fake = FakeCpanel()
+        fake.check = lambda: {"host": "h", "port": 2083, "cpanel_user": "u",
+                              "domain": "terafort.com", "reachable": True,
+                              "mailbox_count": 0, "default_quota_mb": 5120, "sample": []}
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            r = self._post()
+        self.assertIn("list_pops", r.data["caveat"])
+
+    def test_unreachable_does_not_blame_the_token(self):
+        self._row()
+        fake = FakeCpanel()
+        fake.check = mock.Mock(side_effect=cpanel.CpanelUnavailable("timed out"))
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            r = self._post()
+        self.assertFalse(r.data["ok"])
+        self.assertIn("NOT been rejected", r.data["output"])
+
+    def test_refusal_points_at_the_token(self):
+        self._row()
+        fake = FakeCpanel()
+        fake.check = mock.Mock(side_effect=cpanel.CpanelRejected("Access denied"))
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            r = self._post()
+        self.assertFalse(r.data["ok"])
+        self.assertIn("API token", r.data["output"])
+
+    def test_the_result_is_recorded_on_the_integration(self):
+        row = self._row()
+        fake = FakeCpanel()
+        fake.check = mock.Mock(side_effect=cpanel.CpanelRejected("Access denied"))
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            self._post()
+        row.refresh_from_db()
+        self.assertEqual(row.last_status, "ERROR")
+        self.assertIn("Access denied", row.last_error)
+
+    def test_a_non_superadmin_cannot_run_it(self):
+        viewer = User.objects.create_user(
+            email="viewer@terafort.com", password="pw12345!",
+            full_name="Viewer", role="VIEWER")
+        token = RefreshToken.for_user(viewer).access_token
+        self.client.defaults["HTTP_AUTHORIZATION"] = "Bearer %s" % token
+        self.assertEqual(self._post().status_code, 403)
+
+    def test_the_button_is_advertised_to_the_ui(self):
+        r = self.client.get("/api/integrations/")
+        row = next(i for i in r.data["integrations"] if i["provider"] == "CPANEL")
+        self.assertTrue(row["supports_connection_test"])

@@ -103,8 +103,13 @@ class CpanelClient:
     # -- construction ------------------------------------------------------
 
     @classmethod
-    def from_integration(cls) -> "CpanelClient":
+    def from_integration(cls, *, require_enabled: bool = True) -> "CpanelClient":
         """Build from the saved Integration row, or say why we cannot.
+
+        `require_enabled=False` is for the connection test: you want to prove
+        the credentials work *before* switching the integration on, not after.
+        Every real call path leaves it True, so a disabled integration is
+        never contacted by accident.
 
         Credentials live in the same encrypted Integration table as every
         other provider, so rotating VAULT_ENCRYPTION_KEY reports the same
@@ -113,10 +118,14 @@ class CpanelClient:
         from core.models.integrations import CredentialUnreadable, Integration
 
         row = Integration.objects.filter(provider="CPANEL").first()
-        if row is None or not row.is_enabled:
+        if row is None:
             raise CpanelNotConfigured(
-                "The cPanel integration is not set up or not enabled. "
+                "The cPanel integration has not been set up yet. "
                 "Settings → Integrations → cPanel.")
+        if require_enabled and not row.is_enabled:
+            raise CpanelNotConfigured(
+                "The cPanel integration is saved but not enabled. "
+                "Settings → Integrations → cPanel → Enable.")
         try:
             token = row.get_api_key()
         except CredentialUnreadable as exc:

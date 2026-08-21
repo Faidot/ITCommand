@@ -161,6 +161,8 @@ class Integration(models.Model):
             ),
             "needs_api_key": True,
             "credential_label": "cPanel API token",
+            #: One read-only round trip proves the token. No sync to schedule.
+            "connection_test": True,
             "default_base_url": "",
             "help": (
                 "cPanel \u2192 Security \u2192 Manage API Tokens \u2192 Create. Then fill in "

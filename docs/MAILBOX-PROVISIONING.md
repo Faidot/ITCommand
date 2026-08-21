@@ -70,7 +70,7 @@ should be able to cause.
 ## Failure behaviour
 
 | Situation | What happens |
-|---|---|
+xw|---|---|
 | cPanel not configured | Silent. Local account with a Django password, exactly as before the feature existed. |
 | cPanel configured but unreachable | **201 with a warning.** The user is created with a working local password so they are not stranded; the response says no mailbox was made. Not a 500 — hiding it behind an error would have someone create the user twice. |
 | Mailbox already exists | Linked, not created. **No password is returned** — we did not set one and do not know the real one. |
