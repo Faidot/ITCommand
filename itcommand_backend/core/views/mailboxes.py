@@ -272,6 +272,93 @@ class ManagedMailboxViewSet(viewsets.ReadOnlyModelViewSet):
                      changes={"address": box.address})
         return self._ok(box, message="Mailbox linked to %s." % user.email)
 
+    @action(detail=True, methods=["post"], url_path="create-user")
+    def create_user(self, request, pk=None):
+        """Give an existing mailbox an IT Command account.
+
+        The mailbox already exists, so we did not set its password and do not
+        know it. The new account therefore signs in with whatever password the
+        mailbox already has -- which is the one-credential model working in
+        reverse.
+
+        Pass `reset_password: true` when nobody knows it any more; that sets a
+        new one and returns it once.
+        """
+        box = self.get_object()
+
+        if box.user_id is not None:
+            return Response({"detail": "%s already belongs to %s."
+                             % (box.address, box.user.email)},
+                            status=status.HTTP_409_CONFLICT)
+        if box.purged_at or not box.exists_in_cpanel:
+            return Response({"detail": "That mailbox is not on the server."},
+                            status=status.HTTP_409_CONFLICT)
+
+        existing = User.objects.filter(email__iexact=box.address).first()
+        if existing is not None:
+            # The account was there all along, just unlinked. Adopt it rather
+            # than refusing -- and never create a duplicate.
+            box.user = existing
+            box.save(update_fields=["user"])
+            record_audit(request, "MAILBOX_LINKED", obj=existing, user=request.user,
+                         changes={"address": box.address})
+            return self._ok(box, message="An account already existed for %s, so it "
+                                         "was linked rather than created." % box.address)
+
+        full_name = (request.data.get("full_name") or "").strip()
+        if not full_name:
+            return Response({"full_name": ["A name is required."]},
+                            status=status.HTTP_400_BAD_REQUEST)
+
+        role = (request.data.get("role") or "VIEWER").strip().upper()
+        if role not in dict(User.ROLE_CHOICES):
+            return Response({"role": ["Unknown role %r." % role]},
+                            status=status.HTTP_400_BAD_REQUEST)
+        # An admin must not be able to mint a superadmin from here; that is a
+        # user-management decision, not a mailbox one.
+        if role == "SUPERADMIN" and request.user.role != "SUPERADMIN":
+            return Response({"role": ["Only a Superadmin can create a Superadmin."]},
+                            status=status.HTTP_403_FORBIDDEN)
+
+        user = User.objects.create(
+            email=box.address,
+            full_name=full_name,
+            role=role,
+            auth_source=User.AUTH_MAILBOX,
+        )
+        # No local hash: Dovecot owns this account's password, and the mailbox
+        # already has one we never saw.
+        user.set_unusable_password()
+        user.save()
+
+        box.user = user
+        box.save(update_fields=["user"])
+
+        password = None
+        if request.data.get("reset_password"):
+            password = mailbox_admin_generate()
+            try:
+                mailbox_admin.set_password(box, password, actor=request.user.email)
+            except mailbox_admin.MailboxAdminError as exc:
+                password = None
+                record_audit(request, "USER_CREATED", obj=user, user=request.user,
+                             changes={"email": user.email, "from": "mailbox"})
+                return self._ok(box, message="Account created, but the password could "
+                                             "not be reset: %s" % exc)
+
+        record_audit(request, "USER_CREATED", obj=user, user=request.user,
+                     changes={"email": user.email, "from": "mailbox", "role": role})
+
+        return self._ok(
+            box,
+            message="Account created for %s." % box.address,
+            password=password,
+            note=("This is the new password for both IT Command and the mailbox."
+                  if password else
+                  "They sign in with the mailbox password they already have — we "
+                  "did not set it and do not know it. Reset it if nobody does."),
+        )
+
     # -- deletion ---------------------------------------------------------
 
     @action(detail=True, methods=["post"], url_path="request-deletion")

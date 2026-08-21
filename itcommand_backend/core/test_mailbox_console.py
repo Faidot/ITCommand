@@ -571,3 +571,104 @@ class QuotaTests(TestCase):
         token = RefreshToken.for_user(viewer).access_token
         self.client.defaults["HTTP_AUTHORIZATION"] = "Bearer %s" % token
         self.assertEqual(self._post({"quota_gb": 10}).status_code, 403)
+
+
+class CreateUserFromMailboxTests(TestCase):
+    """Giving an existing mailbox an IT Command account.
+
+    The mailbox came first, so we never set its password and do not know it.
+    The account must therefore be created without inventing one -- claiming a
+    password we do not have is worse than admitting we cannot supply it.
+    """
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            email="cuadmin@terafort.com", password="pw12345!",
+            full_name="CU Admin", role="ADMIN")
+        self._as(self.admin)
+        self.box = ManagedMailbox.objects.create(
+            address="info@terafort.com", domain="terafort.com")
+
+    def _as(self, user):
+        token = RefreshToken.for_user(user).access_token
+        self.client.defaults["HTTP_AUTHORIZATION"] = "Bearer %s" % token
+
+    def _post(self, body=None, box=None):
+        return self.client.post(
+            reverse("mailbox-create-user", kwargs={"pk": (box or self.box).pk}),
+            body or {}, content_type="application/json")
+
+    def test_it_creates_a_mailbox_backed_account(self):
+        r = self._post({"full_name": "Info Desk", "role": "VIEWER"})
+        self.assertEqual(r.status_code, 200)
+        user = User.objects.get(email="info@terafort.com")
+        self.assertTrue(user.uses_mailbox_auth)
+        self.assertFalse(user.has_usable_password())
+        self.box.refresh_from_db()
+        self.assertEqual(self.box.user, user)
+
+    def test_no_password_is_invented_for_a_mailbox_we_did_not_create(self):
+        r = self._post({"full_name": "Info Desk"})
+        self.assertIsNone(r.json()["password"])
+        self.assertIn("do not know it", r.json()["note"])
+
+    def test_resetting_the_password_returns_a_new_one(self):
+        fake = ListingFake()
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            r = self._post({"full_name": "Info Desk", "reset_password": True})
+        self.assertTrue(r.json()["password"])
+        self.assertEqual(len(fake.passwords), 1)
+        self.assertIn("both IT Command and the mailbox", r.json()["note"])
+
+    def test_a_name_is_required(self):
+        r = self._post({})
+        self.assertEqual(r.status_code, 400)
+        self.assertFalse(User.objects.filter(email="info@terafort.com").exists())
+
+    def test_an_already_linked_mailbox_is_refused(self):
+        owner = User.objects.create_user(
+            email="info@terafort.com", password="x", full_name="Owner")
+        self.box.user = owner
+        self.box.save(update_fields=["user"])
+        self.assertEqual(self._post({"full_name": "Someone"}).status_code, 409)
+
+    def test_an_existing_unlinked_account_is_adopted_not_duplicated(self):
+        """The account was there all along, just not attached."""
+        existing = User.objects.create_user(
+            email="info@terafort.com", password="x", full_name="Info Desk")
+        r = self._post({"full_name": "Different Name"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(User.objects.filter(email="info@terafort.com").count(), 1)
+        self.box.refresh_from_db()
+        self.assertEqual(self.box.user, existing)
+        self.assertIn("already existed", r.json()["message"])
+
+    def test_a_mailbox_not_on_the_server_is_refused(self):
+        self.box.exists_in_cpanel = False
+        self.box.save(update_fields=["exists_in_cpanel"])
+        self.assertEqual(self._post({"full_name": "X"}).status_code, 409)
+
+    def test_an_admin_cannot_mint_a_superadmin_from_here(self):
+        """Creating a superadmin is a user-management decision, not a mailbox one."""
+        r = self._post({"full_name": "Sneaky", "role": "SUPERADMIN"})
+        self.assertEqual(r.status_code, 403)
+        self.assertFalse(User.objects.filter(email="info@terafort.com").exists())
+
+    def test_a_superadmin_may(self):
+        boss = User.objects.create_user(
+            email="boss@terafort.com", password="pw12345!",
+            full_name="Boss", role="SUPERADMIN")
+        self._as(boss)
+        r = self._post({"full_name": "Deputy", "role": "SUPERADMIN"})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(User.objects.get(email="info@terafort.com").role, "SUPERADMIN")
+
+    def test_an_unknown_role_is_refused(self):
+        self.assertEqual(self._post({"full_name": "X", "role": "WIZARD"}).status_code, 400)
+
+    def test_a_viewer_cannot_create_users_from_mailboxes(self):
+        viewer = User.objects.create_user(
+            email="cuviewer@terafort.com", password="pw12345!",
+            full_name="V", role="VIEWER")
+        self._as(viewer)
+        self.assertEqual(self._post({"full_name": "X"}).status_code, 403)

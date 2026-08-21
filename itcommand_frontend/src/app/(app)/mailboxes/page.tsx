@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   Mail, RefreshCw, Search, ShieldAlert, KeyRound, Ban, RotateCcw,
-  Trash2, Plus, Copy, Check, Link2, HardDrive, Clock, Gauge,
+  Trash2, Plus, Copy, Check, Link2, HardDrive, Clock, Gauge, UserPlus,
 } from "lucide-react";
 
 import api from "@/lib/api";
@@ -58,14 +58,15 @@ interface Summary {
  * Storage reads in gigabytes, because that is how people think about mailbox
  * size. Megabytes are cPanel's unit and stay on the wire.
  *
- * Small mailboxes are the awkward case: "0.02 GB" tells you nothing, so
- * anything under a tenth of a gigabyte falls back to megabytes rather than
- * rounding away to a meaningless zero.
+ * Up to two decimals, with trailing zeros stripped: 5 GB, not 5.00 GB, but
+ * 2.5 GB stays 2.5 GB. A mailbox holding only a few megabytes would round to
+ * "0 GB", which reads as empty when it is not, so that one case says
+ * "< 0.01 GB" instead.
  */
 function storage(gb: number, mb: number): string {
-  if (gb >= 10) return `${Math.round(gb)} GB`;
-  if (gb >= 0.1) return `${gb.toFixed(1)} GB`;
-  return `${Math.round(mb)} MB`;
+  const rounded = parseFloat(gb.toFixed(2));
+  if (rounded === 0 && mb > 0) return "< 0.01 GB";
+  return `${rounded} GB`;
 }
 
 const STATUS_STYLE: Record<Mailbox["status"], string> = {
@@ -100,6 +101,10 @@ export default function MailboxesPage() {
   const [quotaTarget, setQuotaTarget] = useState<Mailbox | null>(null);
   const [quotaValue, setQuotaValue] = useState("");
   const [quotaUnlimited, setQuotaUnlimited] = useState(false);
+  const [userTarget, setUserTarget] = useState<Mailbox | null>(null);
+  const [userName, setUserName] = useState("");
+  const [userRole, setUserRole] = useState("VIEWER");
+  const [userReset, setUserReset] = useState(false);
   const [delTarget, setDelTarget] = useState<Mailbox | null>(null);
   const [delReason, setDelReason] = useState("");
   const [purgeTarget, setPurgeTarget] = useState<Mailbox | null>(null);
@@ -260,9 +265,27 @@ export default function MailboxesPage() {
                       <div className="text-xs text-muted-foreground">{box.user_email}</div>
                     </div>
                   ) : (
-                    <Badge variant="outline" className="gap-1">
-                      <Link2 className="h-3 w-3" /> Shared
-                    </Badge>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Badge variant="outline" className="gap-1">
+                        <Link2 className="h-3 w-3" /> No account
+                      </Badge>
+                      {box.exists_in_cpanel && box.status !== "PURGED" && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 px-2 text-xs"
+                          disabled={busy === box.id}
+                          onClick={() => {
+                            setUserTarget(box);
+                            setUserName("");
+                            setUserRole("VIEWER");
+                            setUserReset(false);
+                          }}
+                        >
+                          <UserPlus className="mr-1 h-3 w-3" /> Create user
+                        </Button>
+                      )}
+                    </div>
                   )}
                 </TableCell>
                 <TableCell className="text-sm tabular-nums">
@@ -385,6 +408,62 @@ export default function MailboxesPage() {
               const ok = await act(box, "set-password", pwValue ? { password: pwValue } : {});
               if (ok) setPwTarget(null);
             }}>Set password</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* CREATE A USER FOR AN EXISTING MAILBOX */}
+      <Dialog open={!!userTarget} onOpenChange={(o) => !o && setUserTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Create an account for {userTarget?.address}</DialogTitle>
+            <DialogDescription>
+              The mailbox already exists, so we never set its password and do not know it.
+              They will sign in to IT Command with the mailbox password they already have.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Full name</label>
+              <Input placeholder="Kofi Mensah" value={userName}
+                     onChange={(e) => setUserName(e.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <label className="text-sm font-medium">Role</label>
+              <Select value={userRole} onValueChange={setUserRole}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="VIEWER">Viewer</SelectItem>
+                  <SelectItem value="MANAGER">Manager</SelectItem>
+                  <SelectItem value="ADMIN">Admin</SelectItem>
+                  {isSuperadmin && <SelectItem value="SUPERADMIN">Superadmin</SelectItem>}
+                </SelectContent>
+              </Select>
+            </div>
+            <label className="flex items-start gap-2 rounded-lg border p-3 text-sm">
+              <input type="checkbox" className="mt-1" checked={userReset}
+                     onChange={(e) => setUserReset(e.target.checked)} />
+              <span>
+                <span className="font-medium">Also set a new password</span>
+                <span className="block text-xs text-muted-foreground">
+                  Tick this when nobody knows the current mailbox password. It changes the
+                  mailbox password too, and is shown once.
+                </span>
+              </span>
+            </label>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setUserTarget(null)}>Cancel</Button>
+            <Button disabled={!userName.trim()} onClick={async () => {
+              const ok = await act(userTarget!, "create-user", {
+                full_name: userName.trim(),
+                role: userRole,
+                reset_password: userReset,
+              });
+              if (ok) setUserTarget(null);
+            }}>Create account</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
