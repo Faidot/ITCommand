@@ -286,16 +286,37 @@ class DestructiveGuardTests(TestCase):
             self._client().delete_mailbox("someone@terafort.com")
         self.assertIn("permanently destroys", str(ctx.exception))
 
-    def test_no_view_or_command_calls_delete_mailbox(self):
-        """The guard is only worth having if nothing routes around it."""
+    #: The one place allowed to delete: a self-test that created the mailbox
+    #: itself, moments earlier, on an address it forced to look disposable and
+    #: refused to reuse. Every other caller would be operating on a mailbox
+    #: somebody real depends on.
+    DELETE_ALLOWED = {"cpanel_verify.py"}
+
+    def test_nothing_reachable_from_a_request_can_delete_a_mailbox(self):
+        """The guard is only worth having if nothing routes around it.
+
+        Views especially: an HTTP request must never be able to cause
+        permanent mail loss, whatever it contains.
+        """
         import pathlib
         root = pathlib.Path(__file__).resolve().parent
         offenders = []
         for path in list(root.glob("views/*.py")) + list(
                 root.glob("management/commands/*.py")) + [root / "mailbox_provisioning.py"]:
+            if path.name in self.DELETE_ALLOWED:
+                continue
             if "delete_mailbox" in path.read_text():
                 offenders.append(path.name)
         self.assertEqual(offenders, [], "delete_mailbox is reachable from %s" % offenders)
+
+    def test_the_one_allowed_caller_still_passes_the_acknowledgement(self):
+        """Being on the allow-list is not permission to skip the guard."""
+        import pathlib
+        source = (pathlib.Path(__file__).resolve().parent
+                  / "management" / "commands" / "cpanel_verify.py").read_text()
+        self.assertIn("i_understand_this_deletes_mail=True", source)
+        # And it must never delete without being asked.
+        self.assertIn('opts["cleanup"]', source)
 
     def test_zero_quota_is_refused(self):
         """cPanel reads 0 as unlimited; reaching that by accident fills a disk."""
@@ -561,3 +582,65 @@ class ConnectionTestApiTests(TestCase):
         r = self.client.get("/api/integrations/")
         row = next(i for i in r.data["integrations"] if i["provider"] == "CPANEL")
         self.assertTrue(row["supports_connection_test"])
+
+
+class CpanelVerifyCommandTests(TestCase):
+    """The self-test creates a real mailbox, so its guards matter more than its
+    happy path. It must never be able to touch a real person's address."""
+
+    def _run(self, **opts):
+        from io import StringIO
+
+        from django.core.management import call_command
+        out = StringIO()
+        opts.setdefault("yes", True)
+        call_command("cpanel_verify", stdout=out, stderr=out, **opts)
+        return out.getvalue()
+
+    def test_refuses_an_address_that_does_not_look_disposable(self):
+        from django.core.management.base import CommandError
+        fake = FakeCpanel()
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            with self.assertRaises(CommandError) as ctx:
+                self._run(address="kofi@terafort.com")
+        self.assertIn("does not look like a test address", str(ctx.exception))
+        self.assertEqual(fake.created, [], "it tried to create a real person's mailbox")
+
+    def test_refuses_an_address_that_already_exists(self):
+        from django.core.management.base import CommandError
+        fake = FakeCpanel(existing=["selftest@terafort.com"])
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            with self.assertRaises(CommandError) as ctx:
+                self._run(address="selftest@terafort.com")
+        self.assertIn("already exists", str(ctx.exception))
+
+    def test_happy_path_exercises_all_four_calls(self):
+        fake = FakeCpanel()
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            out = self._run(address="itcommand-selftest@terafort.com")
+        self.assertIn("All four calls work", out)
+        self.assertEqual(len(fake.created), 1)
+        self.assertEqual(fake.suspended, ["itcommand-selftest@terafort.com"])
+        self.assertEqual(fake.unsuspended, ["itcommand-selftest@terafort.com"])
+
+    def test_it_leaves_the_mailbox_unless_cleanup_is_asked_for(self):
+        fake = FakeCpanel()
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            out = self._run(address="itcommand-selftest@terafort.com")
+        self.assertIn("still on your server", out)
+
+    def test_a_failing_call_is_reported_with_cpanels_own_error(self):
+        from django.core.management.base import CommandError
+        fake = FakeCpanel(fail_with=cpanel.CpanelRejected("Invalid parameter 'quota'"))
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            with self.assertRaises(CommandError):
+                self._run(address="itcommand-selftest@terafort.com")
+
+    def test_add_pop_succeeding_but_not_appearing_is_caught(self):
+        """A mailbox created on the wrong domain would otherwise look fine."""
+        from django.core.management.base import CommandError
+        fake = FakeCpanel()
+        fake.mailbox_addresses = lambda: set()   # never shows up in list_pops
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            with self.assertRaises(CommandError):
+                self._run(address="itcommand-selftest@terafort.com")

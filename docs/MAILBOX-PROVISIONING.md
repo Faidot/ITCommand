@@ -41,6 +41,29 @@ python manage.py cpanel_check          # read-only; creates nothing
 python manage.py cpanel_check --list   # print every mailbox found
 ```
 
+Or use **Test connection** in Settings → Integrations → cPanel, which does the
+same thing and works before you enable the integration.
+
+### Then verify creation actually works
+
+`cpanel_check` proves authentication and `Email::list_pops`. It never touches
+`Email::add_pop` or `Email::suspend_login`, which are the calls whose parameter
+names differ between cPanel releases.
+
+```bash
+python manage.py cpanel_verify --address itcommand-selftest@terafort.com
+```
+
+This creates a **real mailbox**, confirms it appears, suspends it, unsuspends
+it, and prints the password so you can try it in webmail. It refuses any
+address that does not look disposable, and refuses one that already exists, so
+it can never touch a real person's mail. The mailbox is left in place unless
+you pass `--cleanup`.
+
+If a call fails you get cPanel's own error text, which usually names the
+parameter it did not like — enough to correct the `# VERIFY` lines in
+`core/cpanel.py`.
+
 ## Backfilling existing users
 
 For accounts that predate this. Matches users to mailboxes cPanel **already
