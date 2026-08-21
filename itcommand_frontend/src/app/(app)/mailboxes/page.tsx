@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   Mail, RefreshCw, Search, ShieldAlert, KeyRound, Ban, RotateCcw,
-  Trash2, Plus, Copy, Check, Link2, HardDrive, Clock,
+  Trash2, Plus, Copy, Check, Link2, HardDrive, Clock, Gauge,
 } from "lucide-react";
 
 import api from "@/lib/api";
@@ -35,6 +35,8 @@ interface Mailbox {
   is_shared: boolean;
   quota_mb: number | null;
   disk_used_mb: number;
+  quota_gb: number | null;
+  disk_used_gb: number;
   usage_percent: number | null;
   suspended: boolean;
   status: "ACTIVE" | "SUSPENDED" | "PENDING_DELETION" | "MISSING" | "PURGED";
@@ -50,6 +52,20 @@ interface Summary {
   total: number; linked: number; shared: number;
   suspended: number; pending_deletion: number; missing: number;
   last_synced_at: string | null;
+}
+
+/**
+ * Storage reads in gigabytes, because that is how people think about mailbox
+ * size. Megabytes are cPanel's unit and stay on the wire.
+ *
+ * Small mailboxes are the awkward case: "0.02 GB" tells you nothing, so
+ * anything under a tenth of a gigabyte falls back to megabytes rather than
+ * rounding away to a meaningless zero.
+ */
+function storage(gb: number, mb: number): string {
+  if (gb >= 10) return `${Math.round(gb)} GB`;
+  if (gb >= 0.1) return `${gb.toFixed(1)} GB`;
+  return `${Math.round(mb)} MB`;
 }
 
 const STATUS_STYLE: Record<Mailbox["status"], string> = {
@@ -81,6 +97,9 @@ export default function MailboxesPage() {
   // dialogs
   const [pwTarget, setPwTarget] = useState<Mailbox | null>(null);
   const [pwValue, setPwValue] = useState("");
+  const [quotaTarget, setQuotaTarget] = useState<Mailbox | null>(null);
+  const [quotaValue, setQuotaValue] = useState("");
+  const [quotaUnlimited, setQuotaUnlimited] = useState(false);
   const [delTarget, setDelTarget] = useState<Mailbox | null>(null);
   const [delReason, setDelReason] = useState("");
   const [purgeTarget, setPurgeTarget] = useState<Mailbox | null>(null);
@@ -247,17 +266,38 @@ export default function MailboxesPage() {
                   )}
                 </TableCell>
                 <TableCell className="text-sm tabular-nums">
-                  {box.quota_mb === null ? (
-                    <span className="text-muted-foreground">Unlimited</span>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      <HardDrive className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span>{box.disk_used_mb} / {box.quota_mb} MB</span>
-                      {box.usage_percent !== null && box.usage_percent > 85 && (
-                        <Badge className="bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300">
-                          {box.usage_percent}%
-                        </Badge>
-                      )}
+                  <div className="flex items-center gap-2">
+                    <HardDrive className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    {box.quota_gb === null ? (
+                      <span>
+                        {storage(box.disk_used_gb, box.disk_used_mb)}
+                        <span className="ml-1 text-muted-foreground">/ unlimited</span>
+                      </span>
+                    ) : (
+                      <>
+                        <span>
+                          {storage(box.disk_used_gb, box.disk_used_mb)}
+                          <span className="text-muted-foreground">
+                            {" "}/ {storage(box.quota_gb, box.quota_mb ?? 0)}
+                          </span>
+                        </span>
+                        {box.usage_percent !== null && box.usage_percent > 85 && (
+                          <Badge className="bg-amber-100 text-amber-900 dark:bg-amber-950 dark:text-amber-300">
+                            {box.usage_percent}%
+                          </Badge>
+                        )}
+                      </>
+                    )}
+                  </div>
+                  {box.quota_gb !== null && box.usage_percent !== null && (
+                    <div className="mt-1 h-1 w-28 overflow-hidden rounded-full bg-muted">
+                      <div
+                        className={`h-full rounded-full ${
+                          box.usage_percent > 90 ? "bg-red-500"
+                          : box.usage_percent > 75 ? "bg-amber-500" : "bg-emerald-500"
+                        }`}
+                        style={{ width: `${Math.min(100, box.usage_percent)}%` }}
+                      />
                     </div>
                   )}
                 </TableCell>
@@ -267,8 +307,18 @@ export default function MailboxesPage() {
                 <TableCell>
                   <div className="flex flex-wrap justify-end gap-1">
                     <Button size="sm" variant="ghost" disabled={busy === box.id}
+                            title="Set password"
                             onClick={() => { setPwTarget(box); setPwValue(""); }}>
                       <KeyRound className="h-4 w-4" />
+                    </Button>
+                    <Button size="sm" variant="ghost" disabled={busy === box.id}
+                            title="Change storage"
+                            onClick={() => {
+                              setQuotaTarget(box);
+                              setQuotaUnlimited(box.quota_gb === null);
+                              setQuotaValue(box.quota_gb === null ? "" : String(box.quota_gb));
+                            }}>
+                      <Gauge className="h-4 w-4" />
                     </Button>
                     {box.suspended ? (
                       <Button size="sm" variant="ghost" disabled={busy === box.id}
@@ -335,6 +385,92 @@ export default function MailboxesPage() {
               const ok = await act(box, "set-password", pwValue ? { password: pwValue } : {});
               if (ok) setPwTarget(null);
             }}>Set password</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* CHANGE STORAGE */}
+      <Dialog open={!!quotaTarget} onOpenChange={(o) => !o && setQuotaTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Storage — {quotaTarget?.address}</DialogTitle>
+            <DialogDescription>
+              Currently using{" "}
+              <strong>
+                {quotaTarget && storage(quotaTarget.disk_used_gb, quotaTarget.disk_used_mb)}
+              </strong>{" "}
+              of{" "}
+              {quotaTarget?.quota_gb === null
+                ? "an unlimited mailbox"
+                : quotaTarget && storage(quotaTarget.quota_gb!, quotaTarget.quota_mb!)}.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="flex flex-wrap gap-2">
+            {[1, 2, 5, 10, 25, 50].map((gb) => (
+              <Button
+                key={gb}
+                type="button"
+                size="sm"
+                variant={!quotaUnlimited && quotaValue === String(gb) ? "default" : "outline"}
+                onClick={() => { setQuotaUnlimited(false); setQuotaValue(String(gb)); }}
+              >
+                {gb} GB
+              </Button>
+            ))}
+            <Button
+              type="button"
+              size="sm"
+              variant={quotaUnlimited ? "default" : "outline"}
+              onClick={() => { setQuotaUnlimited(true); setQuotaValue(""); }}
+            >
+              Unlimited
+            </Button>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Input
+              type="number"
+              min="0.1"
+              step="0.5"
+              placeholder="Or type a size"
+              value={quotaValue}
+              disabled={quotaUnlimited}
+              onChange={(e) => { setQuotaUnlimited(false); setQuotaValue(e.target.value); }}
+            />
+            <span className="text-sm text-muted-foreground">GB</span>
+          </div>
+
+          {quotaTarget && !quotaUnlimited && Number(quotaValue) > 0
+            && Number(quotaValue) * 1024 < quotaTarget.disk_used_mb && (
+            <p className="text-sm text-amber-700 dark:text-amber-400">
+              That is smaller than the {storage(quotaTarget.disk_used_gb, quotaTarget.disk_used_mb)}{" "}
+              already stored. Existing mail is kept, but the mailbox will be over its limit and
+              stop accepting new messages.
+            </p>
+          )}
+          {quotaUnlimited && (
+            <p className="text-sm text-muted-foreground">
+              An unlimited mailbox can fill the server&apos;s disk. Use it for shared addresses
+              you actively watch, not as a default.
+            </p>
+          )}
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setQuotaTarget(null)}>Cancel</Button>
+            <Button
+              disabled={!quotaUnlimited && !(Number(quotaValue) > 0)}
+              onClick={async () => {
+                const ok = await act(
+                  quotaTarget!,
+                  "set-quota",
+                  quotaUnlimited ? { unlimited: true } : { quota_gb: Number(quotaValue) },
+                );
+                if (ok) setQuotaTarget(null);
+              }}
+            >
+              Save
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

@@ -107,6 +107,19 @@ class ManagedMailbox(models.Model):
         )
 
     @property
+    def quota_gb(self):
+        """None for unlimited. Gigabytes are the unit the console shows --
+        megabytes are cPanel's unit, and the two should not be confused in
+        the UI just because they are the same number underneath."""
+        if self.quota_mb is None:
+            return None
+        return round(self.quota_mb / 1024, 2)
+
+    @property
+    def disk_used_gb(self):
+        return round(self.disk_used_mb / 1024, 2)
+
+    @property
     def usage_percent(self):
         """None for an unlimited mailbox, rather than a misleading 0."""
         if not self.quota_mb:

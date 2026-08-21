@@ -215,11 +215,30 @@ def set_password(box: ManagedMailbox, password: str, *, actor: str = "",
     log.info("mailbox password changed for %s by %s", box.address, actor or "self")
 
 
-def set_quota(box: ManagedMailbox, quota_mb: int, *, client=None) -> ManagedMailbox:
-    if quota_mb is not None and int(quota_mb) <= 0:
+def set_quota(box: ManagedMailbox, quota_mb: int | None = None, *,
+              unlimited: bool = False, client=None) -> ManagedMailbox:
+    """Change a mailbox's size limit.
+
+    Unlimited is asked for by name, not by passing zero. cPanel reads 0 as
+    unlimited, so an empty form field or an int() of "" would silently remove
+    the limit and fill a disk. Keeping the two paths separate means unlimited
+    is always something somebody chose.
+    """
+    if unlimited:
+        try:
+            _client(client).set_quota(box.address, 0)
+        except cpanel.CpanelError as exc:
+            raise MailboxAdminError("Could not remove the quota: %s" % exc) from exc
+        box.quota_mb = None
+        box.save(update_fields=["quota_mb"])
+        return box
+
+    if quota_mb is None or int(quota_mb) <= 0:
         raise MailboxAdminError(
-            "Refusing a quota of %s. cPanel reads 0 as unlimited, so it has to "
-            "be chosen deliberately rather than fallen into." % quota_mb)
+            "Refusing a quota of %s. Pass a positive size, or ask for unlimited "
+            "explicitly -- cPanel reads 0 as unlimited and that must be a "
+            "choice rather than a slip." % quota_mb)
+
     try:
         _client(client).set_quota(box.address, int(quota_mb))
     except cpanel.CpanelError as exc:

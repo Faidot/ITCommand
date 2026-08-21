@@ -174,17 +174,46 @@ class ManagedMailboxViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="set-quota")
     def set_quota(self, request, pk=None):
+        """Set the mailbox size limit.
+
+        Accepts `quota_mb`, or `quota_gb` for the unit the console actually
+        shows. `unlimited: true` removes the limit -- asked for by name rather
+        than by passing zero, so it can never be reached by an empty field.
+        """
         box = self.get_object()
+        unlimited = bool(request.data.get("unlimited"))
+        quota_mb = request.data.get("quota_mb")
+
+        if not unlimited and quota_mb in (None, ""):
+            gb = request.data.get("quota_gb")
+            if gb in (None, ""):
+                return Response(
+                    {"quota_gb": ["A size is required, or set unlimited."]},
+                    status=status.HTTP_400_BAD_REQUEST)
+            try:
+                quota_mb = round(float(gb) * 1024)
+            except (TypeError, ValueError):
+                return Response({"quota_gb": ["A number of gigabytes is required."]},
+                                status=status.HTTP_400_BAD_REQUEST)
+
         try:
-            box = mailbox_admin.set_quota(box, int(request.data.get("quota_mb") or 0))
+            box = mailbox_admin.set_quota(
+                box,
+                None if unlimited else int(quota_mb),
+                unlimited=unlimited,
+            )
         except (TypeError, ValueError):
             return Response({"quota_mb": ["A whole number of megabytes is required."]},
                             status=status.HTTP_400_BAD_REQUEST)
         except mailbox_admin.MailboxAdminError as exc:
             return self._fail(exc)
+
         record_audit(request, "MAILBOX_QUOTA_CHANGED", user=request.user,
-                     changes={"address": box.address, "quota_mb": box.quota_mb})
-        return self._ok(box, message="Quota updated.")
+                     changes={"address": box.address,
+                              "quota_mb": box.quota_mb,
+                              "unlimited": unlimited})
+        return self._ok(box, message="Quota set to %s."
+                        % ("unlimited" if unlimited else "%.6g GB" % (box.quota_mb / 1024)))
 
     @action(detail=True, methods=["post"])
     def suspend(self, request, pk=None):

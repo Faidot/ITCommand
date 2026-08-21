@@ -16,6 +16,8 @@ class ManagedMailboxSerializer(serializers.ModelSerializer):
     pending_deletion = serializers.BooleanField(read_only=True)
     days_until_purge = serializers.IntegerField(read_only=True)
     usage_percent = serializers.FloatField(read_only=True)
+    quota_gb = serializers.FloatField(read_only=True)
+    disk_used_gb = serializers.FloatField(read_only=True)
 
     user_email = serializers.CharField(source="user.email", read_only=True, default=None)
     user_name = serializers.CharField(source="user.full_name", read_only=True, default=None)
@@ -26,7 +28,7 @@ class ManagedMailboxSerializer(serializers.ModelSerializer):
         fields = [
             "id", "address", "local_part", "domain",
             "user", "user_email", "user_name", "user_is_active", "is_shared",
-            "quota_mb", "disk_used_mb", "usage_percent",
+            "quota_mb", "disk_used_mb", "quota_gb", "disk_used_gb", "usage_percent",
             "suspended", "status",
             "exists_in_cpanel", "missing_since",
             "pending_deletion", "days_until_purge", "purge_after",

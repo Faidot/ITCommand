@@ -483,3 +483,91 @@ class UserPurgeTests(TestCase):
         self.assertIsNone(self.box.user, "the FK should null rather than cascade")
         self.assertEqual(fake.deleted, [], "the user purge destroyed mail")
         self.assertIn("recoverable", r.json()["mailbox"])
+
+
+class QuotaTests(TestCase):
+    """Storage is shown in gigabytes and set in gigabytes. Unlimited has to be
+    asked for by name, because cPanel reads 0 as unlimited and an empty form
+    field must never mean 'remove the limit'."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            email="qadmin@terafort.com", password="pw12345!",
+            full_name="Q Admin", role="ADMIN")
+        token = RefreshToken.for_user(self.admin).access_token
+        self.client.defaults["HTTP_AUTHORIZATION"] = "Bearer %s" % token
+        self.box = ManagedMailbox.objects.create(
+            address="q@terafort.com", domain="terafort.com",
+            quota_mb=5120, disk_used_mb=1536)
+
+    def _post(self, body):
+        return self.client.post(
+            reverse("mailbox-set-quota", kwargs={"pk": self.box.pk}),
+            body, content_type="application/json")
+
+    def test_gigabyte_fields_are_exposed(self):
+        r = self.client.get(reverse("mailbox-detail", kwargs={"pk": self.box.pk}))
+        self.assertEqual(r.json()["quota_gb"], 5.0)
+        self.assertEqual(r.json()["disk_used_gb"], 1.5)
+
+    def test_unlimited_reports_no_gigabytes_rather_than_zero(self):
+        self.box.quota_mb = None
+        self.box.save(update_fields=["quota_mb"])
+        r = self.client.get(reverse("mailbox-detail", kwargs={"pk": self.box.pk}))
+        self.assertIsNone(r.json()["quota_gb"])
+        self.assertIsNone(r.json()["usage_percent"])
+
+    def test_setting_a_quota_in_gigabytes(self):
+        fake = ListingFake()
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            r = self._post({"quota_gb": 10})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(fake.quotas, [("q@terafort.com", 10240)])
+        self.box.refresh_from_db()
+        self.assertEqual(self.box.quota_mb, 10240)
+
+    def test_fractional_gigabytes_round_to_megabytes(self):
+        fake = ListingFake()
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            self._post({"quota_gb": 2.5})
+        self.assertEqual(fake.quotas, [("q@terafort.com", 2560)])
+
+    def test_megabytes_still_work(self):
+        fake = ListingFake()
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            self._post({"quota_mb": 3072})
+        self.assertEqual(fake.quotas, [("q@terafort.com", 3072)])
+
+    def test_an_empty_size_is_refused_rather_than_meaning_unlimited(self):
+        """The whole reason unlimited is a named flag."""
+        fake = ListingFake()
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            r = self._post({"quota_gb": ""})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(fake.quotas, [])
+        self.box.refresh_from_db()
+        self.assertEqual(self.box.quota_mb, 5120, "the limit was removed by an empty field")
+
+    def test_zero_is_still_refused(self):
+        fake = ListingFake()
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            r = self._post({"quota_gb": 0})
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(fake.quotas, [])
+
+    def test_unlimited_asked_for_by_name_works(self):
+        fake = ListingFake()
+        with mock.patch.object(cpanel.CpanelClient, "from_integration", return_value=fake):
+            r = self._post({"unlimited": True})
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(fake.quotas, [("q@terafort.com", 0)])
+        self.box.refresh_from_db()
+        self.assertIsNone(self.box.quota_mb)
+
+    def test_a_viewer_cannot_change_a_quota(self):
+        viewer = User.objects.create_user(
+            email="qviewer@terafort.com", password="pw12345!",
+            full_name="V", role="VIEWER")
+        token = RefreshToken.for_user(viewer).access_token
+        self.client.defaults["HTTP_AUTHORIZATION"] = "Bearer %s" % token
+        self.assertEqual(self._post({"quota_gb": 10}).status_code, 403)
