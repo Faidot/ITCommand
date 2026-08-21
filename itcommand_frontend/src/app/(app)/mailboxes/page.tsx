@@ -55,18 +55,20 @@ interface Summary {
 }
 
 /**
- * Storage reads in gigabytes, because that is how people think about mailbox
- * size. Megabytes are cPanel's unit and stay on the wire.
+ * Storage in whichever unit is actually readable at that size.
  *
- * Up to two decimals, with trailing zeros stripped: 5 GB, not 5.00 GB, but
- * 2.5 GB stays 2.5 GB. A mailbox holding only a few megabytes would round to
- * "0 GB", which reads as empty when it is not, so that one case says
- * "< 0.01 GB" instead.
+ * Gigabytes once there is a gigabyte to talk about — 5 GB, not 5.00 GB, while
+ * 2.5 GB keeps its decimal. Below that, megabytes: a 250 MB mailbox reads as
+ * "250 MB", not "0.24 GB", which is the same information rendered uselessly.
+ *
+ * Picking the unit per value rather than forcing one is what keeps a 200 MB
+ * mailbox and a 50 GB archive both legible in the same column.
  */
-function storage(gb: number, mb: number): string {
-  const rounded = parseFloat(gb.toFixed(2));
-  if (rounded === 0 && mb > 0) return "< 0.01 GB";
-  return `${rounded} GB`;
+function storage(mb: number): string {
+  if (mb >= 1024) {
+    return `${parseFloat((mb / 1024).toFixed(2))} GB`;
+  }
+  return `${Math.round(mb)} MB`;
 }
 
 const STATUS_STYLE: Record<Mailbox["status"], string> = {
@@ -293,15 +295,15 @@ export default function MailboxesPage() {
                     <HardDrive className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     {box.quota_gb === null ? (
                       <span>
-                        {storage(box.disk_used_gb, box.disk_used_mb)}
+                        {storage(box.disk_used_mb)}
                         <span className="ml-1 text-muted-foreground">/ unlimited</span>
                       </span>
                     ) : (
                       <>
                         <span>
-                          {storage(box.disk_used_gb, box.disk_used_mb)}
+                          {storage(box.disk_used_mb)}
                           <span className="text-muted-foreground">
-                            {" "}/ {storage(box.quota_gb, box.quota_mb ?? 0)}
+                            {" "}/ {storage(box.quota_mb ?? 0)}
                           </span>
                         </span>
                         {box.usage_percent !== null && box.usage_percent > 85 && (
@@ -476,25 +478,35 @@ export default function MailboxesPage() {
             <DialogDescription>
               Currently using{" "}
               <strong>
-                {quotaTarget && storage(quotaTarget.disk_used_gb, quotaTarget.disk_used_mb)}
+                {quotaTarget && storage(quotaTarget.disk_used_mb)}
               </strong>{" "}
               of{" "}
               {quotaTarget?.quota_gb === null
                 ? "an unlimited mailbox"
-                : quotaTarget && storage(quotaTarget.quota_gb!, quotaTarget.quota_mb!)}.
+                : quotaTarget && storage(quotaTarget.quota_mb!)}.
             </DialogDescription>
           </DialogHeader>
 
           <div className="flex flex-wrap gap-2">
-            {[1, 2, 5, 10, 25, 50].map((gb) => (
+            {/* Both scales, because a 250 MB staff mailbox and a 25 GB shared
+                archive are both normal here. */}
+            {[
+              { label: "250 MB", gb: 0.25 },
+              { label: "500 MB", gb: 0.5 },
+              { label: "1 GB", gb: 1 },
+              { label: "2 GB", gb: 2 },
+              { label: "5 GB", gb: 5 },
+              { label: "10 GB", gb: 10 },
+              { label: "25 GB", gb: 25 },
+            ].map((p) => (
               <Button
-                key={gb}
+                key={p.label}
                 type="button"
                 size="sm"
-                variant={!quotaUnlimited && quotaValue === String(gb) ? "default" : "outline"}
-                onClick={() => { setQuotaUnlimited(false); setQuotaValue(String(gb)); }}
+                variant={!quotaUnlimited && quotaValue === String(p.gb) ? "default" : "outline"}
+                onClick={() => { setQuotaUnlimited(false); setQuotaValue(String(p.gb)); }}
               >
-                {gb} GB
+                {p.label}
               </Button>
             ))}
             <Button
@@ -510,8 +522,8 @@ export default function MailboxesPage() {
           <div className="flex items-center gap-2">
             <Input
               type="number"
-              min="0.1"
-              step="0.5"
+              min="0.05"
+              step="0.25"
               placeholder="Or type a size"
               value={quotaValue}
               disabled={quotaUnlimited}
@@ -523,7 +535,7 @@ export default function MailboxesPage() {
           {quotaTarget && !quotaUnlimited && Number(quotaValue) > 0
             && Number(quotaValue) * 1024 < quotaTarget.disk_used_mb && (
             <p className="text-sm text-amber-700 dark:text-amber-400">
-              That is smaller than the {storage(quotaTarget.disk_used_gb, quotaTarget.disk_used_mb)}{" "}
+              That is smaller than the {storage(quotaTarget.disk_used_mb)}{" "}
               already stored. Existing mail is kept, but the mailbox will be over its limit and
               stop accepting new messages.
             </p>

@@ -672,3 +672,70 @@ class CreateUserFromMailboxTests(TestCase):
             full_name="V", role="VIEWER")
         self._as(viewer)
         self.assertEqual(self._post({"full_name": "X"}).status_code, 403)
+
+
+class DiskUnitTests(TestCase):
+    """cPanel reports disk figures twice, in two different units.
+
+    `diskquota`/`diskused` are megabytes; `_diskquota`/`_diskused` are the same
+    values in bytes. Reading the wrong pair is off by 1048576 and still looks
+    like a number, so a 250 MB mailbox renders as 256000 GB. These tests exist
+    because that shipped once.
+    """
+
+    def parse(self, **row):
+        return cpanel.CpanelClient.parse_mailbox_row({"email": "a@terafort.com", **row})
+
+    def test_megabyte_fields_are_preferred_over_byte_fields(self):
+        parsed = self.parse(diskquota="250", _diskquota="262144000",
+                            diskused="87", _diskused="91226112")
+        self.assertEqual(parsed["quota_mb"], 250)
+        self.assertEqual(parsed["disk_used_mb"], 87)
+
+    def test_byte_fields_are_converted_when_they_are_all_there_is(self):
+        parsed = self.parse(_diskquota="262144000", _diskused="91226112")
+        self.assertEqual(parsed["quota_mb"], 250)
+        self.assertEqual(parsed["disk_used_mb"], 87)
+
+    def test_a_bytes_value_in_a_megabyte_field_is_caught(self):
+        """The sanity guard: 262144000 MB is 250 TB for one mailbox, which
+        nobody configures. Convert rather than render nonsense."""
+        parsed = self.parse(diskquota="262144000", diskused="91226112")
+        self.assertEqual(parsed["quota_mb"], 250)
+        self.assertEqual(parsed["disk_used_mb"], 87)
+
+    def test_a_plausible_large_quota_is_left_alone(self):
+        """100 GB is a big mailbox, not a unit error. It must not be divided."""
+        parsed = self.parse(diskquota="102400", diskused="51200")
+        self.assertEqual(parsed["quota_mb"], 102400)
+        self.assertEqual(parsed["disk_used_mb"], 51200)
+
+    def test_unlimited_is_none_not_a_number(self):
+        parsed = self.parse(diskquota="unlimited", diskused="120")
+        self.assertIsNone(parsed["quota_mb"])
+        self.assertEqual(parsed["disk_used_mb"], 120)
+
+    def test_fractional_megabytes_round(self):
+        parsed = self.parse(diskquota="250.00", diskused="87.43")
+        self.assertEqual(parsed["quota_mb"], 250)
+        self.assertEqual(parsed["disk_used_mb"], 87)
+
+    def test_missing_usage_is_zero_not_none(self):
+        parsed = self.parse(diskquota="250")
+        self.assertEqual(parsed["disk_used_mb"], 0)
+
+    def test_junk_does_not_crash_the_sync(self):
+        parsed = self.parse(diskquota="???", diskused="")
+        self.assertIsNone(parsed["quota_mb"])
+        self.assertEqual(parsed["disk_used_mb"], 0)
+
+    def test_the_real_shape_renders_sensibly(self):
+        """End to end against the row shape that produced 256000 GB on screen."""
+        parsed = self.parse(diskquota="250", _diskquota="262144000",
+                            diskused="87.43", _diskused="91678638")
+        box = ManagedMailbox(address="a@terafort.com", domain="terafort.com",
+                             quota_mb=parsed["quota_mb"],
+                             disk_used_mb=parsed["disk_used_mb"])
+        self.assertEqual(box.quota_gb, 0.24)
+        self.assertEqual(box.disk_used_gb, 0.08)
+        self.assertEqual(box.usage_percent, 34.8)

@@ -245,28 +245,63 @@ class CpanelClient:
             data = data.get("pops") or data.get("result") or []
         return [row for row in data if isinstance(row, dict)]
 
+    #: A mailbox quota above this is treated as a unit mix-up rather than a
+    #: real limit. 8 TB for one mailbox is not a configuration anyone means,
+    #: and it is exactly what a bytes-read-as-megabytes value looks like.
+    IMPLAUSIBLE_MB = 8 * 1024 * 1024
+
     @staticmethod
     def parse_mailbox_row(row: dict) -> dict:
         """Normalise one list_pops row into fields we can store.
 
-        cPanel reports sizes in MB as strings, and uses the literal
-        "unlimited" for an unlimited quota. `None` means unlimited here, which
-        is distinct from 0 -- 0 would mean "no space at all".
+        The trap here, which caught me: cPanel reports the disk figures
+        **twice**. `diskquota` and `diskused` are megabytes; `_diskquota` and
+        `_diskused` are the same numbers in bytes. Preferring the
+        underscore-prefixed pair looks like the more precise choice and is
+        wrong by a factor of 1048576 -- and the results are plausible enough
+        to ship, because a 250 MB mailbox simply reads as 256000 GB.
+
+        So: megabytes first, bytes only as a fallback, and a final sanity check
+        for anything that still looks like the wrong unit.
+
+        `None` for a quota means unlimited, which is distinct from 0 -- 0 would
+        mean no space at all.
         """
         address = (row.get("email") or row.get("login") or "").strip().lower()
 
         def _num(value):
-            if value in (None, "", "unlimited", "0.00 unlimited"):
+            if value is None:
+                return None
+            text = str(value).strip().lower()
+            if text in ("", "unlimited", "0.00 unlimited", "none", "null"):
                 return None
             try:
-                return int(float(value))
+                return float(text)
             except (TypeError, ValueError):
                 return None
 
+        def _megabytes(mb_key, bytes_key):
+            """Megabytes from whichever field the build actually provides."""
+            mb = _num(row.get(mb_key))
+            if mb is None:
+                raw_bytes = _num(row.get(bytes_key))
+                mb = None if raw_bytes is None else raw_bytes / (1024 * 1024)
+            if mb is None:
+                return None
+            # Last line of defence. If a future cPanel swaps the units again,
+            # this converts rather than storing a number three orders of
+            # magnitude out and letting the console render nonsense.
+            if mb > CpanelClient.IMPLAUSIBLE_MB:
+                log.warning(
+                    "%s reported %s as %.0f MB, which is implausible for a "
+                    "mailbox -- treating it as bytes", address, mb_key, mb)
+                mb = mb / (1024 * 1024)
+            return int(round(mb))
+
         return {
             "address": address,
-            "quota_mb": _num(row.get("_diskquota") or row.get("diskquota")),
-            "disk_used_mb": _num(row.get("_diskused") or row.get("diskused")) or 0,
+            "quota_mb": _megabytes("diskquota", "_diskquota"),
+            "disk_used_mb": _megabytes("diskused", "_diskused") or 0,
             # cPanel reports suspension under several keys depending on build.
             "suspended_login": bool(
                 row.get("suspended_login")
