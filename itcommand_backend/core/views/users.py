@@ -14,7 +14,7 @@ import secrets
 from core.models import *
 from core.serializers import *
 from core.encryption import decrypt_value
-from core import mail_bridge, mailbox_provisioning
+from core import mail_bridge, mailbox_admin, mailbox_provisioning
 from core.mixins import AuditLogMixin, record_audit
 from core.permissions import IsSuperadmin, IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher, VaultAccessPermission, UserManagementPermission, HasModulePermission
 from rest_framework.pagination import PageNumberPagination
@@ -467,6 +467,70 @@ class UserViewSet(AuditLogMixin, viewsets.ModelViewSet):
             'deactivated': deactivated, 'blocked': blocked,
         })
 
+    @action(detail=True, methods=['post'], url_path='purge',
+            permission_classes=[IsSuperadmin])
+    def purge(self, request, pk=None):
+        """Permanently remove a deactivated user. Superadmin only.
+
+        Deliberately not DELETE on the detail route: that is soft-delete, and
+        the two must never be one keystroke apart.
+
+        The mailbox is NOT destroyed here. Deleting a person's record and
+        destroying their mail are different decisions with different
+        retention consequences, so the mailbox is marked for deletion with its
+        own grace period and purged separately from the mailbox console.
+        """
+        user = self.get_object()
+
+        if user.pk == request.user.pk:
+            return Response({'detail': 'You cannot delete your own account.'},
+                            status=status.HTTP_409_CONFLICT)
+        if user.is_active:
+            return Response(
+                {'detail': 'Deactivate this account first. Permanent deletion is '
+                           'only available for an account that is already '
+                           'deactivated, so it is never a single step.'},
+                status=status.HTTP_409_CONFLICT)
+        if (request.data.get('confirm_email') or '').strip().lower() != user.email.lower():
+            return Response(
+                {'detail': 'Type the full email address to confirm. Expected %r.'
+                           % user.email},
+                status=status.HTTP_400_BAD_REQUEST)
+        if (user.role == 'SUPERADMIN'
+                and User.objects.filter(role='SUPERADMIN', is_active=True).count() <= 1):
+            return Response({'detail': 'The last Superadmin cannot be deleted.'},
+                            status=status.HTTP_409_CONFLICT)
+
+        email = user.email
+        box = ManagedMailbox.objects.filter(address__iexact=email).first()
+        mailbox_note = None
+
+        if box is not None and not box.pending_deletion and box.purged_at is None:
+            # Start the mailbox's own clock rather than destroying it. The
+            # record goes now; the mail stays recoverable.
+            try:
+                mailbox_admin.request_deletion(
+                    box, by=request.user.email,
+                    reason='User %s permanently deleted from IT Command.' % email)
+                mailbox_note = (
+                    'The mailbox %s was suspended and marked for deletion. Its mail '
+                    'is kept and recoverable for %d days, then purged. Cancel or '
+                    'purge it now from the mailbox console.'
+                    % (box.address, box.days_until_purge or 0))
+            except mailbox_admin.MailboxAdminError as exc:
+                mailbox_note = ('The user was deleted, but the mailbox could not be '
+                                'marked for deletion: %s' % exc)
+            # Keep the mailbox row; the user FK nulls itself via SET_NULL.
+
+        record_audit(request, 'USER_PURGED', obj=user, user=request.user,
+                     changes={'email': email, 'role': user.role})
+        user.delete()
+
+        payload = {'detail': '%s has been permanently deleted.' % email}
+        if mailbox_note:
+            payload['mailbox'] = mailbox_note
+        return Response(payload)
+
     @action(detail=True, methods=['post'], permission_classes=[IsAdminOrSuperadmin])
     def reset_password(self, request, pk=None):
         user = self.get_object()
@@ -492,15 +556,74 @@ class ProfileView(APIView):
         return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
 
 class ChangePasswordView(APIView):
+    """Change your own password.
+
+    Which system the change lands in depends on who owns the credential:
+
+      LOCAL    the Django hash on the user row, as it always has
+      MAILBOX  the cPanel mailbox, because that IS the password -- there is no
+               local hash to change, and Dovecot is what IT Command asks
+
+    A mailbox user changing their password here changes what opens both
+    applications, in one action. That is the design working, not a side effect.
+    """
+
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
         serializer = ChangePasswordSerializer(data=request.data)
-        if serializer.is_valid():
-            user = request.user
-            if not user.check_password(serializer.validated_data['old_password']):
-                return Response({'old_password': ['Wrong password.']}, status=status.HTTP_400_BAD_REQUEST)
-            user.set_password(serializer.validated_data['new_password'])
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        user = request.user
+        old_password = serializer.validated_data['old_password']
+        new_password = serializer.validated_data['new_password']
+
+        if not user.uses_mailbox_auth:
+            if not user.check_password(old_password):
+                return Response({'old_password': ['Wrong password.']},
+                                status=status.HTTP_400_BAD_REQUEST)
+            user.set_password(new_password)
             user.save()
             return Response({'status': 'Password updated successfully'})
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        # Mailbox-backed. We hold no hash, so the only way to verify the
+        # current password is to ask Dovecot -- the same authority that
+        # answers at login.
+        try:
+            mail_bridge.imap_check(user.email, old_password)
+        except PermissionError:
+            return Response({'old_password': ['Wrong password.']},
+                            status=status.HTTP_400_BAD_REQUEST)
+        except mail_bridge.ImapUnavailable:
+            return Response(
+                {'detail': 'The mail server is not reachable right now, so your '
+                           'current password cannot be checked. Nothing has changed.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        box = ManagedMailbox.objects.filter(address__iexact=user.email).first()
+        if box is None:
+            # The user is flagged MAILBOX but we have no mailbox row. Sync
+            # rather than guess, so we never write to an address we have not
+            # confirmed exists.
+            return Response(
+                {'detail': 'No mailbox record found for your account. Ask an '
+                           'administrator to refresh the mailbox list.'},
+                status=status.HTTP_409_CONFLICT)
+
+        try:
+            mailbox_admin.set_password(box, new_password, actor=user.email)
+        except mailbox_admin.PasswordPolicyError as exc:
+            return Response({'new_password': [str(exc)]},
+                            status=status.HTTP_400_BAD_REQUEST)
+        except mailbox_admin.MailboxAdminError as exc:
+            return Response({'detail': str(exc)},
+                            status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        record_audit(request, 'MAILBOX_PASSWORD_CHANGED', obj=user, user=user,
+                     changes={'email': user.email, 'by': 'self'})
+        return Response({
+            'status': 'Password updated successfully',
+            'note': 'This is the password for both IT Command and your mailbox. '
+                    'Sign in to webmail with the new one.',
+        })

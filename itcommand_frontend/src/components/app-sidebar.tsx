@@ -4,6 +4,7 @@ import * as React from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
+  Mail,
   Users,
   Building,
   Box,
@@ -83,6 +84,7 @@ export function AppSidebar() {
       label: "PEOPLE",
       items: [
         { title: "Users", url: "/users", icon: Users, module: "users" },
+        { title: "Mailboxes", url: "/mailboxes", icon: Mail, module: "users" },
         { title: "Departments", url: "/departments", icon: Building, module: "departments" },
         { title: "Onboarding", url: "/onboarding", icon: UserPlus, module: "onboarding" },
         { title: "Seating Plan", url: "/seating", icon: Map, module: "seating" },

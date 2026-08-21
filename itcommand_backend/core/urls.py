@@ -11,7 +11,8 @@ from .views.vault import (
 )
 from .views import (
     ProfileView, ChangePasswordView,
-    LoginView, LogoutView, UserMeView, MailboxMfaView, OpenMailboxView, DepartmentViewSet, UserViewSet, RoleViewSet,
+    LoginView, LogoutView, UserMeView, MailboxMfaView, OpenMailboxView,
+    ManagedMailboxViewSet, DepartmentViewSet, UserViewSet, RoleViewSet,
     AssetCategoryViewSet, AssetViewSet, AssetNoteViewSet, VaultCredentialViewSet, AccountWorkspaceViewSet,
     FinancialYearViewSet, BudgetCategoryViewSet, BudgetViewSet, ExpenseViewSet, IncomeViewSet,
     IncomeSourceViewSet, CostOverviewView, RecurringIncomeViewSet,
@@ -115,6 +116,10 @@ router.register(r'estate/cards', PaymentCardViewSet, basename='estate-card')
 router.register(r'estate/payments', ServicePaymentViewSet, basename='estate-payment')
 router.register(r'finance/card-accounts', CardAccountViewSet, basename='card-account')
 router.register(r'exchange-rates', ExchangeRateViewSet, basename='exchange-rate')
+# The mailbox console. Read-only by default: every change is a named action
+# that calls cPanel first, so a row can never claim a state the server does
+# not agree with.
+router.register(r'mailboxes', ManagedMailboxViewSet, basename='mailbox')
 
 urlpatterns = [
     path('auth/login/', LoginView.as_view(), name='auth_login'),

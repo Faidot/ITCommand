@@ -224,14 +224,56 @@ class CpanelClient:
 
     # -- mailboxes ---------------------------------------------------------
 
-    def list_mailboxes(self) -> list[dict]:
-        """Every mailbox on the account. Read-only, and safe to call often."""
-        data = self._call("Email", "list_pops")
+    def list_mailboxes(self, *, with_disk: bool = True) -> list[dict]:
+        """Every mailbox on the account. Read-only, and safe to call often.
+
+        Prefers `list_pops_with_disk`, which also reports quota and usage. Not
+        every cPanel build has it, so a refusal falls back to plain
+        `list_pops` -- we lose the disk figures, not the list.
+        """
+        data = None
+        if with_disk:
+            try:
+                data = self._call("Email", "list_pops_with_disk")
+            except CpanelRejected:
+                log.info("list_pops_with_disk unavailable; falling back to list_pops")
+        if data is None:
+            data = self._call("Email", "list_pops")
         # list_pops returns a list; older builds wrap it. Handle both rather
         # than assume, because getting this wrong looks like "no mailboxes".
         if isinstance(data, dict):
             data = data.get("pops") or data.get("result") or []
         return [row for row in data if isinstance(row, dict)]
+
+    @staticmethod
+    def parse_mailbox_row(row: dict) -> dict:
+        """Normalise one list_pops row into fields we can store.
+
+        cPanel reports sizes in MB as strings, and uses the literal
+        "unlimited" for an unlimited quota. `None` means unlimited here, which
+        is distinct from 0 -- 0 would mean "no space at all".
+        """
+        address = (row.get("email") or row.get("login") or "").strip().lower()
+
+        def _num(value):
+            if value in (None, "", "unlimited", "0.00 unlimited"):
+                return None
+            try:
+                return int(float(value))
+            except (TypeError, ValueError):
+                return None
+
+        return {
+            "address": address,
+            "quota_mb": _num(row.get("_diskquota") or row.get("diskquota")),
+            "disk_used_mb": _num(row.get("_diskused") or row.get("diskused")) or 0,
+            # cPanel reports suspension under several keys depending on build.
+            "suspended_login": bool(
+                row.get("suspended_login")
+                or row.get("suspended")
+                or row.get("login_suspended")
+            ),
+        }
 
     def mailbox_addresses(self) -> set[str]:
         """Just the addresses, lowercased, for matching against users."""
@@ -275,6 +317,22 @@ class CpanelClient:
             domain=domain,
             skip_update_db=1,       # VERIFY: skips a slow rebuild we do not need
         )
+
+    def change_password(self, address: str, password: str) -> dict:
+        """Set a mailbox password.
+
+        This is the single credential: changing it here changes what opens IT
+        Command too, because IT Command asks Dovecot rather than checking a
+        hash of its own. That is the point of the design, and it is why this
+        call has no IT Command-side counterpart to keep in step.
+        """
+        local, _, domain = address.partition("@")
+        if not local or not domain:
+            raise CpanelRejected("%r is not a full email address" % address)
+        return self._call("Email", "passwd_pop",
+                          email=local,          # VERIFY: local part on current cPanel
+                          password=password,
+                          domain=domain)
 
     def suspend_mailbox(self, address: str) -> dict:
         """Block IMAP and webmail login. Every message is left intact.

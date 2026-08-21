@@ -13,3 +13,4 @@ from .payments import *
 from .procurement import *
 from .network import *
 from .kb import *
+from .mailboxes import *
