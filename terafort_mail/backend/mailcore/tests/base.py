@@ -30,8 +30,10 @@ class MailboxFixture:
         )
         self.folder = Folder.objects.create(
             mailbox=self.mailbox, imap_path="INBOX", special_use="", uidvalidity=1)
+        self.thread_id = uuid.uuid4()
         self.message = Message.objects.create(
             mailbox=self.mailbox, folder=self.folder, uid=1,
+            thread_id=self.thread_id,
             internal_date=timezone.now() - timedelta(minutes=5),
             flags=["\\Seen"], bundle="Invoices",
             envelope_enc=crypto.seal(self.dek, b'{"subject":"private"}',
@@ -54,6 +56,7 @@ class MailboxFixture:
         return {
             "message_id": str(self.message.id),
             "folder_id": str(self.folder.id),
+            "thread_id": str(self.thread_id),
         }
 
 

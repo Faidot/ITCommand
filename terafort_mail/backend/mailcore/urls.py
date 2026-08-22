@@ -6,7 +6,7 @@ looked up with the session's mailbox in the filter.
 """
 from django.urls import path
 
-from . import internal, views
+from . import internal, views, views_mail
 
 urlpatterns = [
     # authentication
@@ -20,6 +20,17 @@ urlpatterns = [
 
     # scoped mail data
     path("api/folders", views.folders_view, name="mail_folders"),
+    path("api/sync", views_mail.sync_view, name="mail_sync"),
+    path("api/messages", views_mail.messages_view, name="mail_messages"),
+    path("api/messages/<uuid:message_id>/body", views_mail.message_body_view,
+         name="mail_message_body"),
+    path("api/messages/<uuid:message_id>/flag", views_mail.flag_view,
+         name="mail_message_flag"),
+    path("api/messages/<uuid:message_id>/load-images", views_mail.load_images_view,
+         name="mail_message_images"),
+    path("api/messages/<uuid:message_id>/report-phishing",
+         views_mail.report_phishing_view, name="mail_message_phish"),
+    path("api/threads/<uuid:thread_id>", views_mail.thread_view, name="mail_thread"),
     path("api/messages/<uuid:message_id>", views.message_view, name="mail_message"),
     path("api/messages/<uuid:message_id>/archive", views.message_archive_view,
          name="mail_message_archive"),
