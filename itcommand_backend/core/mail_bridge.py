@@ -209,6 +209,42 @@ def session_alive(sid: str) -> bool:
         return False
 
 
+def destroy_mail_sessions_for(address: str) -> int:
+    """End every live mail session belonging to one address.
+
+    An administrator resetting somebody's password does not hold their session
+    cookie, so the sid has to be found rather than passed. Scans the session
+    keyspace, which is fine at our size — a few hundred live sessions at most
+    — and is not on any hot path.
+
+    Never raises: failing to tidy up a session must not fail a password reset
+    that has already succeeded on the mail server.
+    """
+    try:
+        client = _redis()
+    except MailBridgeError:
+        log.warning("could not end mail sessions for %s: redis unavailable", address)
+        return 0
+
+    ended = 0
+    target = address.strip().lower()
+    try:
+        for key in client.scan_iter(match=SESSION_PREFIX + "*", count=200):
+            blob = client.get(key)
+            if not blob:
+                continue
+            try:
+                record = json.loads(_unseal(blob, SESSION_AAD))
+            except (MailBridgeError, ValueError):
+                continue
+            if (record.get("mailbox_address") or "").lower() == target:
+                client.delete(key)
+                ended += 1
+    except Exception:  # noqa: BLE001
+        log.exception("failed while ending mail sessions for %s", address)
+    return ended
+
+
 def destroy_mail_session(sid: str) -> None:
     if not sid:
         return

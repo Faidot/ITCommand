@@ -299,3 +299,91 @@ class SelfPasswordChangeTests(TestCase):
         with mock.patch.object(mail_bridge, "imap_check"):
             r = self._change("TheirRealMailboxPw1!", "ANewMailboxPw2!")
         self.assertEqual(r.status_code, 409)
+
+
+@override_settings(MAIL_AUTH_ENABLED=True)
+class AdminPasswordResetTests(TestCase):
+    """An administrator issuing somebody else a new password.
+
+    For a mailbox account it MUST reach cPanel. Setting a Django hash on an
+    account whose hash is unusable hands the administrator a password that
+    opens nothing and looks like it worked.
+    """
+
+    def setUp(self):
+        self.superadmin = User.objects.create_user(
+            email="rsuper@terafort.com", password="pw12345!",
+            full_name="Super", role="SUPERADMIN")
+        from rest_framework_simplejwt.tokens import RefreshToken
+        token = RefreshToken.for_user(self.superadmin).access_token
+        self.client.defaults["HTTP_AUTHORIZATION"] = "Bearer %s" % token
+
+        self.local = User.objects.create_user(
+            email="rlocal@terafort.com", password="x", full_name="Local")
+        self.mailbox_user = User.objects.create_user(
+            email="rkofi@terafort.org", password="x", full_name="Kofi")
+        self.mailbox_user.auth_source = User.AUTH_MAILBOX
+        self.mailbox_user.set_unusable_password()
+        self.mailbox_user.save()
+
+    def _reset(self, user):
+        return self.client.post(
+            reverse("user-reset-password", kwargs={"pk": user.pk}),
+            {}, content_type="application/json")
+
+    def test_a_local_account_gets_a_django_password(self):
+        r = self._reset(self.local)
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.data["password_opens"], "IT Command only")
+        self.local.refresh_from_db()
+        self.assertTrue(self.local.check_password(r.data["temp_password"]))
+
+    def test_a_mailbox_account_is_reset_on_cpanel_not_locally(self):
+        from core.models.mailboxes import ManagedMailbox
+        ManagedMailbox.objects.create(address="rkofi@terafort.org", domain="terafort.org")
+        with mock.patch("core.mailbox_admin.set_password") as write, \
+             mock.patch.object(mail_bridge, "destroy_mail_sessions_for", return_value=1):
+            r = self._reset(self.mailbox_user)
+        self.assertEqual(r.status_code, 200)
+        write.assert_called_once()
+        self.assertEqual(r.data["password_opens"], "IT Command and the mailbox")
+        self.mailbox_user.refresh_from_db()
+        self.assertFalse(self.mailbox_user.has_usable_password(),
+                         "a local hash was set on a mailbox account")
+
+    def test_the_password_handed_over_is_the_one_written_to_cpanel(self):
+        """Handing back a different password than the one set is exactly the
+        failure this routing exists to prevent."""
+        from core.models.mailboxes import ManagedMailbox
+        box = ManagedMailbox.objects.create(address="rkofi@terafort.org",
+                                            domain="terafort.org")
+        written = {}
+        with mock.patch("core.mailbox_admin.set_password",
+                        side_effect=lambda b, pw, **kw: written.update(pw=pw)), \
+             mock.patch.object(mail_bridge, "destroy_mail_sessions_for", return_value=0):
+            r = self._reset(self.mailbox_user)
+        self.assertEqual(written["pw"], r.data["temp_password"])
+
+    def test_their_live_mail_session_is_ended(self):
+        from core.models.mailboxes import ManagedMailbox
+        ManagedMailbox.objects.create(address="rkofi@terafort.org", domain="terafort.org")
+        with mock.patch("core.mailbox_admin.set_password"), \
+             mock.patch.object(mail_bridge, "destroy_mail_sessions_for") as destroy:
+            self._reset(self.mailbox_user)
+        destroy.assert_called_once_with("rkofi@terafort.org")
+
+    def test_a_missing_mailbox_record_is_refused_rather_than_guessed(self):
+        with mock.patch("core.mailbox_admin.set_password") as write:
+            r = self._reset(self.mailbox_user)
+        self.assertEqual(r.status_code, 409)
+        write.assert_not_called()
+
+    def test_a_cpanel_outage_does_not_report_a_new_password(self):
+        from core.models.mailboxes import ManagedMailbox
+        from core import mailbox_admin
+        ManagedMailbox.objects.create(address="rkofi@terafort.org", domain="terafort.org")
+        with mock.patch("core.mailbox_admin.set_password",
+                        side_effect=mailbox_admin.MailboxAdminError("unreachable")):
+            r = self._reset(self.mailbox_user)
+        self.assertEqual(r.status_code, 503)
+        self.assertNotIn("temp_password", r.data)

@@ -54,6 +54,10 @@ class UserSerializer(serializers.ModelSerializer):
             'id',
             'email',
             'full_name',
+            # Which system owns this account's password. The frontend needs it
+            # to know whether to offer Open Mailbox — a local account has no
+            # mail session to hand off, so the button would only ever 403.
+            'auth_source',
             'role',
             'role_label',
             'permissions',
@@ -68,7 +72,8 @@ class UserSerializer(serializers.ModelSerializer):
             'is_active',
             'created_at',
         ]
-        read_only_fields = ['id', 'created_at']
+        read_only_fields = [
+            'auth_source','id', 'created_at']
 
     def get_manager_name(self, obj):
         if not getattr(obj, "manager_id", None):

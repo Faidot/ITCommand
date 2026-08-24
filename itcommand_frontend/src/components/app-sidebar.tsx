@@ -66,6 +66,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { BackgroundBlobs } from "@/components/background-blobs"
+import { OpenMailboxButton } from "@/components/open-mailbox-button"
 
 export function AppSidebar() {
   const pathname = usePathname()
@@ -241,6 +242,14 @@ export function AppSidebar() {
           </SidebarGroup>
         ))}
       </SidebarContent>
+
+      {/* Open Mailbox sits above sign-out because it leaves the app: it opens
+          Terafort Mail in a new tab, already signed in, with no second
+          password prompt. Shown only for accounts that actually have a
+          mailbox — a local account has no mail session to hand off. */}
+      <div className="relative z-10 border-t border-sidebar-border p-3 group-data-[collapsible=icon]:p-2">
+        <OpenMailboxButton collapsed={isCollapsed} />
+      </div>
 
       <SidebarFooter className="relative z-10 border-t border-sidebar-border p-3 group-data-[collapsible=icon]:p-2 group-data-[collapsible=icon]:justify-center">
         {isCollapsed ? (

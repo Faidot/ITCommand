@@ -1,7 +1,9 @@
 "use client";
 
 import { useState } from "react";
+import { Mail } from "lucide-react";
 import api from "@/lib/api";
+import { useAuthStore } from "@/store/authStore";
 
 /**
  * The Open Mailbox button.
@@ -18,9 +20,17 @@ import api from "@/lib/api";
  * The ticket is single-use and lives 30 seconds, so there is no value in
  * holding it in React state beyond the moment of submission.
  */
-export function OpenMailboxButton({ className }: { className?: string }) {
+export function OpenMailboxButton({ className, collapsed }: {
+  className?: string;
+  collapsed?: boolean;
+}) {
+  const { user } = useAuthStore();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // A local account has no mail session to hand off, so the button would only
+  // ever produce a 403. Better absent than broken.
+  if (!user || (user as { auth_source?: string }).auth_source !== "MAILBOX") return null;
 
   async function open() {
     setBusy(true);
@@ -64,11 +74,13 @@ export function OpenMailboxButton({ className }: { className?: string }) {
         type="button"
         onClick={open}
         disabled={busy}
-        className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2
-                   text-sm font-medium text-primary-foreground
-                   disabled:opacity-60"
+        title="Open Terafort Mail"
+        className={`inline-flex w-full items-center justify-center gap-2 rounded-lg
+                    bg-primary px-3 py-2 text-sm font-medium text-primary-foreground
+                    disabled:opacity-60 ${collapsed ? "px-0" : ""}`}
       >
-        {busy ? "Opening…" : "Open Mailbox"}
+        <Mail className="h-4 w-4 shrink-0" />
+        {!collapsed && <span>{busy ? "Opening…" : "Open Mailbox"}</span>}
       </button>
       {error && <p className="mt-2 text-sm text-destructive">{error}</p>}
     </div>

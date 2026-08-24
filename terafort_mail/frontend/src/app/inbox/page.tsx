@@ -579,10 +579,16 @@ function Ended({ title, body, action }: {
             {action.label}
           </button>
         ) : (
-          <a href={process.env.NEXT_PUBLIC_ITC_URL ?? "https://itcommand.com"}
-             className="mt-5 inline-block rounded-lg bg-primary px-4 py-2 font-medium text-primary-foreground">
-            Back to IT Command
-          </a>
+          <div className="mt-5 flex flex-col items-center gap-2">
+            <a href="/login"
+               className="inline-block rounded-lg bg-primary px-4 py-2 font-medium text-primary-foreground">
+              Sign in here
+            </a>
+            <a href={process.env.NEXT_PUBLIC_ITC_URL ?? "https://itcommand.com"}
+               className="text-xs text-muted-foreground hover:text-foreground">
+              Or open it from IT Command
+            </a>
+          </div>
         )}
       </div>
     </main>

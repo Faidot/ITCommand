@@ -533,16 +533,59 @@ class UserViewSet(AuditLogMixin, viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], permission_classes=[IsAdminOrSuperadmin])
     def reset_password(self, request, pk=None):
+        """Issue a new password for someone else.
+
+        Where it lands depends on who owns their credential. For a
+        mailbox-backed account it must go to cPanel: their Django hash is
+        unusable and never consulted, so setting one would hand the
+        administrator a password that opens nothing and looks like it worked.
+        """
         user = self.get_object()
         if request.user.role == 'ADMIN' and user.role in ['ADMIN', 'SUPERADMIN']:
             return Response(
                 {'detail': 'Only a Superadmin can reset this account password.'},
                 status=status.HTTP_403_FORBIDDEN,
             )
-        temp_password = self.generate_temp_password()
-        user.set_password(temp_password)
-        user.save()
-        return Response({'temp_password': temp_password})
+
+        if not user.uses_mailbox_auth:
+            temp_password = self.generate_temp_password()
+            user.set_password(temp_password)
+            user.save()
+            return Response({
+                'temp_password': temp_password,
+                'password_opens': 'IT Command only',
+            })
+
+        box = ManagedMailbox.objects.filter(address__iexact=user.email).first()
+        if box is None:
+            return Response(
+                {'detail': 'No mailbox record for %s. Refresh the mailbox list '
+                           'first — we do not write to an address we have not '
+                           'confirmed exists.' % user.email},
+                status=status.HTTP_409_CONFLICT)
+
+        new_password = mailbox_provisioning.generate_password()
+        try:
+            mailbox_admin.set_password(box, new_password, actor=request.user.email)
+        except mailbox_admin.PasswordPolicyError as exc:
+            return Response({'detail': str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except mailbox_admin.MailboxAdminError as exc:
+            return Response({'detail': str(exc)},
+                            status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        # Their live mail session holds the old credential and a key wrapped
+        # under the old password. Ending it is kinder than letting it fail
+        # silently on their next click.
+        mail_bridge.destroy_mail_sessions_for(user.email)
+
+        record_audit(request, 'MAILBOX_PASSWORD_CHANGED', obj=user, user=request.user,
+                     changes={'email': user.email, 'by': 'admin reset'})
+        return Response({
+            'temp_password': new_password,
+            'password_opens': 'IT Command and the mailbox',
+            'note': 'This is now their only password — it opens IT Command and '
+                    'their mailbox. Any mail session they had open has been ended.',
+        })
 
 class ProfileView(APIView):
     permission_classes = [permissions.IsAuthenticated]
