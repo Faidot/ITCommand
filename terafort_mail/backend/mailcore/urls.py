@@ -6,7 +6,7 @@ looked up with the session's mailbox in the filter.
 """
 from django.urls import path
 
-from . import internal, views, views_compose, views_mail
+from . import internal, views, views_compose, views_files, views_mail
 
 urlpatterns = [
     # authentication
@@ -32,6 +32,12 @@ urlpatterns = [
     path("api/messages/<uuid:message_id>/report-phishing",
          views_mail.report_phishing_view, name="mail_message_phish"),
     path("api/threads/<uuid:thread_id>", views_mail.thread_view, name="mail_thread"),
+
+    # bytes that came from a message. Both harden their responses; see
+    # views_files for why neither is ever served inline.
+    path("api/proxy/image", views_files.image_proxy_view, name="mail_image_proxy"),
+    path("api/messages/<uuid:message_id>/attachments/<int:index>",
+         views_files.attachment_view, name="mail_attachment"),
 
     # composing
     path("api/compose/send", views_compose.send_view, name="mail_send"),

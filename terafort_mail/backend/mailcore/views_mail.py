@@ -6,7 +6,10 @@ everything else.
 """
 from __future__ import annotations
 
+import html as html_module
 import logging
+import re
+from urllib.parse import urlencode
 
 from rest_framework import status
 from rest_framework.decorators import api_view, permission_classes
@@ -14,7 +17,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from . import bundles as bundle_rules
-from . import imap_client, sanitiser, search, sync
+from . import imap_client, sanitiser, search, sync, views_files
 from .imap_auth import ImapUnavailable
 from .middleware import scope_to_session
 from .models import Folder, Message, SearchToken, record_audit
@@ -195,11 +198,18 @@ def message_body_view(request, message_id):
         message.save(update_fields=["flags"])
         _store_flag(session, message, "\\Seen", add=True)
 
+    html = body["html"]
+    if message.images_allowed and body["has_remote_images"]:
+        # Route every remote image through our own proxy. Without this the
+        # browser would connect to the sender directly, handing over the
+        # reader's IP, the time they opened it and their user agent — which is
+        # precisely what a tracking pixel is for.
+        html = _proxy_images(session, message, html)
+
     payload = _row(session, message)
     payload.update({
         "text": body["text"],
-        "html": body["html"] if message.images_allowed or not body["has_remote_images"]
-                else body["html"],
+        "html": html,
         "attachments": body.get("attachments", []),
         "images_allowed": message.images_allowed,
         "has_remote_images": body["has_remote_images"],
@@ -292,6 +302,22 @@ def report_phishing_view(request, message_id):
                  subject=envelope.get("subject", ""))
     return Response({"quarantined": True,
                      "detail": "Reported and quarantined. It will not render again."})
+
+
+_REMOTE_IMG = re.compile(r'(<img[^>]+src=")(https?://[^"]+)(")', re.I)
+
+
+def _proxy_images(session, message, html: str) -> str:
+    """Rewrite remote <img src> to our proxy, signed and scoped."""
+    def rewrite(match):
+        url = html_module.unescape(match.group(2))
+        signed = urlencode({
+            "u": url,
+            "s": views_files.sign_url(session, url),
+            "m": str(message.id),
+        })
+        return "%s/api/proxy/image?%s%s" % (match.group(1), signed, match.group(3))
+    return _REMOTE_IMG.sub(rewrite, html or "")
 
 
 def _store_flag(session, message, flag, add=True) -> bool:

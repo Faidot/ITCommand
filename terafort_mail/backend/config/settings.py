@@ -117,6 +117,16 @@ MAIL_APP_INBOX_PATH = config("MAIL_APP_INBOX_PATH", default="/inbox")
 ITC_BASE_URL = config("ITC_BASE_URL", default="https://itcommand.com")
 MAIL_PROBE_TOKEN = config("MAIL_PROBE_TOKEN", default="")
 
+#: clamd's socket. A unix path, or host:port. Empty means no scanner, and
+#: MAIL_BLOCK_UNSCANNED then decides whether attachments are served at all.
+MAIL_CLAMAV_SOCKET = config("MAIL_CLAMAV_SOCKET", default="")
+
+#: What to do when an attachment cannot be scanned. True refuses the download
+#: — safe, and it breaks every attachment the day clamd dies. False serves it
+#: marked unscanned. Neither is obviously right, so it is a decision rather
+#: than a default buried in code.
+MAIL_BLOCK_UNSCANNED = config("MAIL_BLOCK_UNSCANNED", default=False, cast=bool)
+
 # ---------------------------------------------------------------------------
 # Transport security
 # ---------------------------------------------------------------------------

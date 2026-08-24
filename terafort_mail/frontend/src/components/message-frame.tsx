@@ -26,10 +26,11 @@ export function MessageFrame({
   imagesAllowed: boolean;
 }) {
   const doc = useMemo(() => {
-    // With no image proxy yet (that is Phase 3), allowing images means the
-    // browser fetches them straight from the sender. The UI says so rather
-    // than implying a protection that does not exist.
-    const imgSrc = imagesAllowed ? "https: data:" : "'none'";
+    // Images are rewritten server-side to point at our own proxy, so the
+    // frame only ever needs to reach us. `https:` is deliberately NOT allowed
+    // — if a URL slipped past the rewriter, the CSP still stops the browser
+    // contacting the sender directly.
+    const imgSrc = imagesAllowed ? "'self'" : "'none'";
 
     const content = html
       ? html

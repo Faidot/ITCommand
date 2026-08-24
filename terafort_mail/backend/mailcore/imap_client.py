@@ -424,6 +424,32 @@ class MailboxConnection:
             re.search(r'<img[^>]+src=["\']https?://', haystack, re.I))
         return body
 
+    def fetch_attachment_parts(self, uid: int) -> list:
+        """Every attachment on a message, with its bytes.
+
+        Indexed by position in walk order, which is the same order
+        `fetch_body` reports them in — so the index the client was given in
+        the message payload addresses the same part here.
+        """
+        typ, data = self._conn.uid("FETCH", str(uid), "(BODY.PEEK[])")
+        if typ != "OK" or not data or not isinstance(data[0], tuple):
+            raise ImapUnavailable("could not fetch message %s" % uid)
+
+        msg = email.message_from_bytes(data[0][1], policy=email.policy.default)
+        parts = []
+        for part in msg.walk():
+            if part.get_content_maintype() == "multipart":
+                continue
+            disposition = (part.get_content_disposition() or "").lower()
+            if disposition != "attachment" and not part.get_filename():
+                continue
+            parts.append({
+                "filename": _decode(part.get_filename()) or "attachment",
+                "content_type": part.get_content_type(),
+                "data": part.get_payload(decode=True) or b"",
+            })
+        return parts
+
     def store_flags(self, uid: int, flags: list, add: bool = True) -> None:
         self._conn.uid("STORE", str(uid), "+FLAGS" if add else "-FLAGS",
                        "(%s)" % " ".join(flags))

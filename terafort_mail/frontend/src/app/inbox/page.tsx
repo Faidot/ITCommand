@@ -415,8 +415,8 @@ export default function Inbox() {
                 {open.has_remote_images && !open.images_allowed && (
                   <Banner tone="warn"
                           action={{ label: "Load images", onClick: () => void showImages(open) }}>
-                    Images are blocked. Loading them fetches from the sender directly, which
-                    tells them you opened this.
+                    Images are blocked. Loading them fetches through our own server, so the
+                    sender learns nothing — not your address, not when you opened this.
                   </Banner>
                 )}
 
