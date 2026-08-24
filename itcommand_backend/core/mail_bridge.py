@@ -352,6 +352,55 @@ def remote_login(address: str, password: str) -> tuple[int, dict]:
                           {"email": address, "password": password})
 
 
+# ── trusted devices ────────────────────────────────────────────────────────
+#
+# A code at every sign-in is what people turn 2FA off to escape. Remembering a
+# device keeps the factor real — it is still required on anything new, and on
+# this one again when the trust expires — while asking for it about once a
+# month rather than twice a day.
+#
+# The token proves three things together: which account, which device, and
+# when it stops counting. It is signed, so it cannot be edited, and it is
+# useless on its own: whoever holds it still needs the mailbox password.
+
+TRUSTED_DEVICE_DAYS = 30
+
+
+def _device_key() -> bytes:
+    key = settings.MAIL_HANDOFF_HMAC_KEY
+    return key.encode("utf-8") if isinstance(key, str) else key
+
+
+def issue_trusted_device(email: str, days: int = TRUSTED_DEVICE_DAYS) -> str:
+    """A signed token saying this browser already proved a second factor."""
+    expires = int(time.time()) + days * 86400
+    body = "%s|%d" % (email.strip().lower(), expires)
+    sig = hmac.new(_device_key(), body.encode(), hashlib.sha256).hexdigest()[:32]
+    return "%s|%s" % (body, sig)
+
+
+def trusted_device_valid(token: str, email: str) -> bool:
+    """Constant-time check that this token belongs to this account and is live."""
+    if not token:
+        return False
+    parts = token.split("|")
+    if len(parts) != 3:
+        return False
+    who, expires, sig = parts
+    expected = hmac.new(_device_key(), ("%s|%s" % (who, expires)).encode(),
+                        hashlib.sha256).hexdigest()[:32]
+    if not hmac.compare_digest(sig, expected):
+        return False
+    if who != email.strip().lower():
+        # A token for somebody else is not a bug to shrug at — it is either a
+        # shared machine or an attempt.
+        return False
+    try:
+        return int(expires) > time.time()
+    except (TypeError, ValueError):
+        return False
+
+
 def open_break_glass(*, address: str, actor: str, reason: str) -> tuple[int, dict]:
     """Ask the mail app to open somebody else's mailbox.
 
@@ -363,6 +412,14 @@ def open_break_glass(*, address: str, actor: str, reason: str) -> tuple[int, dic
                           {"address": address, "actor": actor, "reason": reason})
 
 
-def remote_mfa(ticket: str, code: str) -> tuple[int, dict]:
-    """Step two. On success the body carries the sid of a live mail session."""
-    return _internal_post("/internal/v1/auth/mfa", {"ticket": ticket, "code": code})
+def remote_mfa(ticket: str, code: str, *, trusted_device: bool = False) -> tuple[int, dict]:
+    """Step two. On success the body carries the sid of a live mail session.
+
+    `trusted_device` says this browser already proved a second factor recently
+    and IT Command has verified the signed token itself. The mail app honours
+    it only over the service boundary — a browser cannot assert it, because a
+    browser cannot reach these routes at all.
+    """
+    return _internal_post("/internal/v1/auth/mfa",
+                          {"ticket": ticket, "code": code,
+                           "trusted_device": bool(trusted_device)})

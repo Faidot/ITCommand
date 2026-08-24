@@ -194,3 +194,56 @@ class EndpointTests(MailTestCase):
 
     def test_missing_fields_are_refused(self):
         self.assertEqual(self._post({"address": self.bob.address}).status_code, 400)
+
+
+@override_settings(**MASTER)
+class OptionalReasonTests(MailTestCase):
+    """A deployment may drop the reason requirement.
+
+    What that changes and what it does not: the owner is still emailed the
+    moment their mailbox is opened, and every message read is still logged
+    individually. Those are the safeguards that separate break-glass from a
+    back door. The reason is the part the owner reads, so without it the
+    notice simply cannot say why.
+    """
+
+    def _open(self, reason):
+        with mock.patch.object(breakglass.imap_auth, "authenticate", _ok), \
+             mock.patch.object(breakglass, "notify_owner", return_value=True):
+            return breakglass.open_mailbox(
+                address=self.bob.address, actor="boss@terafort.com", reason=reason)
+
+    @override_settings(MAIL_BREAK_GLASS_REQUIRE_REASON=False)
+    def test_no_reason_is_accepted_when_it_is_not_required(self):
+        session, meta = self._open("")
+        self.assertEqual(session.mailbox_address, self.bob.address)
+
+    @override_settings(MAIL_BREAK_GLASS_REQUIRE_REASON=False)
+    def test_the_audit_row_says_so_rather_than_being_blank(self):
+        """A blank field reads as data we lost. 'No reason given' reads as
+        what happened."""
+        self._open("")
+        row = MailAuditLog.objects.filter(action="BREAK_GLASS_OPENED").first()
+        self.assertEqual(row.detail["reason"], "No reason given.")
+
+    @override_settings(MAIL_BREAK_GLASS_REQUIRE_REASON=False)
+    def test_the_owner_is_still_told(self):
+        sent = []
+        with mock.patch.object(breakglass.imap_auth, "authenticate", _ok), \
+             mock.patch.object(breakglass, "notify_owner",
+                               lambda **kw: sent.append(kw) or True):
+            breakglass.open_mailbox(address=self.bob.address,
+                                    actor="boss@terafort.com", reason="")
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["address"], self.bob.address)
+
+    @override_settings(MAIL_BREAK_GLASS_REQUIRE_REASON=False)
+    def test_reads_are_still_logged_individually(self):
+        session, _ = self._open("")
+        breakglass.record_read(session, "msg-1", "Salary review")
+        self.assertEqual(
+            MailAuditLog.objects.filter(action="BREAK_GLASS_READ").count(), 1)
+
+    def test_it_is_still_required_by_default(self):
+        with self.assertRaises(breakglass.BreakGlassError):
+            self._open("audit")

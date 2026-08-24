@@ -392,10 +392,13 @@ class ManagedMailboxViewSet(viewsets.ReadOnlyModelViewSet):
         if box.user_id and box.user.email.lower() == request.user.email.lower():
             return Response({"detail": "That is your own mailbox."},
                             status=status.HTTP_400_BAD_REQUEST)
-        if len(reason) < 10:
+        # The mail app is the authority on whether a reason is required — it
+        # holds the setting. Refusing here as well would mean the setting only
+        # half applies, and the console would disagree with the API.
+        if reason and len(reason) < 10:
             return Response(
-                {"reason": ["Give a reason of at least ten characters. The "
-                            "mailbox owner is shown it, so write it for them."]},
+                {"reason": ["Either give a reason of at least ten characters, or "
+                            "none at all. The mailbox owner is shown it."]},
                 status=status.HTTP_400_BAD_REQUEST)
 
         from core import mail_bridge

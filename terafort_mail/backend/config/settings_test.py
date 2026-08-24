@@ -38,6 +38,16 @@ MAIL_INTERNAL_SERVICES = ["itcommand"]
 REST_FRAMEWORK = dict(REST_FRAMEWORK)  # noqa: F405
 REST_FRAMEWORK["DEFAULT_THROTTLE_RATES"] = {"mail_login": None, "mail_mfa": None}
 
+# Pinned, not inherited. settings_test imports from settings, which reads the
+# developer's .env — so a local convenience like turning the break-glass reason
+# off silently changed what the suite asserted. Anything security-relevant is
+# fixed here and varied per-test with override_settings instead.
+MAIL_BREAK_GLASS_REQUIRE_REASON = True
+MAIL_MASTER_USER = ""
+MAIL_MASTER_PASSWORD = ""
+MAIL_BLOCK_UNSCANNED = False
+MAIL_CLAMAV_SOCKET = ""
+
 PASSWORD_HASHERS = ["django.contrib.auth.hashers.MD5PasswordHasher"]
 LOGGING = {"version": 1, "disable_existing_loggers": False,
            "handlers": {"null": {"class": "logging.NullHandler"}},

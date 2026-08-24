@@ -452,13 +452,15 @@ export default function MailboxesPage() {
             onChange={(e) => setBgReason(e.target.value)}
           />
           <p className="text-xs text-muted-foreground">
-            At least 10 characters. Write it for the mailbox owner — they are the
-            person who reads it.
+            Optional, but the mailbox owner is shown whatever you write — so write it
+            for them. Leaving it blank still emails them; the notice just cannot say
+            why.
           </p>
           <DialogFooter>
             <Button variant="outline" onClick={() => setBgTarget(null)}>Cancel</Button>
             <Button
-              disabled={bgReason.trim().length < 10 || busy === bgTarget?.id}
+              disabled={busy === bgTarget?.id
+                || (bgReason.trim().length > 0 && bgReason.trim().length < 10)}
               onClick={async () => {
                 setBusy(bgTarget!.id);
                 try {

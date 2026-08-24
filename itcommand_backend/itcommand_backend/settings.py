@@ -353,3 +353,8 @@ MAIL_HANDOFF_TICKET_SECONDS = config('MAIL_HANDOFF_TICKET_SECONDS', default=30, 
 # httpOnly, host-scoped. The browser never reads this and it never reaches
 # localStorage; it exists only so OpenMailboxView can find the mail session.
 MAIL_SID_COOKIE = config('MAIL_SID_COOKIE', default='itc_mail_sid')
+
+# Remembers that this browser has already proved a second factor, so a code is
+# asked for about once a month rather than at every sign-in. Signed, httpOnly,
+# and useless without the mailbox password.
+MAIL_DEVICE_COOKIE = config('MAIL_DEVICE_COOKIE', default='itc_2fa_device')

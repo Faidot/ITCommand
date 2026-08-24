@@ -85,12 +85,16 @@ def open_mailbox(*, address: str, actor: str, reason: str, ip: str = "",
             "off unless somebody sets it deliberately.")
 
     reason = (reason or "").strip()
-    if len(reason) < 10:
+    if getattr(settings, "MAIL_BREAK_GLASS_REQUIRE_REASON", True) and len(reason) < 10:
         # A one-word reason is not a reason. This text is what the mailbox
-        # owner reads, so it has to say something to them.
+        # owner reads, so when it is required it has to say something to them.
         raise BreakGlassError(
             "Give a reason of at least ten characters. The mailbox owner is "
             "shown it, so write it for them.")
+    if not reason:
+        # The owner is still told; the notice simply cannot say why. Recorded
+        # as such rather than left blank, so an audit trail reads honestly.
+        reason = "No reason given."
 
     address = address.strip().lower()
     mailbox = Mailbox.objects.filter(address=address).first()

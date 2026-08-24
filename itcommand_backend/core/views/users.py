@@ -105,6 +105,17 @@ class LoginView(APIView):
             return Response({'detail': 'Sign-in failed.'},
                             status=status.HTTP_400_BAD_REQUEST)
 
+        # A device that has already proved a second factor is not asked again
+        # until the trust expires. The factor is still real — required on any
+        # new device, and on this one again in a month — but it is asked about
+        # once a month rather than twice a day, which is what stops people
+        # turning it off.
+        device = request.COOKIES.get(settings.MAIL_DEVICE_COOKIE, '')
+        if (not body.get('enrolment_required')
+                and mail_bridge.trusted_device_valid(device, email)):
+            return self._complete_mailbox_login(
+                request, user, body.get('ticket'), trusted_device=True)
+
         # Not a session yet: a three-minute ticket the second factor completes.
         out = {
             'mfa_required': True,
@@ -115,6 +126,62 @@ class LoginView(APIView):
             out['totp_secret'] = body.get('totp_secret')
             out['otpauth_uri'] = body.get('otpauth_uri')
         return Response(out)
+
+
+    def _complete_mailbox_login(self, request, user, ticket, *,
+                                code='', trusted_device=False):
+        """Turn a verified challenge into a session and tokens.
+
+        Shared so the trusted-device path and the code path cannot drift —
+        they must issue exactly the same session, cookie and audit trail.
+        """
+        try:
+            code_status, body = mail_bridge.remote_mfa(
+                ticket, code, trusted_device=trusted_device)
+        except mail_bridge.MailBridgeError:
+            return Response(
+                {'detail': 'The mail service is not reachable right now.'},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        if code_status != 200 or not body.get('sid'):
+            return Response({'detail': body.get('detail', 'That code is not right.')},
+                            status=status.HTTP_401_UNAUTHORIZED)
+
+        tokens = get_tokens_for_user(user)
+        record_audit(request, 'LOGIN', obj=user, user=user,
+                     changes={'email': user.email, 'via': 'mailbox',
+                              'second_factor': 'trusted device' if trusted_device
+                                               else 'code'})
+        user.touch_seen(force=True)
+
+        payload = {
+            'access': tokens['access'],
+            'refresh': tokens['refresh'],
+            'user': UserSerializer(user).data,
+            'mailbox_session': True,
+        }
+        if body.get('recovery_codes'):
+            payload['recovery_codes'] = body['recovery_codes']
+
+        response = Response(payload)
+        response.set_cookie(
+            settings.MAIL_SID_COOKIE, body['sid'],
+            max_age=int(settings.MAIL_SESSION_ABSOLUTE_SECONDS),
+            httponly=True, secure=settings.SESSION_COOKIE_SECURE,
+            samesite='Lax', path='/',
+        )
+        # Only a real code earns trust. Arriving on an already-trusted device
+        # must not silently extend it, or the trust never expires for anyone
+        # who keeps signing in.
+        if code:
+            response.set_cookie(
+                settings.MAIL_DEVICE_COOKIE,
+                mail_bridge.issue_trusted_device(user.email),
+                max_age=mail_bridge.TRUSTED_DEVICE_DAYS * 86400,
+                httponly=True, secure=settings.SESSION_COOKIE_SECURE,
+                samesite='Lax', path='/',
+            )
+        return response
 
 
 class MailboxMfaView(APIView):
@@ -133,48 +200,16 @@ class MailboxMfaView(APIView):
 
         ticket = request.data.get('ticket') or ''
         code = (request.data.get('code') or '').strip()
-        try:
-            code_status, body = mail_bridge.remote_mfa(ticket, code)
-        except mail_bridge.MailBridgeError:
-            return Response(
-                {'detail': 'The mail service is not reachable right now.'},
-                status=status.HTTP_503_SERVICE_UNAVAILABLE)
-
-        if code_status != 200 or not body.get('sid'):
-            return Response({'detail': body.get('detail', 'That code is not right.')},
-                            status=status.HTTP_401_UNAUTHORIZED)
 
         email = (request.data.get('email') or '').strip().lower()
         user = User.objects.filter(email__iexact=email).first()
         if user is None or not user.uses_mailbox_auth or not user.is_active:
-            mail_bridge.destroy_mail_session(body['sid'])
             return Response({'detail': 'Invalid email or password.'},
                             status=status.HTTP_401_UNAUTHORIZED)
 
-        tokens = get_tokens_for_user(user)
-        record_audit(request, 'LOGIN', obj=user, user=user,
-                     changes={'email': user.email, 'via': 'mailbox'})
-        user.touch_seen(force=True)
-        payload = {
-            'access': tokens['access'],
-            'refresh': tokens['refresh'],
-            'user': UserSerializer(user).data,
-            # The browser needs to know a mailbox session exists so it can show
-            # the Open Mailbox button. It never sees the sid.
-            'mailbox_session': True,
-        }
-        if body.get('recovery_codes'):
-            payload['recovery_codes'] = body['recovery_codes']
-        response = Response(payload)
-        # The sid rides in an httpOnly cookie on IT Command's own host, so no
-        # script can read it and it never reaches localStorage.
-        response.set_cookie(
-            settings.MAIL_SID_COOKIE, body['sid'],
-            max_age=int(settings.MAIL_SESSION_ABSOLUTE_SECONDS),
-            httponly=True, secure=settings.SESSION_COOKIE_SECURE,
-            samesite='Lax', path='/',
-        )
-        return response
+        # LoginView owns the completion so the trusted-device path and the code
+        # path issue exactly the same session, cookie and audit trail.
+        return LoginView()._complete_mailbox_login(request, user, ticket, code=code)
 
 
 class OpenMailboxView(APIView):

@@ -130,3 +130,86 @@ class HandoffViewTests(MailTestCase):
     def test_response_is_not_framable(self):
         r = self.c.post("/auth/handoff", {"ticket": self._ticket()})
         self.assertEqual(r.get("X-Frame-Options"), "DENY")
+
+
+class BrowserBindingTests(MailTestCase):
+    """Where a session's user-agent binding comes from.
+
+    It has to come from a browser. A session created through the service
+    boundary sees IT Command's HTTP client instead, and binding to that makes
+    a check no browser can ever pass — which destroyed the session on its
+    first real request and reported an expired mailbox for one created seconds
+    earlier.
+    """
+
+    def test_a_service_login_does_not_bind_to_the_callers_agent(self):
+        import hashlib
+        import hmac
+        import json
+        import time
+
+        from django.conf import settings
+        from django.test import Client
+        from unittest import mock
+
+        from mailcore import imap_auth, sessions, totp
+
+        body = json.dumps({"email": self.alice.address, "password": "correct horse"}).encode()
+        ts = str(time.time())
+        sig = hmac.new(settings.MAIL_INTERNAL_HMAC_KEY.encode(),
+                       b"itcommand|%s|%s" % (ts.encode(), body), hashlib.sha256).hexdigest()
+
+        caps = imap_auth.ImapCapabilities.parse([b"IMAP4REV1"])
+        with mock.patch("mailcore.views.imap_auth.authenticate", lambda *a, **k: caps):
+            r = Client().post(
+                "/internal/v1/auth/login", body, content_type="application/json",
+                HTTP_X_SERVICE="itcommand", HTTP_X_TIMESTAMP=ts, HTTP_X_SIGNATURE=sig,
+                HTTP_USER_AGENT="Python-urllib/3.14")
+        self.assertEqual(r.status_code, 200)
+
+        payload = sessions.get_store().redeem_mfa_ticket(r.json()["ticket"])
+        self.assertEqual(payload["ua_hash"], "",
+                         "the session was bound to IT Command's HTTP client")
+
+    def test_the_handoff_binds_the_session_to_the_redeeming_browser(self):
+        from django.test import Client
+        from mailcore import handoff, sessions
+
+        store = sessions.get_store()
+        sess = store.load_session(self.alice.session.sid)
+        sess.ua_hash = ""          # as a service-created session arrives
+        store._save(sess)
+
+        ticket = handoff.mint(sid=sess.sid, mailbox_address=self.alice.address,
+                              ua_hash="", ip="127.0.0.1")
+        client = Client(HTTP_USER_AGENT="Mozilla/5.0 (a real browser)")
+        r = client.post("/auth/handoff", {"ticket": ticket})
+        self.assertEqual(r.status_code, 303)
+
+        bound = store.load_session(sess.sid)
+        self.assertTrue(bound.ua_hash, "the session was left unbound")
+
+        # And the same browser can then use it, which is the whole point.
+        self.assertEqual(client.get("/api/me").status_code, 200)
+
+    def test_a_different_browser_cannot_use_it_afterwards(self):
+        from django.test import Client
+        from mailcore import handoff, sessions
+
+        store = sessions.get_store()
+        sess = store.load_session(self.alice.session.sid)
+        sess.ua_hash = ""
+        store._save(sess)
+
+        ticket = handoff.mint(sid=sess.sid, mailbox_address=self.alice.address,
+                              ua_hash="", ip="127.0.0.1")
+        Client(HTTP_USER_AGENT="Mozilla/5.0 (first)").post("/auth/handoff", {"ticket": ticket})
+
+        thief = Client(HTTP_USER_AGENT="Mozilla/5.0 (somewhere else)")
+        thief.cookies[settings_cookie()] = sess.sid
+        self.assertIn(thief.get("/api/me").status_code, (401, 403))
+
+
+def settings_cookie():
+    from django.conf import settings
+    return settings.MAIL_SESSION_COOKIE

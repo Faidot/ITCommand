@@ -137,16 +137,30 @@ class MailboxLoginTests(ThrottleIsolatedTestCase):
         self.assertTrue(cookie["httponly"], "the mail sid is readable by script")
         self.assertNotIn("sid", r.json(), "the sid leaked into the response body")
 
-    def test_mfa_for_an_unknown_user_destroys_the_orphaned_mail_session(self):
-        with mock.patch.object(mail_bridge, "remote_mfa",
-                               return_value=(200, {"sid": "sid-xyz"})), \
-             mock.patch.object(mail_bridge, "destroy_mail_session") as destroy:
+    def test_mfa_for_an_unknown_user_creates_no_session_at_all(self):
+        """Better than the previous behaviour, which created a mail session
+        and then destroyed it. The account is checked before anything is
+        created, so there is no orphan to clean up."""
+        with mock.patch.object(mail_bridge, "remote_mfa") as remote:
             r = self.client.post(reverse("auth_mailbox_mfa"),
                                  {"ticket": "t", "code": "123456",
                                   "email": "nobody@terafort.com"},
                                  content_type="application/json")
         self.assertEqual(r.status_code, 401)
-        destroy.assert_called_once_with("sid-xyz")
+        remote.assert_not_called()
+
+    def test_mfa_for_a_local_account_is_refused(self):
+        """auth_source is the gate. A local user has no mailbox session to
+        create, and this route must not manufacture one."""
+        local = User.objects.create_user(
+            email="localonly@terafort.com", password="pw12345!", full_name="Local")
+        with mock.patch.object(mail_bridge, "remote_mfa") as remote:
+            r = self.client.post(reverse("auth_mailbox_mfa"),
+                                 {"ticket": "t", "code": "123456",
+                                  "email": local.email},
+                                 content_type="application/json")
+        self.assertEqual(r.status_code, 401)
+        remote.assert_not_called()
 
 
 @override_settings(MAIL_AUTH_ENABLED=True)
@@ -488,3 +502,105 @@ class HandoffCookieRoundTripTests(ThrottleIsolatedTestCase):
             r = self.client.post(reverse("auth_open_mailbox"))
         self.assertEqual(r.status_code, 409)
         self.assertTrue(r.json()["reauth_required"])
+
+
+@override_settings(MAIL_AUTH_ENABLED=True)
+class TrustedDeviceTests(ThrottleIsolatedTestCase):
+    """Asking for a code at every sign-in is what people turn 2FA off to
+    escape. Remembering a device keeps the factor real while asking about once
+    a month."""
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(
+            email="td@terafort.org", password="x", full_name="TD")
+        self.user.auth_source = User.AUTH_MAILBOX
+        self.user.save(update_fields=["auth_source"])
+
+    def _login(self):
+        return self.client.post(reverse("auth_login"),
+                                {"email": self.user.email, "password": "pw"},
+                                content_type="application/json")
+
+    def test_a_token_is_only_valid_for_its_own_account(self):
+        token = mail_bridge.issue_trusted_device("someone@terafort.org")
+        self.assertFalse(mail_bridge.trusted_device_valid(token, self.user.email))
+        self.assertTrue(mail_bridge.trusted_device_valid(token, "someone@terafort.org"))
+
+    def test_a_tampered_token_is_rejected(self):
+        token = mail_bridge.issue_trusted_device(self.user.email)
+        who, expires, sig = token.split("|")
+        forged = "%s|%d|%s" % (who, int(expires) + 86400 * 3650, sig)
+        self.assertFalse(mail_bridge.trusted_device_valid(forged, self.user.email))
+
+    def test_an_expired_token_is_rejected(self):
+        token = mail_bridge.issue_trusted_device(self.user.email, days=-1)
+        self.assertFalse(mail_bridge.trusted_device_valid(token, self.user.email))
+
+    def test_rubbish_is_rejected_without_raising(self):
+        for bad in ("", "x", "a|b", "a|b|c|d"):
+            self.assertFalse(mail_bridge.trusted_device_valid(bad, self.user.email))
+
+    def test_the_first_sign_in_still_asks_for_a_code(self):
+        with mock.patch.object(mail_bridge, "remote_login",
+                               return_value=(200, {"ticket": "t",
+                                                   "enrolment_required": False})):
+            r = self._login()
+        self.assertTrue(r.json()["mfa_required"])
+
+    def test_answering_a_code_marks_the_device_trusted(self):
+        with mock.patch.object(mail_bridge, "remote_mfa",
+                               return_value=(200, {"sid": "s"})):
+            r = self.client.post(reverse("auth_mailbox_mfa"),
+                                 {"ticket": "t", "code": "123456",
+                                  "email": self.user.email},
+                                 content_type="application/json")
+        self.assertIn("itc_2fa_device", r.cookies)
+        self.assertTrue(r.cookies["itc_2fa_device"]["httponly"])
+
+    def test_a_trusted_device_is_not_asked_again(self):
+        self.client.cookies["itc_2fa_device"] = mail_bridge.issue_trusted_device(
+            self.user.email)
+        with mock.patch.object(mail_bridge, "remote_login",
+                               return_value=(200, {"ticket": "t",
+                                                   "enrolment_required": False})), \
+             mock.patch.object(mail_bridge, "remote_mfa",
+                               return_value=(200, {"sid": "s"})) as mfa:
+            r = self._login()
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("access", r.json())
+        self.assertTrue(mfa.call_args.kwargs["trusted_device"])
+
+    def test_enrolment_is_never_skipped(self):
+        """Somebody who has not set up an authenticator has nothing to trust."""
+        self.client.cookies["itc_2fa_device"] = mail_bridge.issue_trusted_device(
+            self.user.email)
+        with mock.patch.object(mail_bridge, "remote_login",
+                               return_value=(200, {"ticket": "t",
+                                                   "enrolment_required": True,
+                                                   "totp_secret": "S",
+                                                   "otpauth_uri": "otpauth://x"})):
+            r = self._login()
+        self.assertTrue(r.json()["mfa_required"])
+        self.assertTrue(r.json()["enrolment_required"])
+
+    def test_arriving_on_a_trusted_device_does_not_extend_the_trust(self):
+        """Otherwise it never expires for anyone who keeps signing in."""
+        self.client.cookies["itc_2fa_device"] = mail_bridge.issue_trusted_device(
+            self.user.email)
+        with mock.patch.object(mail_bridge, "remote_login",
+                               return_value=(200, {"ticket": "t",
+                                                   "enrolment_required": False})), \
+             mock.patch.object(mail_bridge, "remote_mfa",
+                               return_value=(200, {"sid": "s"})):
+            r = self._login()
+        self.assertNotIn("itc_2fa_device", r.cookies)
+
+    def test_another_persons_trusted_device_does_not_help(self):
+        self.client.cookies["itc_2fa_device"] = mail_bridge.issue_trusted_device(
+            "someone.else@terafort.org")
+        with mock.patch.object(mail_bridge, "remote_login",
+                               return_value=(200, {"ticket": "t",
+                                                   "enrolment_required": False})):
+            r = self._login()
+        self.assertTrue(r.json()["mfa_required"], "another account's token skipped 2FA")

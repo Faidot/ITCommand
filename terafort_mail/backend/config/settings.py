@@ -146,6 +146,15 @@ MAIL_MASTER_SEPARATOR = config("MAIL_MASTER_SEPARATOR", default="*")
 #: The address the "your mailbox was opened" notice is sent from. Sent from
 #: the app, not the administrator, so it cannot be suppressed by whoever is
 #: doing the reading. Without it, owners are NOT told and that is logged.
+#: Whether a superadmin must say why before opening somebody else's mailbox.
+#:
+#: Turning this off removes the part the mailbox owner reads. They are still
+#: emailed the moment their mail is opened, and every message read is still
+#: logged individually — those are the safeguards that make break-glass
+#: different from a back door, and they are not affected by this setting.
+MAIL_BREAK_GLASS_REQUIRE_REASON = config(
+    "MAIL_BREAK_GLASS_REQUIRE_REASON", default=True, cast=bool)
+
 MAIL_NOTICE_FROM = config("MAIL_NOTICE_FROM", default="")
 MAIL_NOTICE_PASSWORD = config("MAIL_NOTICE_PASSWORD", default="")
 

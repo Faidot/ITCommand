@@ -102,10 +102,22 @@ class InternalView(APIView):
 
 
 class InternalLoginView(InternalView):
-    """Step one, on behalf of IT Command. Same logic as the public route."""
+    """Step one, on behalf of IT Command. Same logic as the public route.
+
+    The one thing that must differ: the request reaching us is IT Command's
+    HTTP client, not the person's browser. Binding a session to
+    `Python-urllib/3.x` and then checking it against a real browser is a
+    guarantee that always fails — it destroyed the session on the very first
+    request and reported an expired mailbox for one created seconds earlier.
+    The browser is first seen at the handoff, and that is where the binding is
+    made.
+    """
 
     def post(self, request):
-        return LoginView().post(request)
+        response = LoginView().post(request)
+        if response.status_code == 200 and isinstance(response.data, dict):
+            response.data["service_originated"] = True
+        return response
 
 
 class InternalMfaView(InternalView):

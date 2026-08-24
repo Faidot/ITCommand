@@ -32,6 +32,15 @@ from .models import Folder, Mailbox, Message, record_audit
 log = logging.getLogger("mailcore.views")
 
 
+def _is_service_call(request) -> bool:
+    """True when IT Command is calling on somebody's behalf.
+
+    The internal routes are signed with a service header; a browser never
+    sends one.
+    """
+    return bool(request.headers.get("X-Service"))
+
+
 def _set_session_cookie(response, sid: str) -> None:
     """__Host- prefix: Secure, path=/, and no Domain attribute.
 
@@ -153,8 +162,11 @@ class LoginView(DirectLoginGate, APIView):
             "address": address,
             "credential": password,
             "dek": base64.b64encode(dek).decode("ascii"),
-            "ua_hash": ua_hash(request),
-            "ip": client_ip(request),
+            # Only meaningful when a browser is on the other end. A service
+            # call carries its HTTP client's user agent, which would bind the
+            # session to something no browser can ever match.
+            "ua_hash": "" if _is_service_call(request) else ua_hash(request),
+            "ip": "" if _is_service_call(request) else client_ip(request),
         }
 
         if not mailbox.totp_enrolled:
@@ -206,6 +218,16 @@ class MfaView(DirectLoginGate, APIView):
             return Response({"detail": "This sign-in attempt has expired. Start again."},
                             status=status.HTTP_401_UNAUTHORIZED)
 
+        # A trusted-device assertion can only arrive over the service
+        # boundary, which a browser cannot reach. `_is_service_call` is the
+        # gate; without it this field would be a way to skip the factor by
+        # asking nicely.
+        trusted = bool(request.data.get("trusted_device")) and _is_service_call(request)
+        if trusted and not payload.get("enrolling"):
+            record_audit("MFA_TRUSTED_DEVICE", mailbox_address=address, request=request)
+            return self._issue(request, mailbox, payload, store, address,
+                               recovery_used=False, recovery_codes=None)
+
         recovery_used = False
         if not totp.verify(mailbox.totp_secret, code):
             recovery_used = self._consume_recovery(mailbox, code)
@@ -222,6 +244,14 @@ class MfaView(DirectLoginGate, APIView):
             mailbox.save(update_fields=["totp_confirmed_at", "recovery_code_hashes"])
             record_audit("MFA_ENROLLED", mailbox_address=address, request=request)
 
+        return self._issue(request, mailbox, payload, store, address,
+                           recovery_used=recovery_used, recovery_codes=recovery_codes)
+
+    @staticmethod
+    def _issue(request, mailbox, payload, store, address, *,
+               recovery_used=False, recovery_codes=None):
+        """Create the session and answer. Shared by the code path and the
+        trusted-device path so they cannot issue different things."""
         mailbox.last_login_at = timezone.now()
         mailbox.save(update_fields=["last_login_at"])
 
@@ -281,6 +311,14 @@ def handoff_view(request):
                       {"reason": "That sign-in link has expired. Open your mailbox "
                                  "from IT Command again.",
                        "itc_url": settings.ITC_BASE_URL}, status=401)
+
+    # The browser is first seen here. A session created through the service
+    # boundary has no binding yet, so this is where it gets one — from the
+    # request that actually redeemed the ticket.
+    if not sess.ua_hash:
+        sess.ua_hash = ua_hash(request)
+        sess.ip = client_ip(request)
+        sessions.get_store()._save(sess)
 
     record_audit("HANDOFF_REDEEMED", mailbox_address=sess.mailbox_address, request=request)
     # 303 so the browser turns the POST into a GET for the inbox.
