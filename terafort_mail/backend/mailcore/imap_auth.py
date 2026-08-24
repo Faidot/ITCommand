@@ -101,6 +101,13 @@ def authenticate(address: str, password: str) -> ImapCapabilities:
             raise PermissionError("invalid credentials") from exc
         caps = ImapCapabilities.parse(getattr(conn, "capabilities", ()))
         return caps
+    except PermissionError:
+        # MUST come first. PermissionError subclasses OSError, so without this
+        # the handler below swallows a rejected password and rewrites it as an
+        # outage -- which is the exact confusion this module exists to avoid,
+        # and it told users "the mail server is not reachable" when their
+        # password was simply wrong.
+        raise
     except (OSError, socket.timeout, ssl.SSLError) as exc:
         raise ImapUnavailable("IMAP connection dropped mid-login") from exc
     finally:
