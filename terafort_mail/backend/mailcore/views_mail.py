@@ -16,6 +16,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from . import breakglass
 from . import bundles as bundle_rules
 from . import imap_client, sanitiser, search, sync, views_files
 from .imap_auth import ImapUnavailable
@@ -207,6 +208,9 @@ def message_body_view(request, message_id):
         html = _proxy_images(session, message, html)
 
     payload = _row(session, message)
+    # Per message, not per session: "they had access for half an hour" is not
+    # an answer to "did they read my appraisal".
+    breakglass.record_read(session, message.id, payload.get("subject", ""))
     payload.update({
         "text": body["text"],
         "html": html,

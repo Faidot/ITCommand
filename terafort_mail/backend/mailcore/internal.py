@@ -29,7 +29,7 @@ from rest_framework import status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from . import sessions
+from . import breakglass, sessions
 from .views import LoginView, MfaView
 
 log = logging.getLogger("mailcore.internal")
@@ -126,6 +126,31 @@ class InternalMfaView(InternalView):
         data = dict(response.data)
         data["sid"] = ticket_sid
         return Response(data, status=status.HTTP_200_OK)
+
+
+class InternalBreakGlassView(InternalView):
+    """Open somebody else's mailbox, on a named superadmin's authority.
+
+    Reachable only over the service boundary — never with a session cookie —
+    so a stolen browser session cannot reach it however privileged its owner.
+    """
+
+    def post(self, request):
+        actor = (request.data.get("actor") or "").strip()
+        address = (request.data.get("address") or "").strip().lower()
+        reason = request.data.get("reason") or ""
+
+        if not actor or not address:
+            return Response({"detail": "actor and address are required."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            session, meta = breakglass.open_mailbox(
+                address=address, actor=actor, reason=reason,
+                ip=request.META.get("REMOTE_ADDR", ""))
+        except breakglass.BreakGlassError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+
+        return Response({"sid": session.sid, **meta})
 
 
 class InternalSessionView(InternalView):

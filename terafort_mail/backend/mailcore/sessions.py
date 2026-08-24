@@ -54,6 +54,9 @@ class MailSession:
     ip: str = ""
     mfa_verified: bool = True
     scopes: list = field(default_factory=list)
+    #: The IMAP login, when it differs from the address. Only break-glass sets
+    #: it, to `address*masteruser`. Everything else authenticates as itself.
+    credential_login: str = ""
 
     def __repr__(self) -> str:  # pragma: no cover - defensive
         return "<MailSession %s %s>" % (self.sid[:8], self.mailbox_address)

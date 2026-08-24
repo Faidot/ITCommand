@@ -128,6 +128,28 @@ MAIL_CLAMAV_SOCKET = config("MAIL_CLAMAV_SOCKET", default="")
 MAIL_BLOCK_UNSCANNED = config("MAIL_BLOCK_UNSCANNED", default=False, cast=bool)
 
 # ---------------------------------------------------------------------------
+# Break-glass administrator access
+#
+# A Dovecot master user is ONE CREDENTIAL THAT OPENS EVERY MAILBOX. Setting
+# these is a deliberate, permanent weakening of the property the original
+# brief called non-negotiable, exchanged for an audited one: a superadmin can
+# read a mailbox, and the owner is emailed that they did.
+#
+# Leave blank and break-glass is unavailable.
+# ---------------------------------------------------------------------------
+MAIL_MASTER_USER = config("MAIL_MASTER_USER", default="")
+MAIL_MASTER_PASSWORD = config("MAIL_MASTER_PASSWORD", default="")
+#: Dovecot's auth_master_user_separator. cPanel does not document which it
+#: uses, so this is configurable rather than assumed.
+MAIL_MASTER_SEPARATOR = config("MAIL_MASTER_SEPARATOR", default="*")
+
+#: The address the "your mailbox was opened" notice is sent from. Sent from
+#: the app, not the administrator, so it cannot be suppressed by whoever is
+#: doing the reading. Without it, owners are NOT told and that is logged.
+MAIL_NOTICE_FROM = config("MAIL_NOTICE_FROM", default="")
+MAIL_NOTICE_PASSWORD = config("MAIL_NOTICE_PASSWORD", default="")
+
+# ---------------------------------------------------------------------------
 # Transport security
 # ---------------------------------------------------------------------------
 SECURE_HSTS_SECONDS = config("SECURE_HSTS_SECONDS", default=31536000, cast=int)

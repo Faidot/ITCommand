@@ -57,6 +57,8 @@ urlpatterns = [
          name="mail_internal_mfa"),
     path("internal/v1/auth/session", internal.InternalSessionView.as_view(),
          name="mail_internal_session"),
+    path("internal/v1/break-glass", internal.InternalBreakGlassView.as_view(),
+         name="mail_internal_break_glass"),
 
     # ops
     path("api/probe", views.probe_view, name="mail_probe"),

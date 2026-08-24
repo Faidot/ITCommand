@@ -494,7 +494,11 @@ def for_session(session):
     Takes a MailSession, never an address and password, so there is no call
     site where the wrong mailbox could be opened by passing the wrong string.
     """
-    conn = MailboxConnection(session.mailbox_address, session.credential)
+    # `credential_login` differs from the address only for a break-glass
+    # session, where it is `address*masteruser`. The mailbox opened is still
+    # the address, so every scoping layer downstream is unchanged.
+    login = getattr(session, "credential_login", "") or session.mailbox_address
+    conn = MailboxConnection(login, session.credential)
     try:
         yield conn.open()
     finally:
