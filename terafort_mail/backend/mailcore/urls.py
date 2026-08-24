@@ -22,6 +22,7 @@ urlpatterns = [
     path("api/folders", views.folders_view, name="mail_folders"),
     path("api/sync", views_mail.sync_view, name="mail_sync"),
     path("api/messages", views_mail.messages_view, name="mail_messages"),
+    path("api/search", views_mail.search_view, name="mail_search"),
     path("api/messages/<uuid:message_id>/body", views_mail.message_body_view,
          name="mail_message_body"),
     path("api/messages/<uuid:message_id>/flag", views_mail.flag_view,

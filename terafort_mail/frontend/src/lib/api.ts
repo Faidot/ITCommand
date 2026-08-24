@@ -116,6 +116,10 @@ export const api = {
     post<{ quarantined: boolean; detail: string }>(`/messages/${id}/report-phishing`),
   logout: () => post<{ ok: boolean }>("/auth/logout"),
 
+  search: (q: string) =>
+    request<{ query: string; count: number; results: Row[]; note?: string }>(
+      `/search?q=${encodeURIComponent(q)}`),
+
   send: (draft: Draft) => post<Queued>("/compose/send", draft),
   undo: (id: string) => post<{ cancelled: boolean; draft: Draft }>("/compose/undo", { id }),
   replyContext: (id: string) => request<ReplyContext>(`/messages/${id}/reply`),

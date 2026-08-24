@@ -14,10 +14,10 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from . import bundles as bundle_rules
-from . import imap_client, sanitiser, sync
+from . import imap_client, sanitiser, search, sync
 from .imap_auth import ImapUnavailable
 from .middleware import scope_to_session
-from .models import Folder, Message, record_audit
+from .models import Folder, Message, SearchToken, record_audit
 
 log = logging.getLogger("mailcore.views_mail")
 
@@ -118,6 +118,53 @@ def messages_view(request):
         "offset": offset,
         "page_size": PAGE_SIZE,
         "synced": True,
+    })
+
+
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def search_view(request):
+    """Search subject, sender and body over the blind index.
+
+    Whole tokens only — `invo` will not find "invoice". That is the cost of
+    not storing readable words, and the UI says so when a search returns
+    nothing rather than leaving people to guess.
+    """
+    scope_to_session(request)
+    session = request.mail_session
+    query = (request.query_params.get("q") or "").strip()
+    if len(query) < 2:
+        return Response({"results": [], "count": 0, "query": query})
+
+    import base64
+    dek = base64.b64decode(session.dek)
+    digests = search.query_digests(dek, query)
+    if not digests:
+        return Response({"results": [], "count": 0, "query": query,
+                         "note": "Nothing in that is long enough to search for."})
+
+    rows = (SearchToken.objects.for_session(session)
+            .filter(token_hmac__in=digests)
+            .values_list("message_id", "field"))
+
+    hits = {}
+    for message_id, field in rows:
+        hits.setdefault(message_id, {}).setdefault(field, 0)
+        hits[message_id][field] += 1
+    if not hits:
+        return Response({"results": [], "count": 0, "query": query,
+                         "note": "No matches. Search matches whole words, so try "
+                                 "a complete word rather than the start of one."})
+
+    ordered = search.rank(hits, len(digests))[:PAGE_SIZE]
+    by_id = {m.id: m for m in Message.objects.for_session(session)
+             .filter(id__in=ordered).exclude(quarantined=True)
+             .select_related("folder")}
+
+    return Response({
+        "query": query,
+        "count": len(by_id),
+        "results": [_row(session, by_id[mid]) for mid in ordered if mid in by_id],
     })
 
 

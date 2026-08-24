@@ -39,6 +39,8 @@ export default function Inbox() {
   const [offline, setOffline] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [composing, setComposing] = useState<Partial<Draft> | null>(null);
+  const [query, setQuery] = useState("");
+  const [searchNote, setSearchNote] = useState<string | null>(null);
   const [queued, setQueued] = useState<Queued | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -82,6 +84,21 @@ export default function Inbox() {
     setCursor(0);
   }, [guard]);
 
+  const runSearch = useCallback(async (q: string) => {
+    if (!q.trim()) { setSearchNote(null); if (view) void loadMessages(view); return; }
+    setLoading(true);
+    const found = await guard(() => api.search(q));
+    setLoading(false);
+    if (!found) return;
+    setRows(found.results);
+    setCount(found.count);
+    setCursor(0);
+    setOpen(null);
+    // Whole-token matching is a real limit of the blind index. Say so rather
+    // than letting an empty result look like an empty mailbox.
+    setSearchNote(found.note ?? null);
+  }, [guard, view, loadMessages]);
+
   const sync = useCallback(async () => {
     setSyncing(true);
     const result = await guard(() => api.sync());
@@ -114,6 +131,7 @@ export default function Inbox() {
   }, []);
 
   useEffect(() => { if (view) void loadMessages(view); }, [view, loadMessages]);
+  useEffect(() => { if (!query.trim()) setSearchNote(null); }, [query]);
 
   // -- opening ------------------------------------------------------------
 
@@ -181,6 +199,10 @@ export default function Inbox() {
         case "s": if (current) { ev.preventDefault(); void star(current); } break;
         case "!": if (current) { ev.preventDefault(); void phish(current); } break;
         case "c": ev.preventDefault(); setComposing({}); break;
+        case "/":
+          ev.preventDefault();
+          document.getElementById("mail-search")?.focus();
+          break;
         case "r": if (open ?? current) { ev.preventDefault(); void reply(open ?? current, false); } break;
         case "a": if (open ?? current) { ev.preventDefault(); void reply(open ?? current, true); } break;
         case "Escape": setOpen(null); break;
@@ -217,6 +239,18 @@ export default function Inbox() {
           <span className="grid h-6 w-6 place-items-center rounded-md bg-primary text-primary-foreground">✉</span>
           Terafort Mail
         </span>
+        <form
+          onSubmit={(e) => { e.preventDefault(); void runSearch(query); }}
+          className="ml-4 hidden max-w-sm flex-1 sm:block"
+        >
+          <input
+            id="mail-search"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search mail   /"
+            className="w-full rounded-md border border-border bg-muted/50 px-3 py-1.5 text-sm outline-none focus:border-primary"
+          />
+        </form>
         <span className="ml-auto flex items-center gap-3 text-xs text-muted-foreground">
           <span className="hidden sm:inline">{mailbox}</span>
           <span title="Session length">{Math.round(expiresIn / 60)} min left</span>
@@ -273,6 +307,11 @@ export default function Inbox() {
           </div>
           <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto">
             {loading && <Empty>Loading…</Empty>}
+            {!loading && searchNote && (
+              <div className="border-b border-border bg-amber-50 px-3 py-2 text-xs text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+                {searchNote}
+              </div>
+            )}
             {!loading && rows.length === 0 && (
               <Empty>
                 Nothing here.

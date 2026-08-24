@@ -24,8 +24,8 @@ import logging
 from django.db import transaction
 from django.utils import timezone
 
-from . import bundles, crypto, imap_client, threading as threads
-from .models import Folder, Mailbox, Message
+from . import bundles, crypto, imap_client, search, threading as threads
+from .models import Folder, Mailbox, Message, SearchToken
 
 log = logging.getLogger("mailcore.sync")
 
@@ -148,7 +148,7 @@ def _sync_folder(session, folder: Folder, depth: int, conn) -> dict:
                 "reply_to": envelope.reply_to,
                 "list_id": envelope.list_id,
             }
-            Message.objects.update_or_create(
+            row, _ = Message.objects.update_or_create(
                 folder=folder, uid=envelope.uid,
                 defaults={
                     "mailbox": mailbox,
@@ -162,6 +162,10 @@ def _sync_folder(session, folder: Folder, depth: int, conn) -> dict:
                         dek, _json(payload).encode("utf-8"), aad=aad),
                 },
             )
+            # Index the envelope now; the body is indexed when it is first
+            # fetched, since we do not have it yet.
+            _index(dek, mailbox, row, subject=envelope.subject,
+                   sender="%s %s" % (envelope.from_name, envelope.from_addr))
             created += 1
 
         for envelope in flag_rows:
@@ -233,6 +237,15 @@ def fetch_and_cache_body(session, message: Message, conn=None) -> dict:
     message.save(update_fields=["body_text_enc", "body_html_enc",
                                 "has_remote_images", "link_mismatch"])
 
+    # Now that we have the body, re-index with it. The envelope terms are
+    # regenerated rather than merged, so the row set always matches the
+    # message rather than accumulating from earlier passes.
+    envelope = open_envelope(session, message)
+    _index(dek, message.mailbox, message,
+           subject=envelope.get("subject", ""),
+           sender="%s %s" % (envelope.get("from_name", ""), envelope.get("from_addr", "")),
+           body=body.text or sanitiser.to_preview(body.text, clean_html, length=20000))
+
     return {
         "text": body.text,
         "html": clean_html,
@@ -273,6 +286,18 @@ def open_body(session, message: Message) -> dict:
 def _with_conn(session, fn):
     with imap_client.for_session(session) as conn:
         return fn(conn)
+
+
+def _index(dek, mailbox, message, *, subject="", sender="", body=""):
+    """Replace a message's search rows. Cheap, and idempotent on re-sync."""
+    SearchToken.objects.for_mailbox(mailbox).filter(message=message).delete()
+    terms = search.index_terms(dek, subject=subject, sender=sender, body=body)
+    if not terms:
+        return
+    SearchToken.objects.bulk_create([
+        SearchToken(mailbox=mailbox, message=message, token_hmac=d, field=f)
+        for d, f in terms
+    ], ignore_conflicts=True)
 
 
 def _json(value) -> str:
