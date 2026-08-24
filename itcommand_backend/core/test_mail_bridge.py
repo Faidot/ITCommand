@@ -9,17 +9,34 @@ Two things matter most here and neither is about the happy path:
 """
 from unittest import mock
 
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.urls import reverse
+
+
+class ThrottleIsolatedTestCase(TestCase):
+    """Clears the throttle cache between tests.
+
+    DRF counts requests in the cache, keyed by client address, and that cache
+    outlives an individual test in the same process. Any class here that posts
+    to the login or MFA routes will otherwise spend the 10/min budget and hand
+    a 429 to whichever test runs next — a failure that looks like broken logic
+    and moves depending on test order.
+    """
+
+    def setUp(self):
+        cache.clear()
+        super().setUp()
 
 from core import mail_bridge
 from core.models import User
 
 
-class FlagOffTests(TestCase):
+class FlagOffTests(ThrottleIsolatedTestCase):
     """The rollback path. This is what `MAIL_AUTH_ENABLED=false` must mean."""
 
     def setUp(self):
+        super().setUp()
         self.user = User.objects.create_user(
             email="local@terafort.com", password="pw12345!", full_name="Local")
 
@@ -55,8 +72,9 @@ class FlagOffTests(TestCase):
 
 
 @override_settings(MAIL_AUTH_ENABLED=True)
-class MailboxLoginTests(TestCase):
+class MailboxLoginTests(ThrottleIsolatedTestCase):
     def setUp(self):
+        super().setUp()
         self.user = User.objects.create_user(
             email="alice@terafort.com", password="unused", full_name="Alice")
         self.user.auth_source = User.AUTH_MAILBOX
@@ -387,3 +405,86 @@ class AdminPasswordResetTests(TestCase):
             r = self._reset(self.mailbox_user)
         self.assertEqual(r.status_code, 503)
         self.assertNotIn("temp_password", r.data)
+
+
+class CookieTransportTests(TestCase):
+    """The mailbox session id travels in an httpOnly cookie.
+
+    IT Command's own auth is a JWT in a header, so nothing here ever needed
+    cookies until the mail handoff. In development the frontend and API are
+    different origins, and without credentialed CORS the browser silently
+    neither stores nor sends the cookie — which surfaced as "your mailbox
+    session has expired" for a session that was alive the whole time.
+    """
+
+    def test_credentialed_cors_is_enabled(self):
+        from django.conf import settings
+        self.assertTrue(getattr(settings, "CORS_ALLOW_CREDENTIALS", False),
+                        "without this the browser will not store the session cookie")
+
+    def test_the_origin_list_is_explicit(self):
+        """The spec forbids credentials with a wildcard, and browsers enforce
+        it — a wildcard here silently disables the cookie again."""
+        from django.conf import settings
+        self.assertNotIn("*", settings.CORS_ALLOWED_ORIGINS)
+        self.assertTrue(settings.CORS_ALLOWED_ORIGINS)
+
+    def test_the_frontend_client_sends_credentials(self):
+        """Asserted against the source, because the failure is invisible: the
+        request simply arrives without the cookie and looks like an expired
+        session."""
+        import pathlib
+        client = (pathlib.Path(__file__).resolve().parents[2]
+                  / "itcommand_frontend" / "src" / "lib" / "api.ts")
+        if not client.exists():
+            self.skipTest("frontend not present in this checkout")
+        self.assertIn("withCredentials: true", client.read_text())
+
+
+@override_settings(MAIL_AUTH_ENABLED=True)
+class HandoffCookieRoundTripTests(ThrottleIsolatedTestCase):
+    """MFA sets the cookie; Open Mailbox reads it. If either half is wrong the
+    button reports an expired session for one that never existed."""
+
+    def setUp(self):
+        super().setUp()
+        self.user = User.objects.create_user(
+            email="cookie@terafort.org", password="x", full_name="Cookie")
+        self.user.auth_source = User.AUTH_MAILBOX
+        self.user.save(update_fields=["auth_source"])
+
+    def test_mfa_sets_an_httponly_sid_cookie(self):
+        with mock.patch.object(mail_bridge, "remote_mfa",
+                               return_value=(200, {"sid": "sid-abc"})):
+            r = self.client.post(reverse("auth_mailbox_mfa"),
+                                 {"ticket": "t", "code": "123456",
+                                  "email": "cookie@terafort.org"},
+                                 content_type="application/json")
+        cookie = r.cookies["itc_mail_sid"]
+        self.assertEqual(cookie.value, "sid-abc")
+        self.assertTrue(cookie["httponly"])
+        self.assertNotIn("sid", r.json(), "the sid leaked into the response body")
+
+    def test_open_mailbox_reads_that_cookie_and_mints_a_ticket(self):
+        from rest_framework_simplejwt.tokens import RefreshToken
+        token = RefreshToken.for_user(self.user).access_token
+        self.client.defaults["HTTP_AUTHORIZATION"] = "Bearer %s" % token
+        self.client.cookies["itc_mail_sid"] = "sid-abc"
+
+        seen = {}
+        with mock.patch.object(mail_bridge, "mint_handoff",
+                               side_effect=lambda **kw: seen.update(kw) or "tok.sig"):
+            r = self.client.post(reverse("auth_open_mailbox"))
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(seen["sid"], "sid-abc")
+        self.assertEqual(r.json()["ticket"], "tok.sig")
+
+    def test_without_the_cookie_it_asks_for_a_fresh_sign_in(self):
+        from rest_framework_simplejwt.tokens import RefreshToken
+        token = RefreshToken.for_user(self.user).access_token
+        self.client.defaults["HTTP_AUTHORIZATION"] = "Bearer %s" % token
+        with mock.patch.object(mail_bridge, "mint_handoff",
+                               side_effect=mail_bridge.MailBridgeError("no session")):
+            r = self.client.post(reverse("auth_open_mailbox"))
+        self.assertEqual(r.status_code, 409)
+        self.assertTrue(r.json()["reauth_required"])

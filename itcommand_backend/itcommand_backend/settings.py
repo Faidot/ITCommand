@@ -230,6 +230,12 @@ SIMPLE_JWT = {
 # When the frontend is served from the same origin as the API (the default
 # Docker/nginx setup), CORS is effectively a no-op, but it's kept env-driven so
 # the frontend can also run on a separate origin during development.
+# The mailbox session id rides in an httpOnly cookie, so the browser has to be
+# allowed to store and send it across the frontend/API origin split. Safe only
+# with an explicit origin list below — the spec forbids pairing credentials
+# with a wildcard, and the browser will refuse it.
+CORS_ALLOW_CREDENTIALS = True
+
 CORS_ALLOWED_ORIGINS = config(
     'CORS_ALLOWED_ORIGINS',
     default='http://localhost:3000,http://localhost:3001',
