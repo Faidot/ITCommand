@@ -15,6 +15,7 @@ Permission shape, in one place so it can be argued with:
     cancel deletion         admin and superadmin
     purge                   SUPERADMIN only, typed confirmation, after grace
 """
+from django.conf import settings
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
@@ -358,6 +359,82 @@ class ManagedMailboxViewSet(viewsets.ReadOnlyModelViewSet):
                   "They sign in with the mailbox password they already have — we "
                   "did not set it and do not know it. Reset it if nobody does."),
         )
+
+    @action(detail=True, methods=["post"], url_path="set-web-access")
+    def set_web_access(self, request, pk=None):
+        """Allow or refuse this mailbox in the web client.
+
+        Distinct from suspension: this leaves mail flowing and phones working
+        while keeping the address out of Terafort Mail.
+        """
+        box = self.get_object()
+        box.mail_app_enabled = bool(request.data.get("enabled"))
+        box.save(update_fields=["mail_app_enabled"])
+        record_audit(request,
+                     "MAILBOX_WEB_ENABLED" if box.mail_app_enabled else "MAILBOX_WEB_DISABLED",
+                     user=request.user, changes={"address": box.address})
+        return self._ok(box, message="Web access %s."
+                        % ("enabled" if box.mail_app_enabled else "disabled"))
+
+    @action(detail=True, methods=["post"], url_path="break-glass",
+            permission_classes=[IsSuperadmin])
+    def break_glass(self, request, pk=None):
+        """Open somebody else's mailbox. Superadmin only, and never quietly.
+
+        The mailbox owner is emailed at the moment this succeeds, naming who
+        asked and why. That notice is the whole justification for the feature
+        existing at all, so a failure to send it is reported back rather than
+        swallowed.
+        """
+        box = self.get_object()
+        reason = (request.data.get("reason") or "").strip()
+
+        if box.user_id and box.user.email.lower() == request.user.email.lower():
+            return Response({"detail": "That is your own mailbox."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if len(reason) < 10:
+            return Response(
+                {"reason": ["Give a reason of at least ten characters. The "
+                            "mailbox owner is shown it, so write it for them."]},
+                status=status.HTTP_400_BAD_REQUEST)
+
+        from core import mail_bridge
+        try:
+            code, body = mail_bridge.open_break_glass(
+                address=box.address, actor=request.user.email, reason=reason)
+        except mail_bridge.MailBridgeError as exc:
+            return self._fail(exc, status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        if code != 200 or not body.get("sid"):
+            return Response({"detail": body.get("detail", "Access was refused.")},
+                            status=status.HTTP_409_CONFLICT)
+
+        record_audit(request, "BREAK_GLASS_OPENED", user=request.user,
+                     changes={"address": box.address, "reason": reason,
+                              "reference": body.get("reference"),
+                              "owner_notified": body.get("owner_notified")})
+
+        response = self._ok(
+            box,
+            message="Opened %s. %s" % (
+                box.address,
+                "The owner has been emailed." if body.get("owner_notified")
+                else "WARNING: the owner could NOT be emailed — check the mail "
+                     "notice settings before relying on this."),
+            reference=body.get("reference"),
+            owner_notified=body.get("owner_notified"),
+            post_to=settings.MAIL_APP_HANDOFF_URL,
+        )
+        # Handed over the same way an ordinary Open Mailbox is: a single-use
+        # ticket in a form body, never a URL.
+        try:
+            response.data["ticket"] = mail_bridge.mint_handoff(
+                sid=body["sid"], address=box.address,
+                ua_hash=mail_bridge.ua_hash_for(request),
+                ip=mail_bridge.client_ip_for(request))
+        except mail_bridge.MailBridgeError:
+            response.data["ticket"] = None
+        return response
 
     # -- deletion ---------------------------------------------------------
 

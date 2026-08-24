@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import {
   Mail, RefreshCw, Search, ShieldAlert, KeyRound, Ban, RotateCcw,
-  Trash2, Plus, Copy, Check, Link2, HardDrive, Clock, Gauge, UserPlus,
+  Trash2, Plus, Copy, Check, Link2, HardDrive, Clock, Gauge, UserPlus, Globe, Eye,
 } from "lucide-react";
 
 import api from "@/lib/api";
@@ -39,6 +39,7 @@ interface Mailbox {
   disk_used_gb: number;
   usage_percent: number | null;
   suspended: boolean;
+  mail_app_enabled: boolean;
   status: "ACTIVE" | "SUSPENDED" | "PENDING_DELETION" | "MISSING" | "PURGED";
   exists_in_cpanel: boolean;
   pending_deletion: boolean;
@@ -107,6 +108,8 @@ export default function MailboxesPage() {
   const [userName, setUserName] = useState("");
   const [userRole, setUserRole] = useState("VIEWER");
   const [userReset, setUserReset] = useState(false);
+  const [bgTarget, setBgTarget] = useState<Mailbox | null>(null);
+  const [bgReason, setBgReason] = useState("");
   const [delTarget, setDelTarget] = useState<Mailbox | null>(null);
   const [delReason, setDelReason] = useState("");
   const [purgeTarget, setPurgeTarget] = useState<Mailbox | null>(null);
@@ -356,6 +359,21 @@ export default function MailboxesPage() {
                         <Ban className="h-4 w-4" />
                       </Button>
                     )}
+                    <Button size="sm" variant="ghost" disabled={busy === box.id}
+                            title={box.mail_app_enabled
+                              ? "Allowed in Terafort Mail — click to withdraw"
+                              : "Blocked from Terafort Mail — click to allow"}
+                            onClick={() => void act(box, "set-web-access",
+                              { enabled: !box.mail_app_enabled })}>
+                      <Globe className={`h-4 w-4 ${box.mail_app_enabled ? "" : "opacity-30"}`} />
+                    </Button>
+                    {isSuperadmin && box.exists_in_cpanel && box.status !== "PURGED" && (
+                      <Button size="sm" variant="ghost" title="Open this mailbox (break-glass)"
+                              disabled={busy === box.id}
+                              onClick={() => { setBgTarget(box); setBgReason(""); }}>
+                        <Eye className="h-4 w-4" />
+                      </Button>
+                    )}
                     {box.pending_deletion ? (
                       <>
                         <Button size="sm" variant="outline" disabled={busy === box.id}
@@ -410,6 +428,70 @@ export default function MailboxesPage() {
               const ok = await act(box, "set-password", pwValue ? { password: pwValue } : {});
               if (ok) setPwTarget(null);
             }}>Set password</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* BREAK-GLASS */}
+      <Dialog open={!!bgTarget} onOpenChange={(o) => !o && setBgTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Eye className="h-5 w-5" /> Open {bgTarget?.address}
+            </DialogTitle>
+            <DialogDescription>
+              This opens somebody else&apos;s mailbox. <strong>They are emailed
+              immediately</strong>, told who opened it and shown the reason you give
+              below. Every message you open is logged individually. The session lasts
+              30 minutes.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            placeholder="Why are you opening this mailbox?"
+            value={bgReason}
+            onChange={(e) => setBgReason(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground">
+            At least 10 characters. Write it for the mailbox owner — they are the
+            person who reads it.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setBgTarget(null)}>Cancel</Button>
+            <Button
+              disabled={bgReason.trim().length < 10 || busy === bgTarget?.id}
+              onClick={async () => {
+                setBusy(bgTarget!.id);
+                try {
+                  const res = await api.post(`/mailboxes/${bgTarget!.id}/break-glass/`,
+                                             { reason: bgReason });
+                  if (res.data.owner_notified) toast.success(res.data.message);
+                  else toast.warning(res.data.message);
+
+                  if (res.data.ticket) {
+                    // Same handoff as Open Mailbox: a single-use ticket in a
+                    // form body, never a URL.
+                    const form = document.createElement("form");
+                    form.method = "POST";
+                    form.action = res.data.post_to;
+                    form.target = "_blank";
+                    const field = document.createElement("input");
+                    field.type = "hidden";
+                    field.name = "ticket";
+                    field.value = res.data.ticket;
+                    form.appendChild(field);
+                    document.body.appendChild(form);
+                    form.submit();
+                    document.body.removeChild(form);
+                  }
+                  setBgTarget(null);
+                } catch (err: any) {
+                  toast.error(err?.response?.data?.detail
+                    ?? err?.response?.data?.reason?.[0] ?? "That was refused");
+                } finally { setBusy(null); }
+              }}
+            >
+              Open mailbox
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

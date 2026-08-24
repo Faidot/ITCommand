@@ -316,6 +316,17 @@ def remote_login(address: str, password: str) -> tuple[int, dict]:
                           {"email": address, "password": password})
 
 
+def open_break_glass(*, address: str, actor: str, reason: str) -> tuple[int, dict]:
+    """Ask the mail app to open somebody else's mailbox.
+
+    Goes over the service boundary rather than being reimplemented here: the
+    master credential, the audit row and the owner's notification all live
+    where the mailboxes do.
+    """
+    return _internal_post("/internal/v1/break-glass",
+                          {"address": address, "actor": actor, "reason": reason})
+
+
 def remote_mfa(ticket: str, code: str) -> tuple[int, dict]:
     """Step two. On success the body carries the sid of a live mail session."""
     return _internal_post("/internal/v1/auth/mfa", {"ticket": ticket, "code": code})

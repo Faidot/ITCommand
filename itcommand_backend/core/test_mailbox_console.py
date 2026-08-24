@@ -739,3 +739,111 @@ class DiskUnitTests(TestCase):
         self.assertEqual(box.quota_gb, 0.24)
         self.assertEqual(box.disk_used_gb, 0.08)
         self.assertEqual(box.usage_percent, 34.8)
+
+
+class WebAccessTests(TestCase):
+    """Whether a mailbox may be opened in the web client — separate from
+    whether it is suspended."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            email="waadmin@terafort.com", password="pw12345!",
+            full_name="WA Admin", role="ADMIN")
+        token = RefreshToken.for_user(self.admin).access_token
+        self.client.defaults["HTTP_AUTHORIZATION"] = "Bearer %s" % token
+        self.box = ManagedMailbox.objects.create(
+            address="info@terafort.com", domain="terafort.com")
+
+    def _post(self, body):
+        return self.client.post(
+            reverse("mailbox-set-web-access", kwargs={"pk": self.box.pk}),
+            body, content_type="application/json")
+
+    def test_mailboxes_may_use_the_web_client_by_default(self):
+        self.assertTrue(self.box.mail_app_enabled)
+
+    def test_web_access_can_be_withdrawn_without_suspending(self):
+        """Mail keeps flowing and phones keep working; only the web client
+        is closed."""
+        r = self._post({"enabled": False})
+        self.assertEqual(r.status_code, 200)
+        self.box.refresh_from_db()
+        self.assertFalse(self.box.mail_app_enabled)
+        self.assertFalse(self.box.suspended, "withdrawing web access suspended the mailbox")
+
+    def test_it_can_be_given_back(self):
+        self._post({"enabled": False})
+        self._post({"enabled": True})
+        self.box.refresh_from_db()
+        self.assertTrue(self.box.mail_app_enabled)
+
+
+class BreakGlassConsoleTests(TestCase):
+    """The console side. The mail app enforces the rules; this asserts IT
+    Command does not route around them."""
+
+    def setUp(self):
+        self.superadmin = User.objects.create_user(
+            email="bgsuper@terafort.com", password="pw12345!",
+            full_name="Super", role="SUPERADMIN")
+        self.admin = User.objects.create_user(
+            email="bgadmin@terafort.com", password="pw12345!",
+            full_name="Admin", role="ADMIN")
+        self.owner = User.objects.create_user(
+            email="kofi@terafort.com", password="x", full_name="Kofi")
+        self.box = ManagedMailbox.objects.create(
+            address="kofi@terafort.com", domain="terafort.com", user=self.owner)
+
+    def _as(self, user):
+        token = RefreshToken.for_user(user).access_token
+        self.client.defaults["HTTP_AUTHORIZATION"] = "Bearer %s" % token
+
+    def _post(self, body):
+        return self.client.post(
+            reverse("mailbox-break-glass", kwargs={"pk": self.box.pk}),
+            body, content_type="application/json")
+
+    def test_an_admin_may_not_break_glass(self):
+        self._as(self.admin)
+        self.assertEqual(self._post({"reason": "Investigating a phishing report"})
+                         .status_code, 403)
+
+    def test_a_thin_reason_is_refused_before_anything_is_opened(self):
+        self._as(self.superadmin)
+        with mock.patch("core.mail_bridge.open_break_glass") as remote:
+            r = self._post({"reason": "audit"})
+        self.assertEqual(r.status_code, 400)
+        remote.assert_not_called()
+
+    def test_it_reports_loudly_when_the_owner_could_not_be_told(self):
+        """The notice is the entire justification for the feature, so a
+        failure to send it is surfaced rather than swallowed."""
+        self._as(self.superadmin)
+        with mock.patch("core.mail_bridge.open_break_glass",
+                        return_value=(200, {"sid": "s", "reference": "r",
+                                            "owner_notified": False})), \
+             mock.patch("core.mail_bridge.mint_handoff", return_value="t.s"):
+            r = self._post({"reason": "Offboarding handover for a leaver"})
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.data["owner_notified"])
+        self.assertIn("WARNING", r.data["message"])
+
+    def test_a_successful_grant_returns_a_handoff_ticket_not_a_url(self):
+        self._as(self.superadmin)
+        with mock.patch("core.mail_bridge.open_break_glass",
+                        return_value=(200, {"sid": "s", "reference": "r",
+                                            "owner_notified": True})), \
+             mock.patch("core.mail_bridge.mint_handoff", return_value="tok.sig"):
+            r = self._post({"reason": "Investigating a reported phishing campaign"})
+        self.assertEqual(r.data["ticket"], "tok.sig")
+        self.assertNotIn("Location", r)
+
+    def test_it_is_audited_on_this_side_too(self):
+        self._as(self.superadmin)
+        with mock.patch("core.mail_bridge.open_break_glass",
+                        return_value=(200, {"sid": "s", "reference": "ref-1",
+                                            "owner_notified": True})), \
+             mock.patch("core.mail_bridge.mint_handoff", return_value="t.s"):
+            self._post({"reason": "Investigating a reported phishing campaign"})
+        from core.models import AuditLog
+        self.assertTrue(AuditLog.objects.filter(action="BREAK_GLASS_OPENED").exists())

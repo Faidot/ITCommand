@@ -29,7 +29,7 @@ class ManagedMailboxSerializer(serializers.ModelSerializer):
             "id", "address", "local_part", "domain",
             "user", "user_email", "user_name", "user_is_active", "is_shared",
             "quota_mb", "disk_used_mb", "quota_gb", "disk_used_gb", "usage_percent",
-            "suspended", "status",
+            "suspended", "status", "mail_app_enabled",
             "exists_in_cpanel", "missing_since",
             "pending_deletion", "days_until_purge", "purge_after",
             "deletion_requested_at", "deletion_requested_by", "deletion_reason",

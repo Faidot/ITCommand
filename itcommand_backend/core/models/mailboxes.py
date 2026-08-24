@@ -51,6 +51,17 @@ class ManagedMailbox(models.Model):
     exists_in_cpanel = models.BooleanField(default=True)
     missing_since = models.DateTimeField(null=True, blank=True)
 
+    #: Whether this mailbox may be opened in Terafort Mail at all.
+    #:
+    #: Separate from suspension on purpose: a mailbox can be perfectly live —
+    #: receiving mail, reachable from a phone — while still being kept out of
+    #: the web client. Shared and role addresses usually should be, since the
+    #: web client hands whoever opens it a full session.
+    mail_app_enabled = models.BooleanField(
+        default=True,
+        help_text="Allow this mailbox to be opened in Terafort Mail.",
+    )
+
     last_synced_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     #: When IT Command created it, as opposed to when we first saw it. Null
