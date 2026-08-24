@@ -6,7 +6,7 @@ import { landingRoute } from "@/lib/permissions";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
-import { Eye, EyeOff, Server } from "lucide-react";
+import { Eye, EyeOff, Server, ShieldCheck, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
@@ -37,6 +37,19 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
+  // Mailbox-backed accounts sign in in two steps: Dovecot checks the
+  // password, then we check a code. IMAP has no second factor of its own,
+  // which is the whole reason this step exists.
+  const [challenge, setChallenge] = useState<{
+    ticket: string;
+    email: string;
+    enrolling: boolean;
+    secret?: string;
+    uri?: string;
+  } | null>(null);
+  const [code, setCode] = useState("");
+  const [recoveryCodes, setRecoveryCodes] = useState<string[] | null>(null);
+
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
     defaultValues: {
@@ -53,6 +66,20 @@ export default function LoginPage() {
         password: values.password,
       });
 
+      // A mailbox account gets a challenge, not tokens. Reading `access` off
+      // this response would hand undefined to setAuth and sign nobody in.
+      if (response.data.mfa_required) {
+        setChallenge({
+          ticket: response.data.ticket,
+          email: values.email,
+          enrolling: Boolean(response.data.enrolment_required),
+          secret: response.data.totp_secret,
+          uri: response.data.otpauth_uri,
+        });
+        setIsLoading(false);
+        return;
+      }
+
       const { user, access, refresh } = response.data;
       setAuth(user, access, refresh);
       toast.success("Successfully logged in");
@@ -67,6 +94,110 @@ export default function LoginPage() {
     } finally {
       setIsLoading(false);
     }
+  }
+
+  async function submitCode() {
+    if (!challenge) return;
+    setIsLoading(true);
+    try {
+      const response = await api.post("/auth/mfa/", {
+        ticket: challenge.ticket,
+        code: code.trim(),
+        email: challenge.email,
+      });
+      const { user, access, refresh } = response.data;
+
+      // Shown exactly once, and only at enrolment. We keep hashes, so there
+      // is no second chance to display these.
+      if (response.data.recovery_codes) {
+        setRecoveryCodes(response.data.recovery_codes);
+        setAuth(user, access, refresh);
+        setIsLoading(false);
+        return;
+      }
+
+      setAuth(user, access, refresh);
+      toast.success("Successfully logged in");
+      router.push(landingRoute(user));
+    } catch (error) {
+      const err = error as { response?: { data?: { detail?: string } } };
+      toast.error(err.response?.data?.detail || "That code is not right");
+      setCode("");
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  if (recoveryCodes) {
+    return (
+      <div className="relative flex min-h-screen items-center justify-center bg-background p-4">
+        <div className="w-full max-w-md rounded-xl border bg-card p-6 shadow-lg">
+          <h1 className="mb-1 text-lg font-semibold">Save your recovery codes</h1>
+          <p className="mb-4 text-sm text-muted-foreground">
+            Each one signs you in once if you lose your phone. They are shown now and
+            never again — we only keep hashes of them.
+          </p>
+          <div className="mb-4 grid grid-cols-2 gap-2 rounded-lg bg-muted p-3 font-mono text-sm">
+            {recoveryCodes.map((c) => <span key={c}>{c}</span>)}
+          </div>
+          <Button className="w-full" onClick={() => router.push("/dashboard")}>
+            I have saved them
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (challenge) {
+    return (
+      <div className="relative flex min-h-screen items-center justify-center bg-background p-4">
+        <div className="w-full max-w-md rounded-xl border bg-card p-6 shadow-lg">
+          <div className="mb-4 flex items-center gap-2">
+            <ShieldCheck className="h-5 w-5 text-primary" />
+            <h1 className="text-lg font-semibold">
+              {challenge.enrolling ? "Set up your authenticator" : "Enter your code"}
+            </h1>
+          </div>
+
+          {challenge.enrolling ? (
+            <>
+              <p className="mb-3 text-sm text-muted-foreground">
+                Your password was accepted by the mail server. Add this secret to your
+                authenticator app, then enter the six-digit code it shows.
+              </p>
+              <div className="mb-4 break-all rounded-lg bg-muted p-3 text-center font-mono text-sm">
+                {challenge.secret}
+              </div>
+            </>
+          ) : (
+            <p className="mb-4 text-sm text-muted-foreground">
+              Your password was accepted. Enter the six-digit code from your
+              authenticator, or one of your recovery codes.
+            </p>
+          )}
+
+          <Input
+            autoFocus
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") void submitCode(); }}
+            placeholder="123456"
+            className="mb-3 text-center font-mono text-lg tracking-widest"
+          />
+          <Button className="w-full" disabled={isLoading || code.trim().length < 6}
+                  onClick={() => void submitCode()}>
+            {isLoading ? "Checking…" : "Sign in"}
+          </Button>
+          <button
+            type="button"
+            onClick={() => { setChallenge(null); setCode(""); }}
+            className="mt-3 flex w-full items-center justify-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+          >
+            <ArrowLeft className="h-3 w-3" /> Start again
+          </button>
+        </div>
+      </div>
+    );
   }
 
   return (
