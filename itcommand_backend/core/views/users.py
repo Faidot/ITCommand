@@ -622,8 +622,22 @@ class ChangePasswordView(APIView):
 
         record_audit(request, 'MAILBOX_PASSWORD_CHANGED', obj=user, user=user,
                      changes={'email': user.email, 'by': 'self'})
-        return Response({
+
+        # The live mail session still holds the OLD credential, and its
+        # encryption key is wrapped under the old password too. Left alone it
+        # would fail on the next IMAP call with nothing to explain why, so it
+        # is ended here and the user is told to reopen their mailbox.
+        sid = request.COOKIES.get(settings.MAIL_SID_COOKIE, '')
+        if sid:
+            mail_bridge.destroy_mail_session(sid)
+
+        response = Response({
             'status': 'Password updated successfully',
-            'note': 'This is the password for both IT Command and your mailbox. '
-                    'Sign in to webmail with the new one.',
+            'note': 'That was the password for both IT Command and your mailbox — '
+                    'there is only one. Your open mailbox session has been ended; '
+                    'open it again to carry on reading mail.',
+            'mailbox_session_ended': bool(sid),
         })
+        if sid:
+            response.delete_cookie(settings.MAIL_SID_COOKIE, path='/')
+        return response

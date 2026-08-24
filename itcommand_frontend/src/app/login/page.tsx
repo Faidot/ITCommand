@@ -10,6 +10,7 @@ import { Eye, EyeOff, Server, ShieldCheck, ArrowLeft } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
 import { useAuthStore } from "@/store/authStore";
+import QRCode from "react-qr-code";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -162,12 +163,29 @@ export default function LoginPage() {
           {challenge.enrolling ? (
             <>
               <p className="mb-3 text-sm text-muted-foreground">
-                Your password was accepted by the mail server. Add this secret to your
-                authenticator app, then enter the six-digit code it shows.
+                Your password was accepted by the mail server. One more step, once:
+                scan this with an authenticator app — Google Authenticator, Microsoft
+                Authenticator, Authy or 1Password all work — then enter the six-digit
+                code it shows.
               </p>
-              <div className="mb-4 break-all rounded-lg bg-muted p-3 text-center font-mono text-sm">
-                {challenge.secret}
-              </div>
+              {challenge.uri && (
+                <div className="mb-3 flex justify-center rounded-lg bg-white p-4">
+                  <QRCode value={challenge.uri} size={168} />
+                </div>
+              )}
+              <details className="mb-4">
+                <summary className="cursor-pointer text-xs text-muted-foreground">
+                  Can&apos;t scan? Type this instead
+                </summary>
+                <div className="mt-2 break-all rounded-lg bg-muted p-3 text-center font-mono text-xs">
+                  {challenge.secret}
+                </div>
+              </details>
+              <p className="mb-3 text-xs text-muted-foreground">
+                This code changes every 30 seconds and is asked for at every sign-in.
+                Your mailbox password alone is no longer enough to reach your mail —
+                which is the point, because IMAP has no second factor of its own.
+              </p>
             </>
           ) : (
             <p className="mb-4 text-sm text-muted-foreground">

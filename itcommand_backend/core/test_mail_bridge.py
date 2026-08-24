@@ -212,3 +212,90 @@ class WireFormatTests(TestCase):
         blob = mail_bridge._seal(b"x", mail_bridge.SESSION_AAD)
         with self.assertRaises(mail_bridge.MailBridgeError):
             mail_bridge._unseal(blob, mail_bridge.DEK_AAD)
+
+
+@override_settings(MAIL_AUTH_ENABLED=True)
+class SelfPasswordChangeTests(TestCase):
+    """Changing your own password when Dovecot owns it.
+
+    There is only one password, so this is not "change two things in step" —
+    it is one change that both systems see, because IT Command holds no hash
+    for a mailbox account and asks Dovecot at every sign-in.
+    """
+
+    def setUp(self):
+        self.local = User.objects.create_user(
+            email="local2@terafort.com", password="OldLocalPw1!", full_name="Local")
+        self.mailbox_user = User.objects.create_user(
+            email="kofi@terafort.com", password="unused", full_name="Kofi")
+        self.mailbox_user.auth_source = User.AUTH_MAILBOX
+        self.mailbox_user.set_unusable_password()
+        self.mailbox_user.save()
+
+    def _as(self, user):
+        from rest_framework_simplejwt.tokens import RefreshToken
+        token = RefreshToken.for_user(user).access_token
+        self.client.defaults["HTTP_AUTHORIZATION"] = "Bearer %s" % token
+
+    def _change(self, old, new):
+        return self.client.post(reverse("auth_password"),
+                                {"old_password": old, "new_password": new},
+                                content_type="application/json")
+
+    def test_a_local_account_still_changes_its_django_password(self):
+        self._as(self.local)
+        r = self._change("OldLocalPw1!", "BrandNewPw2!")
+        self.assertEqual(r.status_code, 200)
+        self.local.refresh_from_db()
+        self.assertTrue(self.local.check_password("BrandNewPw2!"))
+
+    def test_a_mailbox_account_is_verified_against_dovecot_not_a_hash(self):
+        """It has no hash to check, so the only authority is the mail server."""
+        self._as(self.mailbox_user)
+        with mock.patch.object(mail_bridge, "imap_check") as check, \
+             mock.patch("core.mailbox_admin.set_password") as write:
+            from core.models.mailboxes import ManagedMailbox
+            ManagedMailbox.objects.create(address="kofi@terafort.com",
+                                          domain="terafort.com")
+            r = self._change("TheirRealMailboxPw1!", "ANewMailboxPw2!")
+        self.assertEqual(r.status_code, 200)
+        check.assert_called_once()
+        write.assert_called_once()
+
+    def test_a_wrong_current_password_is_rejected_by_dovecot(self):
+        self._as(self.mailbox_user)
+        with mock.patch.object(mail_bridge, "imap_check", side_effect=PermissionError):
+            r = self._change("WrongOne1!", "ANewMailboxPw2!")
+        self.assertEqual(r.status_code, 400)
+        self.assertIn("old_password", r.json())
+
+    def test_an_outage_does_not_claim_the_password_was_wrong(self):
+        self._as(self.mailbox_user)
+        with mock.patch.object(mail_bridge, "imap_check",
+                               side_effect=mail_bridge.ImapUnavailable("down")):
+            r = self._change("TheirRealMailboxPw1!", "ANewMailboxPw2!")
+        self.assertEqual(r.status_code, 503)
+        self.assertIn("Nothing has changed", r.json()["detail"])
+
+    def test_the_stale_mail_session_is_ended(self):
+        """It still holds the old credential and a key wrapped under the old
+        password. Left alone it fails on the next IMAP call with nothing to
+        explain why."""
+        self._as(self.mailbox_user)
+        self.client.cookies["itc_mail_sid"] = "stale-sid"
+        with mock.patch.object(mail_bridge, "imap_check"), \
+             mock.patch("core.mailbox_admin.set_password"), \
+             mock.patch.object(mail_bridge, "destroy_mail_session") as destroy:
+            from core.models.mailboxes import ManagedMailbox
+            ManagedMailbox.objects.create(address="kofi@terafort.com",
+                                          domain="terafort.com")
+            r = self._change("TheirRealMailboxPw1!", "ANewMailboxPw2!")
+        destroy.assert_called_once_with("stale-sid")
+        self.assertTrue(r.json()["mailbox_session_ended"])
+
+    def test_a_missing_mailbox_record_is_reported_rather_than_guessed(self):
+        """We never write to an address we have not confirmed exists."""
+        self._as(self.mailbox_user)
+        with mock.patch.object(mail_bridge, "imap_check"):
+            r = self._change("TheirRealMailboxPw1!", "ANewMailboxPw2!")
+        self.assertEqual(r.status_code, 409)
