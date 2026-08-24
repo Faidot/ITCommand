@@ -176,29 +176,138 @@ def notify_owner(*, address: str, actor: str, reason: str, minutes: int,
            minutes, reference, reason)
     )
 
+    return _send_notice(address, "Your mailbox was opened by an administrator",
+                        body, sender)
+
+
+def _send_notice(address: str, subject: str, body: str, sender: str) -> bool:
+    """Send one notice. Shared so both paths cannot drift in how they fail."""
     try:
         import smtplib
+        import ssl
         from email.message import EmailMessage
 
         msg = EmailMessage()
         msg["From"] = sender
         msg["To"] = address
-        msg["Subject"] = "Your mailbox was opened by an administrator"
+        msg["Subject"] = subject
         msg.set_content(body)
 
-        with smtplib.SMTP(settings.MAIL_SMTP_HOST,
-                          int(settings.MAIL_SMTP_PORT), timeout=15) as conn:
-            if settings.MAIL_SMTP_STARTTLS:
-                conn.starttls()
+        port = int(settings.MAIL_SMTP_PORT)
+        if settings.MAIL_SMTP_STARTTLS:
+            conn = smtplib.SMTP(settings.MAIL_SMTP_HOST, port, timeout=15)
+            conn.starttls(context=ssl.create_default_context())
+        else:
+            # 465 is implicit TLS; STARTTLS on it fails before it starts.
+            conn = smtplib.SMTP_SSL(settings.MAIL_SMTP_HOST, port, timeout=15,
+                                    context=ssl.create_default_context())
+        with conn:
             password = getattr(settings, "MAIL_NOTICE_PASSWORD", "")
             if password:
                 conn.login(sender, password)
             conn.send_message(msg)
         return True
     except Exception:  # noqa: BLE001
-        log.exception("could not notify %s that %s opened their mailbox",
-                      address, actor)
+        log.exception("could not send the mailbox notice to %s", address)
         return False
+
+
+# ---------------------------------------------------------------------------
+# Reset-and-enter
+#
+# The alternative to a master user, and the one that works with no server
+# configuration at all. An administrator resets the mailbox password and then
+# opens it with the new one.
+#
+# It is cruder than break-glass and the difference matters: the owner is
+# LOCKED OUT until somebody hands them the new password. That is a real cost
+# to a colleague, and it is also the thing that makes this honest — they
+# cannot fail to notice, whatever anyone forgets to tell them.
+# ---------------------------------------------------------------------------
+
+def open_with_credential(*, address: str, password: str, actor: str,
+                         reason: str = "", ip: str = "", ua_hash: str = "",
+                         minutes: int = GRANT_MINUTES):
+    """Open a mailbox using a password the caller already set.
+
+    Deliberately does not verify who the caller is — that is IT Command's job,
+    and this route is reachable only over the service boundary. What it does
+    verify is that Dovecot accepts the credential, so a failed reset cannot
+    produce a session pointing at a mailbox nobody can actually open.
+    """
+    address = address.strip().lower()
+    mailbox = Mailbox.objects.filter(address=address).first()
+    if mailbox is None:
+        raise BreakGlassError("No mailbox record for %s. Sync first." % address)
+
+    try:
+        imap_auth.authenticate(address, password)
+    except PermissionError as exc:
+        raise BreakGlassError(
+            "Dovecot refused the new password for %s. The reset may not have "
+            "taken effect — check cPanel before trying again." % address) from exc
+    except imap_auth.ImapUnavailable as exc:
+        raise BreakGlassError("The mail server is not reachable.") from exc
+
+    # A fresh key, like break-glass: the owner's cached mail was sealed under
+    # their OLD password and is unreadable now. This session reads live from
+    # IMAP, which is the honest consequence of having changed the password.
+    session = sessions.get_store().create_session(
+        mailbox_address=address,
+        mailbox_id=str(mailbox.id),
+        credential=password,
+        dek_b64=base64.b64encode(crypto.new_key()).decode("ascii"),
+        ua_hash=ua_hash,
+        ip=ip,
+    )
+    session.scopes = ["reset_entry"]
+    session.absolute_expiry = timezone.now().timestamp() + minutes * 60
+    session.mfa_verified = True
+    sessions.get_store()._save(session)
+
+    reference = uuid.uuid4()
+    record_audit("MAILBOX_OPENED_BY_RESET", mailbox_address=address, actor=actor,
+                 reason=reason or "No reason given.", reference=str(reference))
+    log.warning("RESET-AND-ENTER: %s opened %s after resetting its password",
+                actor, address)
+
+    notified = notify_owner_of_reset(address=address, actor=actor, reason=reason,
+                                     reference=reference)
+    return session, {"reference": str(reference), "owner_notified": notified,
+                     "expires_in": minutes * 60}
+
+
+def notify_owner_of_reset(*, address: str, actor: str, reason: str, reference) -> bool:
+    """Tell the owner their password was changed and their mailbox opened.
+
+    Worded differently from the break-glass notice on purpose: this one has to
+    explain why their password stopped working, or their first assumption will
+    be that something is broken.
+    """
+    sender = getattr(settings, "MAIL_NOTICE_FROM", "")
+    if not sender:
+        log.error("MAIL_NOTICE_FROM is not set — the owner of %s was NOT told "
+                  "their password was reset and their mailbox opened by %s",
+                  address, actor)
+        return False
+
+    body = (
+        "Your mailbox password was changed by an administrator, and your "
+        "mailbox was opened.\n\n"
+        "  Mailbox   %s\n"
+        "  By        %s\n"
+        "  When      %s\n"
+        "  Reference %s\n\n"
+        "%s"
+        "Your old password no longer works — for your mailbox or for IT "
+        "Command, because they are the same password. Ask %s for the new one.\n\n"
+        "This notice is sent automatically and cannot be turned off. If you did "
+        "not expect this, reply to it.\n"
+        % (address, actor, timezone.now().strftime("%d %b %Y %H:%M %Z"), reference,
+           ("Reason given:\n\n  %s\n\n" % reason) if reason else "",
+           actor)
+    )
+    return _send_notice(address, "Your mailbox password was changed", body, sender)
 
 
 def record_read(session, message_id: str, subject: str = "") -> None:

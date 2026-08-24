@@ -181,8 +181,13 @@ class OpenMailboxTests(TestCase):
     def test_ticket_is_returned_in_the_body_not_a_redirect(self):
         """A redirect would put the ticket in a URL, which is what the form
         POST exists to avoid."""
+        from core import teramailer
         self._auth(self.mailbox_user)
-        with mock.patch.object(mail_bridge, "mint_handoff", return_value="tok.sig"):
+        self.client.cookies["itc_mail_sid"] = "sid-abc"
+        with mock.patch.object(mail_bridge, "read_mail_session",
+                               return_value={"mailbox_address": self.mailbox_user.email,
+                                             "credential": "pw"}), \
+             mock.patch.object(teramailer, "issue_sso_ticket", return_value="tok.sig"):
             r = self.client.post(reverse("auth_open_mailbox"))
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.json()["ticket"], "tok.sig")
@@ -197,8 +202,7 @@ class OpenMailboxTests(TestCase):
 
     def test_expired_mail_session_asks_for_re_authentication(self):
         self._auth(self.mailbox_user)
-        with mock.patch.object(mail_bridge, "mint_handoff",
-                               side_effect=mail_bridge.MailBridgeError("no session")):
+        with mock.patch.object(mail_bridge, "read_mail_session", return_value=None):
             r = self.client.post(reverse("auth_open_mailbox"))
         self.assertEqual(r.status_code, 409)
         self.assertTrue(r.json()["reauth_required"])
@@ -479,19 +483,26 @@ class HandoffCookieRoundTripTests(ThrottleIsolatedTestCase):
         self.assertTrue(cookie["httponly"])
         self.assertNotIn("sid", r.json(), "the sid leaked into the response body")
 
-    def test_open_mailbox_reads_that_cookie_and_mints_a_ticket(self):
+    def test_open_mailbox_reads_that_cookie_and_gets_a_ticket(self):
+        """The cookie names the session; the session holds the credential;
+        the credential buys a ticket from the webmail. Rewritten when the
+        client became TeraMailer — it used to mint the ticket itself."""
         from rest_framework_simplejwt.tokens import RefreshToken
+        from core import teramailer
         token = RefreshToken.for_user(self.user).access_token
         self.client.defaults["HTTP_AUTHORIZATION"] = "Bearer %s" % token
         self.client.cookies["itc_mail_sid"] = "sid-abc"
 
         seen = {}
-        with mock.patch.object(mail_bridge, "mint_handoff",
-                               side_effect=lambda **kw: seen.update(kw) or "tok.sig"):
+        with mock.patch.object(mail_bridge, "read_mail_session",
+                               return_value={"mailbox_address": self.user.email,
+                                             "credential": "pw"}), \
+             mock.patch.object(teramailer, "issue_sso_ticket",
+                               side_effect=lambda **kw: seen.update(kw) or "tok"):
             r = self.client.post(reverse("auth_open_mailbox"))
         self.assertEqual(r.status_code, 200)
-        self.assertEqual(seen["sid"], "sid-abc")
-        self.assertEqual(r.json()["ticket"], "tok.sig")
+        self.assertEqual(seen["email"], self.user.email)
+        self.assertEqual(r.json()["ticket"], "tok")
 
     def test_without_the_cookie_it_asks_for_a_fresh_sign_in(self):
         from rest_framework_simplejwt.tokens import RefreshToken

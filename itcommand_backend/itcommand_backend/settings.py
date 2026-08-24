@@ -358,3 +358,17 @@ MAIL_SID_COOKIE = config('MAIL_SID_COOKIE', default='itc_mail_sid')
 # asked for about once a month rather than at every sign-in. Signed, httpOnly,
 # and useless without the mailbox password.
 MAIL_DEVICE_COOKIE = config('MAIL_DEVICE_COOKIE', default='itc_2fa_device')
+
+# ---------------------------------------------------------------------------
+# TeraMailer — the webmail in /mail
+#
+# TERAMAILER_URL is where IT Command's server reaches it (internal); the public
+# URL is where the *browser* posts the sign-in ticket, and the two differ
+# behind a proxy. The shared secret must equal ITC_SHARED_SECRET in the mail
+# backend's .env, or every call fails closed.
+# ---------------------------------------------------------------------------
+TERAMAILER_URL = config('TERAMAILER_URL', default='http://127.0.0.1:5000')
+TERAMAILER_PUBLIC_URL = config('TERAMAILER_PUBLIC_URL', default='http://localhost:5000')
+TERAMAILER_SHARED_SECRET = config('TERAMAILER_SHARED_SECRET', default='')
+TERAMAILER_SERVICE_NAME = config('TERAMAILER_SERVICE_NAME', default='itcommand')
+TERAMAILER_WEBMAIL_URL = config('TERAMAILER_WEBMAIL_URL', default='http://localhost:3000')

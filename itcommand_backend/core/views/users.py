@@ -14,7 +14,7 @@ import secrets
 from core.models import *
 from core.serializers import *
 from core.encryption import decrypt_value
-from core import mail_bridge, mailbox_admin, mailbox_provisioning
+from core import mail_bridge, mailbox_admin, mailbox_provisioning, teramailer
 from core.mixins import AuditLogMixin, record_audit
 from core.permissions import IsSuperadmin, IsAdminOrSuperadmin, IsManagerOrHigher, ReadOnlyViewerOrHigher, VaultAccessPermission, UserManagementPermission, HasModulePermission
 from rest_framework.pagination import PageNumberPagination
@@ -230,13 +230,8 @@ class OpenMailboxView(APIView):
                             status=status.HTTP_403_FORBIDDEN)
 
         sid = request.COOKIES.get(settings.MAIL_SID_COOKIE, '')
-        try:
-            ticket = mail_bridge.mint_handoff(
-                sid=sid, address=request.user.email,
-                ua_hash=mail_bridge.ua_hash_for(request),
-                ip=mail_bridge.client_ip_for(request),
-            )
-        except mail_bridge.MailBridgeError:
+        record = mail_bridge.read_mail_session(sid)
+        if not record or not record.get('credential'):
             # The mail session expired independently of the IT Command JWT.
             # Signing in again is the only honest answer: we hold no credential
             # to rebuild it with.
@@ -245,9 +240,21 @@ class OpenMailboxView(APIView):
                  'reauth_required': True},
                 status=status.HTTP_409_CONFLICT)
 
+        try:
+            ticket = teramailer.issue_sso_ticket(
+                email=record.get('mailbox_address') or request.user.email,
+                password=record['credential'],
+            )
+        except teramailer.TeraMailerError as exc:
+            return Response({'detail': str(exc)},
+                            status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
         record_audit(request, 'MAILBOX_HANDOFF', obj=request.user, user=request.user,
                      changes={'email': request.user.email})
-        return Response({'ticket': ticket, 'post_to': settings.MAIL_APP_HANDOFF_URL})
+        # The ticket goes back in the response body and onward in a form body.
+        # Never a URL: a bearer value in a query string is written to browser
+        # history, sent in Referer, and captured in access logs on both hosts.
+        return Response({'ticket': ticket, 'post_to': teramailer.handoff_url()})
 
 
 class UserMeView(APIView):

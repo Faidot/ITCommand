@@ -247,3 +247,98 @@ class OptionalReasonTests(MailTestCase):
     def test_it_is_still_required_by_default(self):
         with self.assertRaises(breakglass.BreakGlassError):
             self._open("audit")
+
+
+class ResetAndEnterTests(MailTestCase):
+    """Opening a mailbox by resetting its password.
+
+    The alternative where Dovecot has no master user. Cruder, and the
+    difference matters: the owner is locked out until somebody hands them the
+    new password. That visibility is also what makes it honest — break-glass
+    is silent and leans on a notice nobody may read; this cannot be missed.
+    """
+
+    def test_it_needs_no_master_user(self):
+        """The whole reason it exists."""
+        self.assertFalse(breakglass.enabled())
+        with mock.patch.object(breakglass.imap_auth, "authenticate", _ok), \
+             mock.patch.object(breakglass, "notify_owner_of_reset", return_value=True):
+            session, meta = breakglass.open_with_credential(
+                address=self.bob.address, password="a-new-password",
+                actor="boss@terafort.com")
+        self.assertEqual(session.mailbox_address, self.bob.address)
+
+    def test_the_credential_must_actually_work(self):
+        """A reset that silently failed must not produce a session for a
+        mailbox nobody can open."""
+        with mock.patch.object(breakglass.imap_auth, "authenticate",
+                               side_effect=PermissionError):
+            with self.assertRaises(breakglass.BreakGlassError) as ctx:
+                breakglass.open_with_credential(
+                    address=self.bob.address, password="wrong",
+                    actor="boss@terafort.com")
+        self.assertIn("reset may not have taken effect", str(ctx.exception))
+
+    def test_an_outage_is_not_reported_as_a_bad_reset(self):
+        with mock.patch.object(breakglass.imap_auth, "authenticate",
+                               side_effect=breakglass.imap_auth.ImapUnavailable("down")):
+            with self.assertRaises(breakglass.BreakGlassError) as ctx:
+                breakglass.open_with_credential(
+                    address=self.bob.address, password="x", actor="a@b.c")
+        self.assertIn("not reachable", str(ctx.exception))
+
+    def test_it_cannot_read_the_owners_cached_mail(self):
+        """Their cache was sealed under the OLD password. Changing it does not
+        unlock what was already there."""
+        from mailcore import crypto, sync
+        with mock.patch.object(breakglass.imap_auth, "authenticate", _ok), \
+             mock.patch.object(breakglass, "notify_owner_of_reset", return_value=True):
+            session, _ = breakglass.open_with_credential(
+                address=self.bob.address, password="new", actor="a@b.c")
+        with self.assertRaises(crypto.SealError):
+            sync.open_envelope(session, self.bob.message)
+
+    def test_the_owner_is_told_their_password_changed(self):
+        """Worded differently from break-glass on purpose — this one has to
+        explain why their password stopped working."""
+        sent = []
+        with mock.patch.object(breakglass.imap_auth, "authenticate", _ok), \
+             mock.patch.object(breakglass, "notify_owner_of_reset",
+                               lambda **kw: sent.append(kw) or True):
+            breakglass.open_with_credential(
+                address=self.bob.address, password="new", actor="boss@terafort.com")
+        self.assertEqual(len(sent), 1)
+        self.assertEqual(sent[0]["address"], self.bob.address)
+
+    def test_it_is_audited_distinctly_from_break_glass(self):
+        with mock.patch.object(breakglass.imap_auth, "authenticate", _ok), \
+             mock.patch.object(breakglass, "notify_owner_of_reset", return_value=True):
+            breakglass.open_with_credential(
+                address=self.bob.address, password="new", actor="boss@terafort.com",
+                reason="Leaver handover")
+        row = MailAuditLog.objects.filter(action="MAILBOX_OPENED_BY_RESET").first()
+        self.assertIsNotNone(row)
+        self.assertEqual(row.actor, "boss@terafort.com")
+        self.assertIn("handover", row.detail["reason"])
+
+    def test_a_blank_reason_is_recorded_as_such(self):
+        with mock.patch.object(breakglass.imap_auth, "authenticate", _ok), \
+             mock.patch.object(breakglass, "notify_owner_of_reset", return_value=True):
+            breakglass.open_with_credential(
+                address=self.bob.address, password="new", actor="a@b.c")
+        row = MailAuditLog.objects.filter(action="MAILBOX_OPENED_BY_RESET").first()
+        self.assertEqual(row.detail["reason"], "No reason given.")
+
+    def test_an_unknown_mailbox_is_refused(self):
+        with self.assertRaises(breakglass.BreakGlassError):
+            breakglass.open_with_credential(
+                address="nobody@terafort.com", password="x", actor="a@b.c")
+
+    def test_the_session_is_short(self):
+        import time
+        with mock.patch.object(breakglass.imap_auth, "authenticate", _ok), \
+             mock.patch.object(breakglass, "notify_owner_of_reset", return_value=True):
+            session, meta = breakglass.open_with_credential(
+                address=self.bob.address, password="new", actor="a@b.c")
+        self.assertLess(session.absolute_expiry - time.time(), 60 * 60)
+        self.assertIn("reset_entry", session.scopes)

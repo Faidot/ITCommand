@@ -12,7 +12,8 @@ from .views.vault import (
 from .views import (
     ProfileView, ChangePasswordView,
     LoginView, LogoutView, UserMeView, MailboxMfaView, OpenMailboxView,
-    ManagedMailboxViewSet, DepartmentViewSet, UserViewSet, RoleViewSet,
+    ManagedMailboxViewSet,
+    MailSettingsView, MailSessionsView, MailLogsView, MailTestView, DepartmentViewSet, UserViewSet, RoleViewSet,
     AssetCategoryViewSet, AssetViewSet, AssetNoteViewSet, VaultCredentialViewSet, AccountWorkspaceViewSet,
     FinancialYearViewSet, BudgetCategoryViewSet, BudgetViewSet, ExpenseViewSet, IncomeViewSet,
     IncomeSourceViewSet, CostOverviewView, RecurringIncomeViewSet,
@@ -163,6 +164,12 @@ urlpatterns = [
     path('lov/', ListOfValuesView.as_view(), name='list_of_values'),
     path('lov/values/<int:pk>/', ListOfValuesItemView.as_view(), name='list_of_values_item'),
     path('users/active/', ActiveUsersView.as_view(), name='active_users'),
+    # The Mails tab: TeraMailer's admin panel, under IT Command's roles.
+    path('mail-settings/', MailSettingsView.as_view(), name='mail_settings'),
+    path('mail-settings/sessions/', MailSessionsView.as_view(), name='mail_settings_sessions'),
+    path('mail-settings/logs/', MailLogsView.as_view(), name='mail_settings_logs'),
+    path('mail-settings/test/', MailTestView.as_view(), name='mail_settings_test'),
+
     path('integrations/', IntegrationsView.as_view(), name='integrations'),
     path('integrations/test/', IntegrationTestView.as_view(), name='integration_test'),
     path('integrations/brex/test/', BrexConnectionTestView.as_view(), name='brex_connection_test'),

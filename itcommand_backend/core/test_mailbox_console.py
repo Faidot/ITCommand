@@ -847,3 +847,105 @@ class BreakGlassConsoleTests(TestCase):
             self._post({"reason": "Investigating a reported phishing campaign"})
         from core.models import AuditLog
         self.assertTrue(AuditLog.objects.filter(action="BREAK_GLASS_OPENED").exists())
+
+
+class OpenAsTests(TestCase):
+    """The console side of reset-and-enter.
+
+    Everything here is about the cost: this locks a colleague out of their
+    mail, so it must be confirmed, and the new password must never be lost
+    even when the rest of the operation fails.
+    """
+
+    def setUp(self):
+        self.superadmin = User.objects.create_user(
+            email="oasuper@terafort.com", password="pw12345!",
+            full_name="Super", role="SUPERADMIN")
+        self.admin = User.objects.create_user(
+            email="oaadmin@terafort.com", password="pw12345!",
+            full_name="Admin", role="ADMIN")
+        self.box = ManagedMailbox.objects.create(
+            address="kofi@terafort.org", domain="terafort.org")
+        self._as(self.superadmin)
+
+    def _as(self, user):
+        token = RefreshToken.for_user(user).access_token
+        self.client.defaults["HTTP_AUTHORIZATION"] = "Bearer %s" % token
+
+    def _post(self, **body):
+        return self.client.post(
+            reverse("mailbox-open-as", kwargs={"pk": self.box.pk}),
+            body, content_type="application/json")
+
+    def test_an_admin_may_not(self):
+        self._as(self.admin)
+        self.assertEqual(self._post(confirm_password_reset=True).status_code, 403)
+
+    def test_it_refuses_without_confirmation(self):
+        """Not a formality — clicking this locks somebody out of their mail."""
+        with mock.patch("core.mailbox_admin.set_password") as write:
+            r = self._post()
+        self.assertEqual(r.status_code, 409)
+        self.assertTrue(r.data["requires_confirmation"])
+        write.assert_not_called()
+
+    def test_the_happy_path_returns_the_password_and_a_ticket(self):
+        with mock.patch("core.mailbox_admin.set_password"), \
+             mock.patch("core.mail_bridge.open_mailbox_as",
+                        return_value=(200, {"sid": "s", "reference": "r",
+                                            "owner_notified": True})), \
+             mock.patch("core.mail_bridge.mint_handoff", return_value="tok.sig"), \
+             mock.patch("core.mail_bridge.destroy_mail_sessions_for", return_value=1):
+            r = self._post(confirm_password_reset=True)
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.data["temp_password"])
+        self.assertTrue(r.data["password_changed"])
+        self.assertEqual(r.data["ticket"], "tok.sig")
+
+    def test_the_password_written_is_the_one_handed_back(self):
+        written = {}
+        with mock.patch("core.mailbox_admin.set_password",
+                        side_effect=lambda b, pw, **kw: written.update(pw=pw)), \
+             mock.patch("core.mail_bridge.open_mailbox_as",
+                        return_value=(200, {"sid": "s", "owner_notified": True})), \
+             mock.patch("core.mail_bridge.mint_handoff", return_value="t.s"), \
+             mock.patch("core.mail_bridge.destroy_mail_sessions_for", return_value=0):
+            r = self._post(confirm_password_reset=True)
+        self.assertEqual(written["pw"], r.data["temp_password"])
+
+    def test_a_failed_reset_changes_nothing_and_says_so(self):
+        from core import mailbox_admin
+        with mock.patch("core.mailbox_admin.set_password",
+                        side_effect=mailbox_admin.MailboxAdminError("unreachable")):
+            r = self._post(confirm_password_reset=True)
+        self.assertEqual(r.status_code, 503)
+        self.assertIn("nothing has changed", r.data["detail"])
+        self.assertNotIn("temp_password", r.data)
+
+    def test_a_failure_after_the_reset_still_hands_over_the_password(self):
+        """The password IS changed by then. Losing it here would lock the
+        owner out with nobody holding the replacement."""
+        from core import mail_bridge
+        with mock.patch("core.mailbox_admin.set_password"), \
+             mock.patch("core.mail_bridge.open_mailbox_as",
+                        side_effect=mail_bridge.MailBridgeError("mail app down")):
+            r = self._post(confirm_password_reset=True)
+        self.assertEqual(r.status_code, 503)
+        self.assertTrue(r.data["temp_password"])
+        self.assertTrue(r.data["password_changed"])
+
+    def test_it_warns_loudly_when_the_owner_could_not_be_told(self):
+        with mock.patch("core.mailbox_admin.set_password"), \
+             mock.patch("core.mail_bridge.open_mailbox_as",
+                        return_value=(200, {"sid": "s", "owner_notified": False})), \
+             mock.patch("core.mail_bridge.mint_handoff", return_value="t.s"), \
+             mock.patch("core.mail_bridge.destroy_mail_sessions_for", return_value=0):
+            r = self._post(confirm_password_reset=True)
+        self.assertIn("WARNING", r.data["message"])
+        self.assertIn("locked out", r.data["message"])
+
+    def test_you_cannot_do_it_to_your_own_mailbox(self):
+        self.box.user = self.superadmin
+        self.box.address = self.superadmin.email
+        self.box.save()
+        self.assertEqual(self._post(confirm_password_reset=True).status_code, 400)

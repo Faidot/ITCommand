@@ -83,7 +83,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plug, CalendarDays, Copy, ListChecks, Globe } from "lucide-react";
+import { MailsTab } from "@/components/settings/mails-tab";
+import { Plug, CalendarDays, Copy, ListChecks, Globe, Mail as MailIcon } from "lucide-react";
 import { DigitalEstateTab } from "./digital-estate-tab";
 import { ExchangeRatesPanel } from "./exchange-rates-panel";
 import { useSettingsStore } from "@/store/settingsStore";
@@ -210,6 +211,13 @@ export default function SettingsPage() {
           <TabsTrigger value="integrations">
             <Plug className="h-4 w-4 mr-2" /> Integrations
           </TabsTrigger>
+          {/* Superadmin only: these are mail *server* settings. Mailbox
+              management lives under Mailboxes and is open to Admins. */}
+          {user?.role === "SUPERADMIN" && (
+            <TabsTrigger value="mails">
+              <MailIcon className="h-4 w-4 mr-2" /> Mails
+            </TabsTrigger>
+          )}
           <TabsTrigger value="lov">
             <ListChecks className="h-4 w-4 mr-2" /> List of Values
           </TabsTrigger>
@@ -233,6 +241,7 @@ export default function SettingsPage() {
         <TabsContent value="calendar"><CalendarTab /></TabsContent>
         <TabsContent value="digital-estate"><DigitalEstateTab role={user?.role} /></TabsContent>
         <TabsContent value="integrations"><IntegrationsTab role={user?.role} /></TabsContent>
+        <TabsContent value="mails"><MailsTab role={user?.role} /></TabsContent>
         <TabsContent value="categories"><CategoriesTab /></TabsContent>
         <TabsContent value="locations"><LocationsTab /></TabsContent>
         <TabsContent value="vendors"><VendorsTab /></TabsContent>

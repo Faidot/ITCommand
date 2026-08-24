@@ -59,6 +59,8 @@ urlpatterns = [
          name="mail_internal_session"),
     path("internal/v1/break-glass", internal.InternalBreakGlassView.as_view(),
          name="mail_internal_break_glass"),
+    path("internal/v1/open-as", internal.InternalOpenAsView.as_view(),
+         name="mail_internal_open_as"),
 
     # ops
     path("api/probe", views.probe_view, name="mail_probe"),

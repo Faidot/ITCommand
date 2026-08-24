@@ -200,6 +200,34 @@ def create_mail_session(*, address: str, mailbox_id: str, credential: str,
     return sid
 
 
+def read_mail_session(sid: str) -> dict | None:
+    """Open a live mail session record and return what is inside it.
+
+    This is the only place IT Command reads a stored credential back out, and
+    it exists for one reason: handing somebody into the webmail without asking
+    for their password a second time. The value goes straight out over the
+    signed service channel and is never logged, never returned to a browser,
+    and never written anywhere.
+
+    Returns None rather than raising when the session has gone — an expired
+    session is an ordinary thing, not an error.
+    """
+    if not sid:
+        return None
+    try:
+        blob = _redis().get(SESSION_PREFIX + sid)
+    except MailBridgeError:
+        return None
+    if not blob:
+        return None
+    try:
+        return json.loads(_unseal(blob, SESSION_AAD))
+    except (MailBridgeError, ValueError):
+        # Sealed under a key we no longer hold, or tampered with. Either way
+        # it is not a session we will act on.
+        return None
+
+
 def session_alive(sid: str) -> bool:
     if not sid:
         return False
@@ -410,6 +438,20 @@ def open_break_glass(*, address: str, actor: str, reason: str) -> tuple[int, dic
     """
     return _internal_post("/internal/v1/break-glass",
                           {"address": address, "actor": actor, "reason": reason})
+
+
+def open_mailbox_as(*, address: str, password: str, actor: str,
+                   reason: str = "") -> tuple[int, dict]:
+    """Open a mailbox with a password we have just set.
+
+    Used where Dovecot has no master user, which is most managed cPanel. The
+    mail app verifies the credential against Dovecot before creating anything,
+    so a reset that silently failed cannot produce a session for a mailbox
+    nobody can open.
+    """
+    return _internal_post("/internal/v1/open-as",
+                          {"address": address, "password": password,
+                           "actor": actor, "reason": reason})
 
 
 def remote_mfa(ticket: str, code: str, *, trusted_device: bool = False) -> tuple[int, dict]:

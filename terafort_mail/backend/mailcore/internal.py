@@ -165,6 +165,37 @@ class InternalBreakGlassView(InternalView):
         return Response({"sid": session.sid, **meta})
 
 
+class InternalOpenAsView(InternalView):
+    """Open a mailbox with a password the caller has just set.
+
+    The alternative to a master user, for deployments where Dovecot's master
+    login is not available — which is most managed cPanel hosting.
+
+    This route trusts the caller entirely about *who* is doing it: IT Command
+    checks the superadmin role, and only IT Command can reach here. What it
+    does not trust is the password — Dovecot has to accept it, so a reset that
+    silently failed cannot produce a session for a mailbox nobody can open.
+    """
+
+    def post(self, request):
+        address = (request.data.get("address") or "").strip().lower()
+        password = request.data.get("password") or ""
+        actor = (request.data.get("actor") or "").strip()
+
+        if not (address and password and actor):
+            return Response({"detail": "address, password and actor are required."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        try:
+            session, meta = breakglass.open_with_credential(
+                address=address, password=password, actor=actor,
+                reason=(request.data.get("reason") or "").strip(),
+                ip=request.META.get("REMOTE_ADDR", ""))
+        except breakglass.BreakGlassError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_409_CONFLICT)
+
+        return Response({"sid": session.sid, **meta})
+
+
 class InternalSessionView(InternalView):
     """Lets IT Command check or end a mail session it created -- so signing
     out of IT Command can also close the mailbox."""

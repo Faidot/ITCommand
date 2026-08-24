@@ -110,6 +110,7 @@ export default function MailboxesPage() {
   const [userReset, setUserReset] = useState(false);
   const [bgTarget, setBgTarget] = useState<Mailbox | null>(null);
   const [bgReason, setBgReason] = useState("");
+  const [bgReset, setBgReset] = useState(false);
   const [delTarget, setDelTarget] = useState<Mailbox | null>(null);
   const [delReason, setDelReason] = useState("");
   const [purgeTarget, setPurgeTarget] = useState<Mailbox | null>(null);
@@ -370,7 +371,7 @@ export default function MailboxesPage() {
                     {isSuperadmin && box.exists_in_cpanel && box.status !== "PURGED" && (
                       <Button size="sm" variant="ghost" title="Open this mailbox (break-glass)"
                               disabled={busy === box.id}
-                              onClick={() => { setBgTarget(box); setBgReason(""); }}>
+                              onClick={() => { setBgTarget(box); setBgReason(""); setBgReset(false); }}>
                         <Eye className="h-4 w-4" />
                       </Button>
                     )}
@@ -441,9 +442,9 @@ export default function MailboxesPage() {
             </DialogTitle>
             <DialogDescription>
               This opens somebody else&apos;s mailbox. <strong>They are emailed
-              immediately</strong>, told who opened it and shown the reason you give
-              below. Every message you open is logged individually. The session lasts
-              30 minutes.
+              immediately</strong>, told who opened it and shown any reason you give.
+              Every message you open is logged individually. The session lasts 30
+              minutes.
             </DialogDescription>
           </DialogHeader>
           <Input
@@ -456,16 +457,58 @@ export default function MailboxesPage() {
             for them. Leaving it blank still emails them; the notice just cannot say
             why.
           </p>
+
+          {/* Two mechanisms, and the difference is not cosmetic. Silent needs a
+              Dovecot master user; reset locks the owner out until you hand over
+              the new password. Both are offered rather than one being silently
+              substituted for the other. */}
+          <div className="rounded-lg border p-3 text-sm">
+            <label className="flex items-start gap-2">
+              <input type="radio" className="mt-1" checked={!bgReset}
+                     onChange={() => setBgReset(false)} />
+              <span>
+                <span className="font-medium">Open silently</span>
+                <span className="block text-xs text-muted-foreground">
+                  Their password is untouched. Needs a Dovecot master user configured
+                  on the server — if that is not set up, this will refuse.
+                </span>
+              </span>
+            </label>
+            <label className="mt-3 flex items-start gap-2">
+              <input type="radio" className="mt-1" checked={bgReset}
+                     onChange={() => setBgReset(true)} />
+              <span>
+                <span className="font-medium">Reset their password and open</span>
+                <span className="block text-xs text-muted-foreground">
+                  Works with no server setup. <strong>Locks them out</strong> until you
+                  give them the new password — which is shown to you once.
+                </span>
+              </span>
+            </label>
+          </div>
+
           <DialogFooter>
             <Button variant="outline" onClick={() => setBgTarget(null)}>Cancel</Button>
             <Button
+              variant={bgReset ? "destructive" : "default"}
               disabled={busy === bgTarget?.id
                 || (bgReason.trim().length > 0 && bgReason.trim().length < 10)}
               onClick={async () => {
                 setBusy(bgTarget!.id);
                 try {
-                  const res = await api.post(`/mailboxes/${bgTarget!.id}/break-glass/`,
-                                             { reason: bgReason });
+                  const res = bgReset
+                    ? await api.post(`/mailboxes/${bgTarget!.id}/open-as/`,
+                                     { reason: bgReason, confirm_password_reset: true })
+                    : await api.post(`/mailboxes/${bgTarget!.id}/break-glass/`,
+                                     { reason: bgReason });
+                  if (res.data.temp_password) {
+                    setShown({
+                      address: bgTarget!.address,
+                      password: res.data.temp_password,
+                      note: "Their old password no longer works — for mail or for "
+                            + "IT Command. Give them this one.",
+                    });
+                  }
                   if (res.data.owner_notified) toast.success(res.data.message);
                   else toast.warning(res.data.message);
 

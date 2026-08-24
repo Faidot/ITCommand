@@ -439,6 +439,102 @@ class ManagedMailboxViewSet(viewsets.ReadOnlyModelViewSet):
             response.data["ticket"] = None
         return response
 
+    @action(detail=True, methods=["post"], url_path="open-as",
+            permission_classes=[IsSuperadmin])
+    def open_as(self, request, pk=None):
+        """Reset the password, then open the mailbox with it. Superadmin only.
+
+        The alternative to break-glass where Dovecot has no master user. It is
+        cruder, and the difference is not cosmetic: **the owner is locked out
+        until somebody gives them the new password.** That cost is stated in
+        the response rather than buried, because whoever clicks this has to go
+        and tell a colleague afterwards.
+
+        The visibility is also the point. Break-glass is silent by design and
+        leans on a notification nobody may read; this cannot be missed,
+        because the person's password stops working.
+        """
+        box = self.get_object()
+        reason = (request.data.get("reason") or "").strip()
+
+        if box.user_id and box.user.email.lower() == request.user.email.lower():
+            return Response({"detail": "That is your own mailbox."},
+                            status=status.HTTP_400_BAD_REQUEST)
+        if box.purged_at or not box.exists_in_cpanel:
+            return Response({"detail": "That mailbox is not on the server."},
+                            status=status.HTTP_409_CONFLICT)
+        if not request.data.get("confirm_password_reset"):
+            # Not a formality. Clicking this locks somebody out of their mail.
+            return Response(
+                {"detail": "This resets %s's password and locks them out until you "
+                           "give them the new one. Confirm to continue."
+                           % box.address,
+                 "requires_confirmation": True},
+                status=status.HTTP_409_CONFLICT)
+
+        # Same generator user creation uses, so an operator never has to
+        # wonder which kind of password they are holding.
+        new_password = mailbox_admin_generate()
+        try:
+            mailbox_admin.set_password(box, new_password, actor=request.user.email)
+        except mailbox_admin.MailboxAdminError as exc:
+            # Nothing has changed yet, so say so plainly — an operator seeing
+            # a failure here should not wonder whether the password moved.
+            return Response({"detail": "The password could not be reset, so nothing "
+                                       "has changed. %s" % exc},
+                            status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        from core import mail_bridge
+        try:
+            code, body = mail_bridge.open_mailbox_as(
+                address=box.address, password=new_password,
+                actor=request.user.email, reason=reason)
+        except mail_bridge.MailBridgeError as exc:
+            # The password IS changed at this point. Hand it over anyway —
+            # losing it here would lock the owner out with nobody holding the
+            # replacement.
+            return Response(
+                {"detail": "The password was reset, but the mailbox could not be "
+                           "opened: %s" % exc,
+                 "temp_password": new_password,
+                 "password_changed": True},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE)
+
+        if code != 200 or not body.get("sid"):
+            return Response({"detail": body.get("detail", "Could not open it."),
+                             "temp_password": new_password,
+                             "password_changed": True},
+                            status=status.HTTP_409_CONFLICT)
+
+        mail_bridge.destroy_mail_sessions_for(box.address)
+        record_audit(request, "MAILBOX_OPENED_BY_RESET", user=request.user,
+                     changes={"address": box.address, "reason": reason,
+                              "reference": body.get("reference"),
+                              "owner_notified": body.get("owner_notified")})
+
+        response = self._ok(
+            box,
+            message="Opened %s. %s" % (
+                box.address,
+                "They have been emailed that their password changed."
+                if body.get("owner_notified")
+                else "WARNING: they could NOT be emailed — tell them yourself, "
+                     "or they will simply find themselves locked out."),
+            reference=body.get("reference"),
+            owner_notified=body.get("owner_notified"),
+            temp_password=new_password,
+            password_changed=True,
+            post_to=settings.MAIL_APP_HANDOFF_URL,
+        )
+        try:
+            response.data["ticket"] = mail_bridge.mint_handoff(
+                sid=body["sid"], address=box.address,
+                ua_hash=mail_bridge.ua_hash_for(request),
+                ip=mail_bridge.client_ip_for(request))
+        except mail_bridge.MailBridgeError:
+            response.data["ticket"] = None
+        return response
+
     # -- deletion ---------------------------------------------------------
 
     @action(detail=True, methods=["post"], url_path="request-deletion")
