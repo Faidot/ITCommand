@@ -4,9 +4,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   api, BUNDLES, initials, when,
   SessionExpired, ServerUnreachable,
-  type Body, type Folder, type Row,
+  type Body, type Draft, type Folder, type Queued, type Row,
 } from "@/lib/api";
 import { MessageFrame } from "@/components/message-frame";
+import { Composer, UndoToast } from "@/components/composer";
 
 type View = { kind: "folder"; id: string; label: string } | { kind: "bundle"; name: string };
 
@@ -37,6 +38,8 @@ export default function Inbox() {
   const [expired, setExpired] = useState(false);
   const [offline, setOffline] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [composing, setComposing] = useState<Partial<Draft> | null>(null);
+  const [queued, setQueued] = useState<Queued | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
 
   const say = (message: string) => {
@@ -100,6 +103,11 @@ export default function Inbox() {
       // than showing an empty inbox that is not actually empty.
       const page = await guard(() => api.messages({}));
       if (page && page.count === 0) await sync();
+      // Anything scheduled past the last session goes out now. This call is
+      // what makes "sends when you next sign in" true rather than a promise.
+      void api.flushOutbox().then((r) => {
+        if (r.sent.length) say(`Sent ${r.sent.length} queued message(s)`);
+      }).catch(() => undefined);
       setLoading(false);
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -141,6 +149,19 @@ export default function Inbox() {
     say("Reported and quarantined");
   }, [guard]);
 
+  const reply = useCallback(async (row: Row, all: boolean) => {
+    const context = await guard(() => api.replyContext(row.id));
+    if (!context) return;
+    setComposing({
+      to: context.to.join(", "),
+      cc: all ? context.cc_all.join(", ") : "",
+      subject: context.subject,
+      text: context.quoted,
+      in_reply_to: context.in_reply_to,
+      references: context.references,
+    });
+  }, [guard]);
+
   const showImages = useCallback(async (row: Body) => {
     const result = await guard(() => api.loadImages(row.id));
     if (result) setOpen({ ...row, images_allowed: true });
@@ -159,12 +180,15 @@ export default function Inbox() {
         case "u": ev.preventDefault(); setOpen(null); break;
         case "s": if (current) { ev.preventDefault(); void star(current); } break;
         case "!": if (current) { ev.preventDefault(); void phish(current); } break;
+        case "c": ev.preventDefault(); setComposing({}); break;
+        case "r": if (open ?? current) { ev.preventDefault(); void reply(open ?? current, false); } break;
+        case "a": if (open ?? current) { ev.preventDefault(); void reply(open ?? current, true); } break;
         case "Escape": setOpen(null); break;
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [rows, cursor, openRow, star, phish]);
+  }, [rows, cursor, open, openRow, star, phish, reply]);
 
   useEffect(() => {
     listRef.current?.querySelector<HTMLElement>("[data-cursor='true']")
@@ -199,6 +223,10 @@ export default function Inbox() {
           <button onClick={() => void sync()} disabled={syncing}
                   className="rounded-md border border-border px-2 py-1 hover:bg-muted disabled:opacity-50">
             {syncing ? "Syncing…" : "Refresh"}
+          </button>
+          <button onClick={() => setComposing({})}
+                  className="rounded-md bg-primary px-3 py-1 font-medium text-primary-foreground">
+            ✎ Compose
           </button>
         </span>
       </header>
@@ -293,7 +321,8 @@ export default function Inbox() {
                 <p className="text-sm">
                   Pick a message. <kbd className="rounded border border-border px-1">j</kbd>{" "}
                   <kbd className="rounded border border-border px-1">k</kbd> to move,{" "}
-                  <kbd className="rounded border border-border px-1">Enter</kbd> to open.
+                  <kbd className="rounded border border-border px-1">Enter</kbd> to open,{" "}
+                  <kbd className="rounded border border-border px-1">c</kbd> to compose.
                 </p>
               </div>
             </div>
@@ -303,6 +332,12 @@ export default function Inbox() {
                 <button onClick={() => setOpen(null)} className="rounded px-2 py-1 hover:bg-muted md:hidden">←</button>
                 <button onClick={() => void star(open)} className="rounded px-2 py-1 hover:bg-muted">
                   {open.flagged ? "★ Starred" : "☆ Star"}
+                </button>
+                <button onClick={() => void reply(open, false)} className="rounded px-2 py-1 hover:bg-muted">
+                  ↩ Reply
+                </button>
+                <button onClick={() => void reply(open, true)} className="rounded px-2 py-1 hover:bg-muted">
+                  ↩↩ Reply all
                 </button>
                 <span className="flex-1" />
                 <button onClick={() => void phish(open)}
@@ -392,7 +427,7 @@ export default function Inbox() {
                 )}
 
                 <p className="mt-6 text-xs text-muted-foreground">
-                  Reading only for now — compose, reply and search arrive in the next phase.
+                  Attachments cannot be downloaded yet, and search arrives next.
                 </p>
               </div>
             </>
@@ -400,7 +435,23 @@ export default function Inbox() {
         </section>
       </div>
 
-      {toast && (
+      {composing && (
+        <Composer
+          initial={composing}
+          onClose={() => setComposing(null)}
+          onQueued={(q) => setQueued(q)}
+        />
+      )}
+
+      {queued && (
+        <UndoToast
+          queued={queued}
+          onUndone={(draft) => { setQueued(null); setComposing(draft); say("Send cancelled"); }}
+          onExpired={() => { setQueued(null); say("Sent"); }}
+        />
+      )}
+
+      {toast && !queued && (
         <div className="fixed bottom-5 left-1/2 -translate-x-1/2 rounded-lg bg-foreground px-4 py-2 text-sm text-background shadow-lg">
           {toast}
         </div>

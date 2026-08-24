@@ -76,6 +76,23 @@ export type Page = {
 
 export const BUNDLES = ["Renewals", "Invoices", "Alerts", "Vendors", "Store Policy"];
 
+export type Draft = {
+  to: string; cc?: string; bcc?: string;
+  subject: string; text: string;
+  in_reply_to?: string; references?: string[];
+  send_in_seconds?: number;
+};
+
+export type Queued = {
+  id: string; due_at: string; undo_seconds: number;
+  kind: "UNDO_WINDOW" | "SEND_LATER"; note?: string;
+};
+
+export type ReplyContext = {
+  subject: string; to: string[]; cc_all: string[];
+  in_reply_to: string; references: string[]; quoted: string;
+};
+
 export const api = {
   me: () => request<Me>("/me"),
   folders: () => request<Folder[]>("/folders"),
@@ -98,6 +115,12 @@ export const api = {
   reportPhishing: (id: string) =>
     post<{ quarantined: boolean; detail: string }>(`/messages/${id}/report-phishing`),
   logout: () => post<{ ok: boolean }>("/auth/logout"),
+
+  send: (draft: Draft) => post<Queued>("/compose/send", draft),
+  undo: (id: string) => post<{ cancelled: boolean; draft: Draft }>("/compose/undo", { id }),
+  replyContext: (id: string) => request<ReplyContext>(`/messages/${id}/reply`),
+  /** Called on load: this is what makes "sends when you next sign in" true. */
+  flushOutbox: () => post<{ sent: string[]; failed: unknown[] }>("/outbox/flush"),
 };
 
 /** Short, human dates for a list that is scanned rather than read. */
