@@ -17,7 +17,10 @@ import {
   ShieldAlert,
   KeyRound,
   Trash2,
-  Undo2
+  Undo2,
+  Mail,
+  MailX,
+  Link2
 } from "lucide-react";
 import { toast } from "sonner";
 import api from "@/lib/api";
@@ -66,6 +69,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Card } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Textarea } from "@/components/ui/textarea";
@@ -96,6 +100,14 @@ export interface UserDetail {
   temp_password?: string;
 }
 
+/** What the server did about a mailbox when the account was created. */
+interface MailboxOutcome {
+  created: boolean;
+  linked: boolean;
+  address?: string;
+  note?: string;
+}
+
 const formSchema = z.object({
   email: z.string().email(),
   full_name: z.string().min(2),
@@ -105,6 +117,9 @@ const formSchema = z.object({
   bio: z.string().optional(),
   manager: z.string().optional(),
   team_lead: z.string().optional(),
+  // New accounts get a company mailbox by default. Turned off for
+  // contractors and service accounts, which keep a local password.
+  create_mailbox: z.boolean(),
 });
 
 export default function UsersPage() {
@@ -127,6 +142,9 @@ export default function UsersPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isPasswordModalOpen, setIsPasswordModalOpen] = useState(false);
   const [generatedPassword, setGeneratedPassword] = useState("");
+  const [passwordOpens, setPasswordOpens] = useState("");
+  const [mailboxOutcome, setMailboxOutcome] = useState<MailboxOutcome | null>(null);
+  const [mailboxWarning, setMailboxWarning] = useState("");
   const [copied, setCopied] = useState(false);
 
   const [editingUser, setEditingUser] = useState<UserDetail | null>(null);
@@ -167,6 +185,7 @@ export default function UsersPage() {
       bio: "",
       manager: "none",
       team_lead: "none",
+      create_mailbox: true,
     },
   });
 
@@ -262,11 +281,26 @@ export default function UsersPage() {
         toast.success("User updated.");
         setIsDialogOpen(false);
       } else {
-        const res = await api.post("/users/", payload);
+        const res = await api.post("/users/", {
+          ...payload,
+          create_mailbox: values.create_mailbox,
+        });
         toast.success("User created.");
+
+        setMailboxOutcome(res.data.mailbox ?? null);
+        setMailboxWarning(res.data.mailbox_warning ?? "");
+        setPasswordOpens(res.data.password_opens ?? "");
+
         if (res.data.temp_password) {
           setGeneratedPassword(res.data.temp_password);
           setIsPasswordModalOpen(true);
+        } else if (res.data.mailbox?.linked) {
+          // Linked to a mailbox that already existed, so there is no password
+          // to hand over -- we did not set one and do not know the real one.
+          setIsPasswordModalOpen(true);
+        }
+        if (res.data.mailbox_warning) {
+          toast.warning("The account was created, but the mailbox was not.");
         }
         setIsDialogOpen(false);
       }
@@ -519,6 +553,29 @@ export default function UsersPage() {
           </DialogHeader>
           <Form {...form}>
             <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4 py-4">
+              {!editingUser && (
+                <FormField
+                  control={form.control}
+                  name="create_mailbox"
+                  render={({ field }) => (
+                    <FormItem className="flex items-start justify-between gap-3 rounded-lg border p-3">
+                      <div className="space-y-0.5">
+                        <FormLabel className="flex items-center gap-2">
+                          <Mail className="h-4 w-4" /> Create a company mailbox
+                        </FormLabel>
+                        <p className="text-xs text-muted-foreground">
+                          {field.value
+                            ? "One password will open both IT Command and their mailbox."
+                            : "A local account only. They will have no mailbox and no email address here."}
+                        </p>
+                      </div>
+                      <FormControl>
+                        <Switch checked={field.value} onCheckedChange={field.onChange} />
+                      </FormControl>
+                    </FormItem>
+                  )}
+                />
+              )}
               <FormField
                 control={form.control}
                 name="full_name"
@@ -688,25 +745,66 @@ export default function UsersPage() {
         </DialogContent>
       </Dialog>
 
-      {/* GENERATED PASSWORD DISPLAY DIALOG */}
+      {/* NEW ACCOUNT RESULT — the password, and what it opens */}
       <Dialog open={isPasswordModalOpen} onOpenChange={setIsPasswordModalOpen}>
-        <DialogContent className="sm:max-w-[400px]">
+        <DialogContent className="sm:max-w-[440px]">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <ShieldAlert className="h-5 w-5 text-amber-500" /> Secure Credential Rendered
+              <ShieldAlert className="h-5 w-5 text-amber-500" /> Password shown once
             </DialogTitle>
             <DialogDescription>
-              We successfully synthesized a temporary passcode. This credential will <strong>never</strong> be displayed again natively!
+              Hand this to them now. We do not store it and it cannot be shown again.
             </DialogDescription>
           </DialogHeader>
-          <div className="flex items-center space-x-2 mt-4 bg-neutral-100 dark:bg-neutral-900 p-3 rounded-lg border border-neutral-200 dark:border-neutral-800">
-            <code className="flex-1 text-sm font-mono tracking-wider">{generatedPassword}</code>
-            <Button size="icon" variant="ghost" onClick={() => void copyToClipboard()}>
-              {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
-            </Button>
-          </div>
+
+          {generatedPassword && (
+            <>
+              <div className="mt-4 flex items-center space-x-2 rounded-lg border border-neutral-200 bg-neutral-100 p-3 dark:border-neutral-800 dark:bg-neutral-900">
+                <code className="flex-1 font-mono text-sm tracking-wider">{generatedPassword}</code>
+                <Button size="icon" variant="ghost" onClick={() => void copyToClipboard()}>
+                  {copied ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+              {passwordOpens && (
+                <p className="mt-2 text-xs text-muted-foreground">
+                  This password opens <strong>{passwordOpens}</strong>.
+                </p>
+              )}
+            </>
+          )}
+
+          {mailboxOutcome?.created && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg bg-emerald-50 p-3 text-sm text-emerald-900 dark:bg-emerald-950 dark:text-emerald-200">
+              <Mail className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                Mailbox <strong>{mailboxOutcome.address}</strong> was created. They sign in
+                to both IT Command and their mail with the password above.
+              </span>
+            </div>
+          )}
+
+          {mailboxOutcome?.linked && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg bg-sky-50 p-3 text-sm text-sky-900 dark:bg-sky-950 dark:text-sky-200">
+              <Link2 className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                {mailboxOutcome.note ??
+                  "That mailbox already existed, so it was linked rather than created."}
+              </span>
+            </div>
+          )}
+
+          {mailboxWarning && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg bg-amber-50 p-3 text-sm text-amber-900 dark:bg-amber-950 dark:text-amber-200">
+              <MailX className="mt-0.5 h-4 w-4 shrink-0" />
+              <span>
+                The account was created, but <strong>no mailbox was made</strong>. They can
+                sign in to IT Command with the password above. {mailboxWarning}
+              </span>
+            </div>
+          )}
+
           <DialogFooter className="mt-4">
-            <Button onClick={() => setIsPasswordModalOpen(false)}>Acknowledge</Button>
+            <Button onClick={() => setIsPasswordModalOpen(false)}>Done</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

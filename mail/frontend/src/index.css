@@ -1,0 +1,134 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ---------------------------------------------------------------------------
+   Base
+   --------------------------------------------------------------------------- */
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    @apply bg-canvas text-gray-900 antialiased;
+    font-family: 'Inter', 'Roboto', Arial, system-ui, sans-serif;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
+    text-rendering: optimizeLegibility;
+  }
+  .dark body {
+    @apply bg-dark-canvas text-gray-100;
+  }
+
+  /* Tighter tracking on large headings for a crisp, modern feel */
+  h1,
+  h2,
+  h3 {
+    letter-spacing: -0.02em;
+  }
+
+  /* Brand-tinted text selection */
+  ::selection {
+    background: rgba(249, 115, 22, 0.22);
+  }
+
+  /* Thin, unobtrusive scrollbars */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 0, 0, 0.16) transparent;
+  }
+  .dark * {
+    scrollbar-color: rgba(255, 255, 255, 0.18) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: rgba(0, 0, 0, 0.14);
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: rgba(0, 0, 0, 0.26);
+  }
+  .dark *::-webkit-scrollbar-thumb {
+    background-color: rgba(255, 255, 255, 0.16);
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Components
+   --------------------------------------------------------------------------- */
+@layer components {
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-full px-4 py-2 text-sm font-semibold tracking-tight transition-all duration-150 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-ink text-white hover:bg-ink-soft;
+  }
+  .btn-accent {
+    @apply btn bg-primary text-white hover:bg-primary-dark;
+  }
+  .btn-secondary {
+    @apply btn bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-dark-elevated dark:text-gray-200 dark:hover:bg-dark-border;
+  }
+  .icon-btn {
+    @apply inline-flex h-10 w-10 items-center justify-center rounded-full text-gray-500 transition-colors hover:bg-black/[0.05] hover:text-gray-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 dark:text-gray-300 dark:hover:bg-white/10;
+  }
+  .input {
+    @apply w-full rounded-xl border border-gray-200 bg-white px-3.5 py-2.5 text-sm text-gray-900 placeholder-gray-400 transition-shadow focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20 dark:border-dark-border dark:bg-dark-surface dark:text-gray-100 dark:placeholder-gray-500;
+  }
+  /* Soft elevated surface */
+  .surface {
+    @apply rounded-2xl border border-black/[0.06] bg-white shadow-[0_1px_2px_rgba(16,18,27,0.04),0_8px_24px_-12px_rgba(16,18,27,0.12)] dark:border-white/10 dark:bg-dark-surface;
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Tiptap editor content styling
+   --------------------------------------------------------------------------- */
+.ProseMirror {
+  @apply min-h-[180px] text-sm leading-relaxed outline-none;
+}
+.ProseMirror p {
+  margin: 0 0 0.5rem;
+}
+.ProseMirror a {
+  @apply text-primary underline;
+}
+.ProseMirror:focus {
+  outline: none;
+}
+.ProseMirror p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  @apply text-gray-400;
+}
+
+/* ---------------------------------------------------------------------------
+   Print
+   --------------------------------------------------------------------------- */
+@media print {
+  body * {
+    visibility: hidden;
+  }
+  .print-area,
+  .print-area * {
+    visibility: visible;
+  }
+  .print-area {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+  .no-print {
+    display: none !important;
+  }
+}

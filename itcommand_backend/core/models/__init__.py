@@ -15,3 +15,4 @@ from .kb import *
 from .integrations import *
 from .payments import *
 from .discovery import *
+from .mailboxes import *

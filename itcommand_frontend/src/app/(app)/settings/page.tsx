@@ -83,7 +83,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Plug, CalendarDays, Copy, ListChecks, Globe } from "lucide-react";
+import { MailsTab } from "@/components/settings/mails-tab";
+import { Plug, CalendarDays, Copy, ListChecks, Globe, Mail as MailIcon } from "lucide-react";
 import { DigitalEstateTab } from "./digital-estate-tab";
 import { ExchangeRatesPanel } from "./exchange-rates-panel";
 import { useSettingsStore } from "@/store/settingsStore";
@@ -210,6 +211,13 @@ export default function SettingsPage() {
           <TabsTrigger value="integrations">
             <Plug className="h-4 w-4 mr-2" /> Integrations
           </TabsTrigger>
+          {/* Superadmin only: these are mail *server* settings. Mailbox
+              management lives under Mailboxes and is open to Admins. */}
+          {user?.role === "SUPERADMIN" && (
+            <TabsTrigger value="mails">
+              <MailIcon className="h-4 w-4 mr-2" /> Mails
+            </TabsTrigger>
+          )}
           <TabsTrigger value="lov">
             <ListChecks className="h-4 w-4 mr-2" /> List of Values
           </TabsTrigger>
@@ -233,6 +241,7 @@ export default function SettingsPage() {
         <TabsContent value="calendar"><CalendarTab /></TabsContent>
         <TabsContent value="digital-estate"><DigitalEstateTab role={user?.role} /></TabsContent>
         <TabsContent value="integrations"><IntegrationsTab role={user?.role} /></TabsContent>
+        <TabsContent value="mails"><MailsTab role={user?.role} /></TabsContent>
         <TabsContent value="categories"><CategoriesTab /></TabsContent>
         <TabsContent value="locations"><LocationsTab /></TabsContent>
         <TabsContent value="vendors"><VendorsTab /></TabsContent>
@@ -1849,6 +1858,22 @@ interface IntegrationRow {
   /** The credential is stored for a feature that does not exist yet, so the UI
    *  must not imply a live sync. */
   config_only?: boolean;
+  /** Providers needing more than a key and a URL (cPanel needs a host, a
+   *  username and a domain) declare those fields here and we render them. */
+  config_fields?: IntegrationConfigField[];
+  config?: Record<string, string | number | boolean>;
+  /** The provider can prove its credentials in one cheap read-only call, so it
+   *  gets a Test connection button rather than a Run now button. */
+  supports_connection_test?: boolean;
+}
+
+interface IntegrationConfigField {
+  key: string;
+  label: string;
+  required?: boolean;
+  placeholder?: string;
+  default?: string | number | boolean;
+  help?: string;
 }
 
 interface ScopeResult {
@@ -1958,7 +1983,15 @@ function IntegrationsTab({ role }: { role?: string }) {
   const [rows, setRows] = useState<IntegrationRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [drafts, setDrafts] = useState<
-    Record<string, { api_key: string; base_url: string; key_expires_at: string }>
+    Record<
+      string,
+      {
+        api_key: string;
+        base_url: string;
+        key_expires_at: string;
+        config?: Record<string, string | number | boolean>;
+      }
+    >
   >({});
   const [busy, setBusy] = useState<string | null>(null);
   const [testing, setTesting] = useState<string | null>(null);
@@ -2007,7 +2040,7 @@ function IntegrationsTab({ role }: { role?: string }) {
       toast.success(`${row.label} updated`);
       setDrafts((d) => ({
         ...d,
-        [row.provider]: { api_key: "", base_url: "", key_expires_at: "" },
+        [row.provider]: { api_key: "", base_url: "", key_expires_at: "", config: {} },
       }));
       await load();
     } catch (err) {
@@ -2059,6 +2092,9 @@ function IntegrationsTab({ role }: { role?: string }) {
         toast.warning(res.data.output || "Completed with missing data");
       } else if (res.data?.ok) {
         toast.success(res.data.output || "Completed");
+        // A green tick here can be over-read: the probe may not have exercised
+        // every call the feature uses. Say so when the endpoint tells us to.
+        if (res.data?.caveat) toast.warning(res.data.caveat, { duration: 10000 });
       } else {
         toast.error(res.data?.output || "The provider returned an error");
       }
@@ -2077,7 +2113,8 @@ function IntegrationsTab({ role }: { role?: string }) {
       <ExchangeRatesPanel />
 
       {rows.map((row) => {
-        const draft = drafts[row.provider] || { api_key: "", base_url: "", key_expires_at: "" };
+        const draft =
+          drafts[row.provider] || { api_key: "", base_url: "", key_expires_at: "", config: {} };
         const expiry = expiryNotice(row);
         return (
           <Card key={row.provider}>
@@ -2141,6 +2178,51 @@ function IntegrationsTab({ role }: { role?: string }) {
                   />
                   <p className="text-xs text-muted-foreground">{row.help}</p>
                 </div>
+                {(row.config_fields ?? []).map((f) => {
+                  const saved = row.config?.[f.key];
+                  const current =
+                    draft.config?.[f.key] ?? (saved !== undefined ? saved : f.default ?? "");
+                  const isBool = typeof (f.default ?? saved) === "boolean";
+                  return (
+                    <div key={f.key} className="space-y-1.5">
+                      <label className="text-sm font-medium">
+                        {f.label}
+                        {f.required && <span className="ml-1 text-destructive">*</span>}
+                      </label>
+                      {isBool ? (
+                        <div className="flex h-10 items-center">
+                          <Switch
+                            checked={Boolean(current)}
+                            onCheckedChange={(v) =>
+                              setDrafts((d) => ({
+                                ...d,
+                                [row.provider]: {
+                                  ...draft,
+                                  config: { ...(draft.config ?? {}), [f.key]: v },
+                                },
+                              }))
+                            }
+                          />
+                        </div>
+                      ) : (
+                        <Input
+                          value={String(current ?? "")}
+                          placeholder={f.placeholder}
+                          onChange={(e) =>
+                            setDrafts((d) => ({
+                              ...d,
+                              [row.provider]: {
+                                ...draft,
+                                config: { ...(draft.config ?? {}), [f.key]: e.target.value },
+                              },
+                            }))
+                          }
+                        />
+                      )}
+                      {f.help && <p className="text-xs text-muted-foreground">{f.help}</p>}
+                    </div>
+                  );
+                })}
                 {row.needs_api_key && (
                   <div className="space-y-1.5">
                     <label className="text-sm font-medium">
@@ -2251,6 +2333,9 @@ function IntegrationsTab({ role }: { role?: string }) {
                       ...(draft.key_expires_at
                         ? { key_expires_at: draft.key_expires_at }
                         : {}),
+                      ...(draft.config && Object.keys(draft.config).length
+                        ? { config: draft.config }
+                        : {}),
                     })
                   }
                 >
@@ -2284,9 +2369,27 @@ function IntegrationsTab({ role }: { role?: string }) {
                     Test connection
                   </Button>
                 )}
+                {/* One cheap read-only call proves the credentials. Not gated
+                    on is_enabled: the whole point is to check before you switch
+                    it on, rather than enabling and hoping. */}
+                {row.supports_connection_test && (
+                  <Button
+                    variant="outline"
+                    disabled={busy === row.provider || !row.has_api_key}
+                    onClick={() => void runNow(row)}
+                  >
+                    {busy === row.provider ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <ShieldCheck className="mr-2 h-4 w-4" />
+                    )}
+                    Test connection
+                  </Button>
+                )}
                 {/* Config-only providers have nothing to run — the endpoint
-                    would 400, and offering the button implies a sync exists. */}
-                {!row.config_only && (
+                    would 400, and offering the button implies a sync exists.
+                    Neither does a provider whose only check is the test above. */}
+                {!row.config_only && !row.supports_connection_test && (
                   <Button
                     variant="outline"
                     disabled={busy === row.provider || !row.is_enabled}

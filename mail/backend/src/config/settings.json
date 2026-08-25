@@ -1,0 +1,34 @@
+{
+  "imap": {
+    "host": "mail.terafort.org",
+    "port": 993,
+    "tls": true,
+    "timeout": 30000,
+    "maxConnections": 50
+  },
+  "smtp": {
+    "host": "mail.terafort.org",
+    "port": 465,
+    "secure": true,
+    "requireTLS": false,
+    "fromName": "",
+    "fromAddress": ""
+  },
+  "app": {
+    "name": "TeraFort",
+    "domain": "terafort.org",
+    "allowedDomains": [
+      "terafort.org"
+    ],
+    "logo": "https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRQKJsO45MCydNmQerRWSV73p0WNBAbNmkt6jWhWHGN4w&s=10",
+    "maxUploadMb": 25
+  },
+  "security": {
+    "sessionTTL": 86400,
+    "maxLoginAttempts": 5,
+    "lockoutDuration": 900,
+    "ipWhitelist": [],
+    "adminUsername": "admin",
+    "adminPassword": "$2a$10$JBpVYVWTTeoPesY8J3FCIeVp6NUS4hTlEF96l6e6ZfhtZc49D5pmi"
+  }
+}

@@ -11,7 +11,9 @@ from .views.vault import (
 )
 from .views import (
     ProfileView, ChangePasswordView,
-    LoginView, LogoutView, UserMeView, DepartmentViewSet, UserViewSet, RoleViewSet,
+    LoginView, LogoutView, UserMeView, MailboxMfaView, OpenMailboxView,
+    ManagedMailboxViewSet,
+    MailSettingsView, MailSessionsView, MailLogsView, MailTestView, DepartmentViewSet, UserViewSet, RoleViewSet,
     AssetCategoryViewSet, AssetViewSet, AssetNoteViewSet, VaultCredentialViewSet, AccountWorkspaceViewSet,
     FinancialYearViewSet, BudgetCategoryViewSet, BudgetViewSet, ExpenseViewSet, IncomeViewSet,
     IncomeSourceViewSet, CostOverviewView, RecurringIncomeViewSet,
@@ -115,9 +117,18 @@ router.register(r'estate/cards', PaymentCardViewSet, basename='estate-card')
 router.register(r'estate/payments', ServicePaymentViewSet, basename='estate-payment')
 router.register(r'finance/card-accounts', CardAccountViewSet, basename='card-account')
 router.register(r'exchange-rates', ExchangeRateViewSet, basename='exchange-rate')
+# The mailbox console. Read-only by default: every change is a named action
+# that calls cPanel first, so a row can never claim a state the server does
+# not agree with.
+router.register(r'mailboxes', ManagedMailboxViewSet, basename='mailbox')
 
 urlpatterns = [
     path('auth/login/', LoginView.as_view(), name='auth_login'),
+    # Second step for mailbox-backed accounts. 404s while MAIL_AUTH_ENABLED
+    # is off, so the route is invisible until the feature is switched on.
+    path('auth/mfa/', MailboxMfaView.as_view(), name='auth_mailbox_mfa'),
+    # The Open Mailbox button. Returns a single-use ticket in the body.
+    path('auth/open-mailbox/', OpenMailboxView.as_view(), name='auth_open_mailbox'),
     path('auth/logout/', LogoutView.as_view(), name='auth_logout'),
     path('auth/me/', UserMeView.as_view(), name='auth_me'),
     path('auth/profile/', ProfileView.as_view(), name='auth_profile'),
@@ -153,6 +164,12 @@ urlpatterns = [
     path('lov/', ListOfValuesView.as_view(), name='list_of_values'),
     path('lov/values/<int:pk>/', ListOfValuesItemView.as_view(), name='list_of_values_item'),
     path('users/active/', ActiveUsersView.as_view(), name='active_users'),
+    # The Mails tab: TeraMailer's admin panel, under IT Command's roles.
+    path('mail-settings/', MailSettingsView.as_view(), name='mail_settings'),
+    path('mail-settings/sessions/', MailSessionsView.as_view(), name='mail_settings_sessions'),
+    path('mail-settings/logs/', MailLogsView.as_view(), name='mail_settings_logs'),
+    path('mail-settings/test/', MailTestView.as_view(), name='mail_settings_test'),
+
     path('integrations/', IntegrationsView.as_view(), name='integrations'),
     path('integrations/test/', IntegrationTestView.as_view(), name='integration_test'),
     path('integrations/brex/test/', BrexConnectionTestView.as_view(), name='brex_connection_test'),

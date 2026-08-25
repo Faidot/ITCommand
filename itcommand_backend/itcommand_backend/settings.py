@@ -230,6 +230,12 @@ SIMPLE_JWT = {
 # When the frontend is served from the same origin as the API (the default
 # Docker/nginx setup), CORS is effectively a no-op, but it's kept env-driven so
 # the frontend can also run on a separate origin during development.
+# The mailbox session id rides in an httpOnly cookie, so the browser has to be
+# allowed to store and send it across the frontend/API origin split. Safe only
+# with an explicit origin list below — the spec forbids pairing credentials
+# with a wildcard, and the browser will refuse it.
+CORS_ALLOW_CREDENTIALS = True
+
 CORS_ALLOWED_ORIGINS = config(
     'CORS_ALLOWED_ORIGINS',
     default='http://localhost:3000,http://localhost:3001',
@@ -308,3 +314,61 @@ AUTOMATION_EMAIL_REPORT_ENABLED = config(
 FINANCE_REPORT_DAY = min(
     28, max(1, config('FINANCE_REPORT_DAY', default=1, cast=int))
 )
+
+
+# ---------------------------------------------------------------------------
+# Terafort Mail bridge
+#
+# Everything here is inert while MAIL_AUTH_ENABLED is False, which is the
+# default. With the flag off, LoginView takes exactly the path it always has
+# and the two new routes return 404. Rolling back the mailbox-auth feature is
+# setting this one variable to false -- no migration, no data change; existing
+# password hashes are left on the row, dormant, until you sign off on removing
+# them separately.
+# ---------------------------------------------------------------------------
+MAIL_AUTH_ENABLED = config('MAIL_AUTH_ENABLED', default=False, cast=bool)
+
+# Where the mail app lives. The internal URL is reached over the compose
+# network and is never exposed publicly.
+MAIL_APP_INTERNAL_URL = config('MAIL_APP_INTERNAL_URL', default='http://mail-backend:8000')
+MAIL_APP_HANDOFF_URL = config('MAIL_APP_HANDOFF_URL', default='https://mail.itcommand.com/auth/handoff')
+MAIL_APP_TIMEOUT = config('MAIL_APP_TIMEOUT', default=20, cast=int)
+
+# Dovecot. Only used when MAIL_AUTH_ENABLED is on.
+MAIL_IMAP_HOST = config('MAIL_IMAP_HOST', default='')
+MAIL_IMAP_PORT = config('MAIL_IMAP_PORT', default=993, cast=int)
+MAIL_IMAP_VERIFY_CERT = config('MAIL_IMAP_VERIFY_CERT', default=True, cast=bool)
+MAIL_IMAP_TIMEOUT = config('MAIL_IMAP_TIMEOUT', default=15, cast=int)
+
+# Shared with the mail app. All three must match on both sides.
+MAIL_SESSION_SEAL_KEY = config('MAIL_SESSION_SEAL_KEY', default='0' * 32)
+MAIL_HANDOFF_HMAC_KEY = config('MAIL_HANDOFF_HMAC_KEY', default='dev-handoff-key')
+MAIL_INTERNAL_HMAC_KEY = config('MAIL_INTERNAL_HMAC_KEY', default='')
+MAIL_INTERNAL_SERVICE_NAME = config('MAIL_INTERNAL_SERVICE_NAME', default='itcommand')
+
+MAIL_REDIS_URL = config('MAIL_REDIS_URL', default='')
+MAIL_SESSION_ABSOLUTE_SECONDS = config('MAIL_SESSION_ABSOLUTE_SECONDS', default=8 * 3600, cast=int)
+MAIL_HANDOFF_TICKET_SECONDS = config('MAIL_HANDOFF_TICKET_SECONDS', default=30, cast=int)
+
+# httpOnly, host-scoped. The browser never reads this and it never reaches
+# localStorage; it exists only so OpenMailboxView can find the mail session.
+MAIL_SID_COOKIE = config('MAIL_SID_COOKIE', default='itc_mail_sid')
+
+# Remembers that this browser has already proved a second factor, so a code is
+# asked for about once a month rather than at every sign-in. Signed, httpOnly,
+# and useless without the mailbox password.
+MAIL_DEVICE_COOKIE = config('MAIL_DEVICE_COOKIE', default='itc_2fa_device')
+
+# ---------------------------------------------------------------------------
+# TeraMailer — the webmail in /mail
+#
+# TERAMAILER_URL is where IT Command's server reaches it (internal); the public
+# URL is where the *browser* posts the sign-in ticket, and the two differ
+# behind a proxy. The shared secret must equal ITC_SHARED_SECRET in the mail
+# backend's .env, or every call fails closed.
+# ---------------------------------------------------------------------------
+TERAMAILER_URL = config('TERAMAILER_URL', default='http://127.0.0.1:5000')
+TERAMAILER_PUBLIC_URL = config('TERAMAILER_PUBLIC_URL', default='http://localhost:5000')
+TERAMAILER_SHARED_SECRET = config('TERAMAILER_SHARED_SECRET', default='')
+TERAMAILER_SERVICE_NAME = config('TERAMAILER_SERVICE_NAME', default='itcommand')
+TERAMAILER_WEBMAIL_URL = config('TERAMAILER_WEBMAIL_URL', default='http://localhost:3000')

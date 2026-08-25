@@ -1,0 +1,28 @@
+# Dependencies
+node_modules/
+**/node_modules/
+
+# Build output
+dist/
+**/dist/
+build/
+
+# Env / secrets
+.env
+**/.env
+!**/.env.example
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+
+# Runtime config that may contain the admin password hash.
+# Commit settings.json only if it holds no secrets; otherwise keep it local.
+# backend/src/config/settings.json
+
+# OS / editor
+.DS_Store
+*.swp
+.idea/
+.vscode/

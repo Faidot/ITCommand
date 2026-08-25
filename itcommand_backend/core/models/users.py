@@ -83,6 +83,42 @@ class User(AbstractUser):
     is_active = models.BooleanField(default=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    # ── where this account's password lives ─────────────────────────────────
+    #
+    # LOCAL   the Django hash on this row, as it has always been. Contractors,
+    #         service accounts, and anyone without a cPanel mailbox.
+    # MAILBOX Dovecot is the authority. There is no usable hash on this row and
+    #         no password we could check even if we wanted to; the credential
+    #         exists only inside a live, TTL'd session.
+    #
+    # Explicit per user rather than inferred, because a silent fallback between
+    # the two is something an attacker could steer into: fail the IMAP check,
+    # land on a stale local hash. There is no fallback -- one account, one
+    # authority, chosen here.
+    AUTH_LOCAL = 'LOCAL'
+    AUTH_MAILBOX = 'MAILBOX'
+    AUTH_SOURCE_CHOICES = (
+        (AUTH_LOCAL, 'Local password'),
+        (AUTH_MAILBOX, 'Mailbox (Dovecot)'),
+    )
+    auth_source = models.CharField(
+        max_length=10,
+        choices=AUTH_SOURCE_CHOICES,
+        default=AUTH_LOCAL,
+        help_text="Which system decides whether this account's password is correct.",
+    )
+
+    @property
+    def uses_mailbox_auth(self) -> bool:
+        return self.auth_source == self.AUTH_MAILBOX
+
+    @property
+    def can_open_mailbox(self) -> bool:
+        """Whether to show the Open Mailbox button. A local account has no
+        mailbox credential in its session, so the handoff would have nothing
+        to point at."""
+        return self.uses_mailbox_auth and self.is_active
+
     # ── presence ────────────────────────────────────────────────────────────
     #
     # "Who is using the app right now" without a websocket. JWT sessions are

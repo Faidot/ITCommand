@@ -13,6 +13,16 @@ const api = axios.create({
   headers: {
     "Content-Type": "application/json",
   },
+  // Needed for the mailbox session cookie. IT Command's own auth is a JWT in
+  // a header, so cookies never mattered here — until the mail handoff, which
+  // stores its session id in an httpOnly cookie precisely so no script can
+  // read it. In development the frontend and API are different origins
+  // (:3000 and :8000), so without this the browser neither stores nor sends
+  // it, and Open Mailbox reports an expired session that never existed.
+  //
+  // The backend must also set CORS_ALLOW_CREDENTIALS, which only works with
+  // an explicit origin list rather than "*".
+  withCredentials: true,
 });
 
 let vaultExpirySync: Promise<void> | null = null;

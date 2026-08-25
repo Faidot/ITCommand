@@ -4,6 +4,7 @@ import * as React from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import {
+  Mail,
   Users,
   Building,
   Box,
@@ -65,6 +66,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { BackgroundBlobs } from "@/components/background-blobs"
+import { OpenMailboxButton } from "@/components/open-mailbox-button"
 
 export function AppSidebar() {
   const pathname = usePathname()
@@ -83,6 +85,7 @@ export function AppSidebar() {
       label: "PEOPLE",
       items: [
         { title: "Users", url: "/users", icon: Users, module: "users" },
+        { title: "Mailboxes", url: "/mailboxes", icon: Mail, module: "users" },
         { title: "Departments", url: "/departments", icon: Building, module: "departments" },
         { title: "Onboarding", url: "/onboarding", icon: UserPlus, module: "onboarding" },
         { title: "Seating Plan", url: "/seating", icon: Map, module: "seating" },
@@ -239,6 +242,14 @@ export function AppSidebar() {
           </SidebarGroup>
         ))}
       </SidebarContent>
+
+      {/* Open Mailbox sits above sign-out because it leaves the app: it opens
+          Terafort Mail in a new tab, already signed in, with no second
+          password prompt. Shown only for accounts that actually have a
+          mailbox — a local account has no mail session to hand off. */}
+      <div className="relative z-10 border-t border-sidebar-border p-3 group-data-[collapsible=icon]:p-2">
+        <OpenMailboxButton collapsed={isCollapsed} />
+      </div>
 
       <SidebarFooter className="relative z-10 border-t border-sidebar-border p-3 group-data-[collapsible=icon]:p-2 group-data-[collapsible=icon]:justify-center">
         {isCollapsed ? (

@@ -17,3 +17,5 @@ from .estate_import import *
 from .reset import *
 from .calendar import *
 from .discovery import *
+from .mailboxes import *
+from .mailsettings import *
