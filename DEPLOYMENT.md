@@ -7,6 +7,12 @@ The entire stack is containerized and orchestrated by a single
 [`docker-compose.yml`](docker-compose.yml). A single root [`.env`](.env.example)
 file holds all configuration.
 
+> **Deploying the mail features?** Mailbox provisioning, the TeraMailer
+> webmail and the Mails settings tab have their own guide:
+> [`docs/DEPLOY-MAIL.md`](docs/DEPLOY-MAIL.md). They are off by default —
+> `MAIL_AUTH_ENABLED=false` — so this guide alone gives you a working platform
+> with logins unchanged.
+
 ---
 
 ## 1. Architecture
